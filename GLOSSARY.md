@@ -24,6 +24,30 @@ _Avoid_: Call file, upload
 A P25 trunked-radio group that calls are made on; the unit of what a listener chooses to hear.
 _Avoid_: Channel, frequency
 
+**Hidden talkgroup**:
+A talkgroup whose calls are recorded but never streamed or played to the public.
+_Avoid_: Private talkgroup, blocked talkgroup
+
+**Ignored talkgroup**:
+A talkgroup whose calls are not recorded at all.
+_Avoid_: Blacklisted talkgroup, rejected talkgroup
+
+**Unreviewed talkgroup**:
+A talkgroup created automatically the first time a call is heard on it, which no admin has named or checked yet.
+_Avoid_: Unknown talkgroup, placeholder
+
+**Tag**:
+The one label a talkgroup carries for the kind of traffic on it, such as dispatch or tactical.
+_Avoid_: Category, type
+
+**Group**:
+A label for whose or where a talkgroup is, such as an agency or region; a talkgroup can be in several groups.
+_Avoid_: Folder, category
+
+**Unit**:
+A radio heard on calls, identified by its radio ID and named by an alias.
+_Avoid_: Radio, user, source
+
 **Fireground channel**:
 A talkgroup used for firefighting operations at an incident, as opposed to a dispatch channel; the term a page uses when it names one, by its number.
 _Avoid_: Fireground talkgroup, ops channel
