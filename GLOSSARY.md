@@ -32,6 +32,14 @@ _Avoid_: Fireground talkgroup, ops channel
 The talkgroups a listener keeps on to hear live calls from; saved per listener, and added to for a session by a fireground link.
 _Avoid_: Selection, favourites, scan list
 
+**Priority talkgroup**:
+A talkgroup in a listener's listening set whose calls go ahead of others waiting to be heard, without cutting off the call already playing.
+_Avoid_: Favourite, preempt, emergency talkgroup
+
+**Hold**:
+A listener's temporary narrowing to only the talkgroup of the call playing now, lasting until they release it; it leaves the listening set unchanged.
+_Avoid_: Lock, pin, solo
+
 ## Deployment
 
 **Combined deployment**:
