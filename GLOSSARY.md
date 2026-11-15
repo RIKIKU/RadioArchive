@@ -25,8 +25,12 @@ A P25 trunked-radio group that calls are made on; the unit of what a listener ch
 _Avoid_: Channel, frequency
 
 **Fireground channel**:
-A talkgroup used for firefighting operations at an incident, as opposed to a dispatch channel; the term a page uses when it names one.
+A talkgroup used for firefighting operations at an incident, as opposed to a dispatch channel; the term a page uses when it names one, by its number.
 _Avoid_: Fireground talkgroup, ops channel
+
+**Fireground link**:
+A link shown with a page that names a fireground channel, which opens the radio and adds that channel's talkgroup to the listener's listening set for the session.
+_Avoid_: Listen link, radio link
 
 **Listening set**:
 The talkgroups a listener keeps on to hear live calls from; saved per listener, and added to for a session by a fireground link.
