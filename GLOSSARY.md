@@ -37,3 +37,15 @@ _Avoid_: Selection, favourites, scan list
 **Combined deployment**:
 RadioArchive and PagerArchive deployed together so a user moves between them as if they were one app, while each remains deployable on its own.
 _Avoid_: Suite, merged app
+
+**Recorder**:
+One trunk-recorder installation capturing a radio system; a deployment may have several, each hearing different calls.
+_Avoid_: Scanner, receiver, site
+
+**Recorder client**:
+The RadioArchive program that runs beside a recorder and sends its live calls and recordings to the server.
+_Avoid_: Uploader, agent, feeder
+
+**Recorder plugin**:
+The small part of RadioArchive that runs inside trunk-recorder and hands each call to the recorder client.
+_Avoid_: Streamer, simplestream
