@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-15, by the owner)
 ---
 
 # 1. Technology stack
