@@ -6,7 +6,15 @@ Self-hosted live listening and archive for trunked radio systems recorded by tru
 
 **Call**:
 An exchange on a talkgroup from its first key-up until the talkgroup goes idle; it may hold transmissions from several units.
-_Avoid_: Recording, clip, conversation
+_Avoid_: Recording, clip
+
+**Conversation**:
+Calls a listener groups together to hear an exchange in order, often because each side of it is a separate call.
+_Avoid_: Thread, exchange, call group
+
+**Story**:
+Conversations a listener groups together to follow one incident from start to finish, over hours, days or weeks.
+_Avoid_: Job, incident, case
 
 **Transmission**:
 One unit's key-up within a call, from press to release of its push-to-talk.
@@ -67,6 +75,10 @@ _Avoid_: Favourite, preempt, emergency talkgroup
 **Hold**:
 A listener's temporary narrowing to only the talkgroup of the call playing now, lasting until they release it; it leaves the listening set unchanged.
 _Avoid_: Lock, pin, solo
+
+**Download basket**:
+The calls a listener has marked, and the conversations they've grouped them into, kept to download later.
+_Avoid_: Cart, queue, playlist
 
 ## Deployment
 
