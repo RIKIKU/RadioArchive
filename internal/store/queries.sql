@@ -441,6 +441,14 @@ JOIN talkgroups t ON t.system_id = c.system_id AND t.talkgroup_id = c.talkgroup
 LEFT JOIN tags g ON g.id = t.tag_id
 WHERE c.id = ANY (sqlc.arg(ids)::uuid[]);
 
+-- name: GateEndedSince :many
+-- The public calls that ended at or after ended_since, for the live feed to
+-- find, when it starts, the delayed calls it has still to release (R23).
+-- started_since only lets the started_at index bound the scan.
+SELECT c.id, c.system_id, c.talkgroup, c.patched_talkgroups, c.ended_at::timestamptz AS ended_at
+FROM public_calls c
+WHERE c.started_at >= sqlc.arg(started_since) AND c.ended_at >= sqlc.arg(ended_since);
+
 -- name: GatePublicRecording :one
 -- A public call's recording. No row: no such call, not public, or not
 -- recorded yet, which the gate answers alike.

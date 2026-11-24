@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"slices"
 	"strings"
@@ -18,6 +20,7 @@ import (
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/public"
+	"github.com/RIKIKU/RadioArchive/internal/server"
 )
 
 // The live feed to listeners (SPEC.md R16, R23, R31, R36, R37; A4, A5,
@@ -571,6 +574,91 @@ func TestIntegrationLiveA14(t *testing.T) {
 	}
 	if code, body := e.get(t, public.RecordingURL(did)); code != 200 || !bytes.Equal(body, audio) {
 		t.Errorf("at 12:05, its recording answers %d", code)
+	}
+}
+
+// restartLive starts the gate and its live feed afresh on the same
+// database and clock, as a server restart does, with only the public API in
+// front of it: what the old feed held in memory is gone.
+func (e *env) restartLive(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	log := slog.New(slog.DiscardHandler)
+	g := gate.New(e.st, e.dir, log, gate.WithClock(e.clock.now))
+	go g.Live().Run(ctx)
+	srv := httptest.NewServer(server.New(e.st, log, server.WithPublic(public.New(g, log))))
+	t.Cleanup(func() {
+		srv.Close()
+		cancel()
+	})
+	e.gate, e.live, e.srv = g, g.Live(), srv
+}
+
+// Issue #67 (R23, R37): a delayed call's release still pending at a
+// restart is sent as if nothing had happened, through the gate. With 1001
+// and 1002 delayed 5 minutes, calls on each ending at 12:00, 1002 hidden and
+// the server restarted at 12:02, a listener with {1001, 1002} gets only
+// 1001's call, and only at 12:05.
+func TestIntegrationLiveDelayedRestart(t *testing.T) {
+	e := newEnv(t)
+	rec := e.liveRecorder(t)
+	noon := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	e.clock.set(noon)
+	for _, tg := range []int{1001, 1002} {
+		e.mustAdmin(t, "PATCH", fmt.Sprintf("/systems/%d/talkgroups/%d", e.sys, tg), map[string]any{"delay_minutes": 5}, 200)
+	}
+	startMS := noon.Add(-20 * time.Second).UnixMilli()
+	call := func(tg int32, fill byte) string {
+		t.Helper()
+		id, callID := rec.start(tg, nil, 5001, startMS)
+		rec.frames(id, 0, 10, fill)
+		rec.end(id, noon.UnixMilli())
+		audio := oggBytes(fill)
+		m := recording(id, audio)
+		m.Talkgroup, m.PatchedTalkgroups, m.StartTimeMS, m.StopTimeMS = tg, []int32{}, startMS, noon.UnixMilli()
+		m.Transmissions = []cp.RecordingTransmission{{Unit: 5001, OffsetMS: 0, DurationMS: 20000}}
+		if code, resp := e.upload(t, rec.key, m, audio); code != 201 && code != 200 {
+			t.Fatalf("upload: %d %+v", code, resp)
+		}
+		return callID
+	}
+	shown, hidden := call(1001, 'a'), call(1002, 'b')
+
+	e.clock.set(noon.Add(2 * time.Minute))
+	e.mustAdmin(t, "PATCH", fmt.Sprintf("/systems/%d/talkgroups/1002", e.sys), map[string]any{"state": "hidden"}, 200)
+	e.restartLive(t)
+	deadline := time.Now().Add(10 * time.Second)
+	for e.live.Stat.Recovered.Load() < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the restarted feed never recovered the pending call")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := e.live.Stat.Recovered.Load(); n != 1 {
+		t.Errorf("recovered %d calls, want 1 (the hidden talkgroup's stays out)", n)
+	}
+	l := e.listen(t, []any{1001, 1002}, nil)
+
+	e.clock.set(noon.Add(4*time.Minute + 59*time.Second))
+	time.Sleep(3 * 200 * time.Millisecond) // three of the feed's ticks
+	if ev, _ := l.of(shown); len(ev) != 0 {
+		t.Errorf("at 12:04:59 the listener got the delayed call: %v", ev)
+	}
+
+	e.clock.set(noon.Add(5 * time.Minute))
+	got := l.wait("the delayed call", isEvent(gate.TypeCallDelayed, shown))
+	if got.DelayMinutes == nil || *got.DelayMinutes != 5 || got.Recording == nil ||
+		got.Recording.URL != public.RecordingURL(shown) || got.EndedAt == nil || got.Talkgroup.Name != "Dispatch North" {
+		t.Errorf("call_delayed = %s", got.Raw)
+	}
+	time.Sleep(3 * 200 * time.Millisecond)
+	if ev, fr := l.of(hidden); len(ev) != 0 || fr != 0 {
+		t.Errorf("the hidden talkgroup's call reached the listener: %v, %d frames", ev, fr)
+	}
+	for _, m := range l.all() {
+		if bytes.Contains(m.Raw, []byte(hidden)) {
+			t.Errorf("a message names the hidden call: %s", m.Raw)
+		}
 	}
 }
 
