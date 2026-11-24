@@ -1,0 +1,27 @@
+{
+  "boot_id": 305419900,
+  "epoch_ms": 1764000600000,
+  "calls": {
+    "public": {"sys_num": 0, "call_num": 20, "start_time": 1764000600, "short_name": "ex", "talkgroup": 1001, "freq": 851012500},
+    "hidden1": {"sys_num": 0, "call_num": 21, "start_time": 1764000601, "short_name": "ex", "talkgroup": 1003, "freq": 851025000},
+    "hidden2": {"sys_num": 0, "call_num": 22, "start_time": 1764000602, "short_name": "ex", "talkgroup": 1003, "freq": 851037500},
+    "hidden3": {"sys_num": 0, "call_num": 23, "start_time": 1764000603, "short_name": "ex", "talkgroup": 1003, "freq": 851050000}
+  },
+  "events": [
+    {"at_ms": 0, "type": "transmission", "call": "public", "unit": 5001},
+    {"at_ms": 0, "type": "audio", "call": "public", "unit": 5001, "pcm": "tone-440hz-1s.pcm"},
+    {"at_ms": 1100, "type": "call_end", "call": "public", "filename": "/app/media/ex/1001-1764000600_851012500.0-call_20.wav"},
+
+    {"at_ms": 100, "type": "transmission", "call": "hidden1", "unit": 5100},
+    {"at_ms": 100, "type": "audio", "call": "hidden1", "unit": 5100, "pcm": "noise-bursts-500ms.pcm"},
+    {"at_ms": 700, "type": "call_end", "call": "hidden1", "filename": "/app/media/ex/1003-1764000601_851025000.0-call_21.wav"},
+
+    {"at_ms": 800, "type": "transmission", "call": "hidden2", "unit": 5101},
+    {"at_ms": 800, "type": "audio", "call": "hidden2", "unit": 5101, "pcm": "tone-880hz-1500ms.pcm"},
+    {"at_ms": 2400, "type": "call_end", "call": "hidden2", "filename": "/app/media/ex/1003-1764000602_851037500.0-call_22.wav"},
+
+    {"at_ms": 2500, "type": "transmission", "call": "hidden3", "unit": 5102},
+    {"at_ms": 2500, "type": "audio", "call": "hidden3", "unit": 5102, "pcm": "noise-bursts-500ms.pcm"},
+    {"at_ms": 3100, "type": "call_end", "call": "hidden3", "filename": "/app/media/ex/1003-1764000603_851050000.0-call_23.wav"}
+  ]
+}

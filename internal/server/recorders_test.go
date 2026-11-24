@@ -25,6 +25,8 @@ import (
 	"github.com/coder/websocket"
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
+	"github.com/RIKIKU/RadioArchive/internal/gate"
+	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/storetest"
@@ -64,6 +66,7 @@ func (s *sink) total() int {
 type env struct {
 	st   *store.Store
 	rs   *server.Recorders
+	api  *server.API
 	srv  *httptest.Server
 	dir  string
 	sink *sink
@@ -95,11 +98,14 @@ func newEnvAt(t *testing.T, serverVersion string) *env {
 	case <-time.After(10 * time.Second):
 		t.Fatal("key listener never started")
 	}
-	admin, err := server.NewAdmin(st, slog.New(slog.DiscardHandler), testAdmin{})
+	log := slog.New(slog.DiscardHandler)
+	admin, err := server.NewAdmin(st, log, testAdmin{}, e.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.srv = httptest.NewServer(server.New(st, slog.New(slog.DiscardHandler), server.WithRecorders(e.rs), server.WithAdmin(admin)))
+	e.api = server.New(st, log, server.WithRecorders(e.rs), server.WithAdmin(admin),
+		server.WithPublic(public.New(gate.New(st, e.dir, log), log)))
+	e.srv = httptest.NewServer(e.api)
 	t.Cleanup(func() {
 		e.srv.Close()
 		cancel()

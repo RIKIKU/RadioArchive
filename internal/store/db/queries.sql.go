@@ -69,6 +69,28 @@ func (q *Queries) AddTransmission(ctx context.Context, arg AddTransmissionParams
 	return err
 }
 
+const adminRecording = `-- name: AdminRecording :one
+
+SELECT recording_path::text AS recording_path, recording_size::bigint AS recording_size,
+       recording_at::timestamptz AS recording_at
+FROM calls
+WHERE id = $1 AND recording_path IS NOT NULL
+`
+
+type AdminRecordingRow struct {
+	RecordingPath string
+	RecordingSize int64
+	RecordingAt   pgtype.Timestamptz
+}
+
+// Admin playback (R34): any stored call's recording, whatever its state.
+func (q *Queries) AdminRecording(ctx context.Context, id pgtype.UUID) (AdminRecordingRow, error) {
+	row := q.db.QueryRow(ctx, adminRecording, id)
+	var i AdminRecordingRow
+	err := row.Scan(&i.RecordingPath, &i.RecordingSize, &i.RecordingAt)
+	return i, err
+}
+
 const attach = `-- name: Attach :one
 INSERT INTO attachments (recorder_id, short_name, system_id)
 VALUES ($1, $2, $3)
@@ -136,7 +158,7 @@ SELECT call_state(system_id, talkgroup, patched_talkgroups)::talkgroup_state AS 
 FROM calls WHERE id = $1
 `
 
-// The gate (issue #35) builds on this: a stored call's state, now (R16, R30).
+// A stored call's state, now (R16, R30).
 func (q *Queries) CallEffectiveState(ctx context.Context, id pgtype.UUID) (TalkgroupState, error) {
 	row := q.db.QueryRow(ctx, callEffectiveState, id)
 	var state TalkgroupState
@@ -370,6 +392,98 @@ func (q *Queries) ExtendLivePatch(ctx context.Context, arg ExtendLivePatchParams
 	var state TalkgroupState
 	err := row.Scan(&state)
 	return state, err
+}
+
+const gatePublicCalls = `-- name: GatePublicCalls :many
+
+SELECT c.id, c.system_id, s.label AS system_label, s.name AS system_name,
+       c.talkgroup, t.label AS talkgroup_label, t.name AS talkgroup_name, g.name AS tag,
+       c.patched_talkgroups, c.started_at, c.ended_at, c.recording_size,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object('unit', x.unit, 'offset_ms', x.offset_ms,
+                                                     'duration_ms', x.duration_ms) ORDER BY x.offset_ms)
+                 FROM transmissions x WHERE x.call_id = c.id), '[]'::jsonb)::jsonb AS transmissions
+FROM public_calls c
+JOIN systems s ON s.id = c.system_id
+JOIN talkgroups t ON t.system_id = c.system_id AND t.talkgroup_id = c.talkgroup
+LEFT JOIN tags g ON g.id = t.tag_id
+WHERE c.id = ANY ($1::uuid[])
+`
+
+type GatePublicCallsRow struct {
+	ID                pgtype.UUID
+	SystemID          int64
+	SystemLabel       string
+	SystemName        string
+	Talkgroup         int32
+	TalkgroupLabel    string
+	TalkgroupName     string
+	Tag               *string
+	PatchedTalkgroups []int32
+	StartedAt         pgtype.Timestamptz
+	EndedAt           pgtype.Timestamptz
+	RecordingSize     *int64
+	Transmissions     []byte
+}
+
+// The gate (R30, R32; ADR 0004). Public queries read calls only through the
+// public_calls view (migration 00005), whose one condition is call_state's,
+// and only internal/gate calls them.
+// The public calls among ids, with what a listener may see of each. Its
+// transmissions come in the same query, so in the same snapshot.
+func (q *Queries) GatePublicCalls(ctx context.Context, ids []pgtype.UUID) ([]GatePublicCallsRow, error) {
+	rows, err := q.db.Query(ctx, gatePublicCalls, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GatePublicCallsRow
+	for rows.Next() {
+		var i GatePublicCallsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SystemID,
+			&i.SystemLabel,
+			&i.SystemName,
+			&i.Talkgroup,
+			&i.TalkgroupLabel,
+			&i.TalkgroupName,
+			&i.Tag,
+			&i.PatchedTalkgroups,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.RecordingSize,
+			&i.Transmissions,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const gatePublicRecording = `-- name: GatePublicRecording :one
+SELECT c.recording_path::text AS recording_path, c.recording_size::bigint AS recording_size,
+       c.recording_at::timestamptz AS recording_at
+FROM public_calls c
+WHERE c.id = $1 AND c.recording_path IS NOT NULL
+`
+
+type GatePublicRecordingRow struct {
+	RecordingPath string
+	RecordingSize int64
+	RecordingAt   pgtype.Timestamptz
+}
+
+// A public call's recording. No row: no such call, not public, or not
+// recorded yet, which the gate answers alike.
+func (q *Queries) GatePublicRecording(ctx context.Context, id pgtype.UUID) (GatePublicRecordingRow, error) {
+	row := q.db.QueryRow(ctx, gatePublicRecording, id)
+	var i GatePublicRecordingRow
+	err := row.Scan(&i.RecordingPath, &i.RecordingSize, &i.RecordingAt)
+	return i, err
 }
 
 const getSystem = `-- name: GetSystem :one

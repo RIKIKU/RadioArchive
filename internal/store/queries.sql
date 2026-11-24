@@ -293,7 +293,7 @@ VALUES (sqlc.arg(call_id), sqlc.arg(offset_ms), sqlc.arg(unit), sqlc.arg(duratio
 ON CONFLICT (call_id, offset_ms) DO UPDATE
 SET unit = EXCLUDED.unit, duration_ms = EXCLUDED.duration_ms;
 
--- The gate (issue #35) builds on this: a stored call's state, now (R16, R30).
+-- A stored call's state, now (R16, R30).
 
 -- name: CallEffectiveState :one
 SELECT call_state(system_id, talkgroup, patched_talkgroups)::talkgroup_state AS state
@@ -308,3 +308,38 @@ SET client_version = sqlc.arg(client_version),
     client_out_of_date = sqlc.arg(client_out_of_date),
     client_seen_at = now()
 WHERE id = sqlc.arg(id);
+
+-- The gate (R30, R32; ADR 0004). Public queries read calls only through the
+-- public_calls view (migration 00005), whose one condition is call_state's,
+-- and only internal/gate calls them.
+
+-- name: GatePublicCalls :many
+-- The public calls among ids, with what a listener may see of each. Its
+-- transmissions come in the same query, so in the same snapshot.
+SELECT c.id, c.system_id, s.label AS system_label, s.name AS system_name,
+       c.talkgroup, t.label AS talkgroup_label, t.name AS talkgroup_name, g.name AS tag,
+       c.patched_talkgroups, c.started_at, c.ended_at, c.recording_size,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object('unit', x.unit, 'offset_ms', x.offset_ms,
+                                                     'duration_ms', x.duration_ms) ORDER BY x.offset_ms)
+                 FROM transmissions x WHERE x.call_id = c.id), '[]'::jsonb)::jsonb AS transmissions
+FROM public_calls c
+JOIN systems s ON s.id = c.system_id
+JOIN talkgroups t ON t.system_id = c.system_id AND t.talkgroup_id = c.talkgroup
+LEFT JOIN tags g ON g.id = t.tag_id
+WHERE c.id = ANY (sqlc.arg(ids)::uuid[]);
+
+-- name: GatePublicRecording :one
+-- A public call's recording. No row: no such call, not public, or not
+-- recorded yet, which the gate answers alike.
+SELECT c.recording_path::text AS recording_path, c.recording_size::bigint AS recording_size,
+       c.recording_at::timestamptz AS recording_at
+FROM public_calls c
+WHERE c.id = sqlc.arg(id) AND c.recording_path IS NOT NULL;
+
+-- Admin playback (R34): any stored call's recording, whatever its state.
+
+-- name: AdminRecording :one
+SELECT recording_path::text AS recording_path, recording_size::bigint AS recording_size,
+       recording_at::timestamptz AS recording_at
+FROM calls
+WHERE id = sqlc.arg(id) AND recording_path IS NOT NULL;

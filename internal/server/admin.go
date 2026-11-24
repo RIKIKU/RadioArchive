@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/RIKIKU/RadioArchive/internal/recordings"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/db"
 )
@@ -36,26 +37,28 @@ type AdminAuthenticator interface {
 	Admin(r *http.Request) (name string, ok bool)
 }
 
-// Admin serves the admin API's systems, attachments, talkgroups and
-// rejected calls (R11, R12, R17, R18, R21, R22).
+// Admin serves the admin API's systems, attachments, talkgroups, rejected
+// calls and recordings (R11, R12, R17, R18, R21, R22, R34).
 type Admin struct {
 	st   *store.Store
 	log  *slog.Logger
 	auth AdminAuthenticator
+	dir  string
 }
 
-// NewAdmin returns the admin API. It refuses to exist without an
-// authenticator.
-func NewAdmin(st *store.Store, log *slog.Logger, auth AdminAuthenticator) (*Admin, error) {
+// NewAdmin returns the admin API, with the recordings volume at
+// recordingsDir. It refuses to exist without an authenticator.
+func NewAdmin(st *store.Store, log *slog.Logger, auth AdminAuthenticator, recordingsDir string) (*Admin, error) {
 	if auth == nil {
 		return nil, errors.New("the admin API needs an admin authenticator")
 	}
-	return &Admin{st: st, log: log, auth: auth}, nil
+	return &Admin{st: st, log: log, auth: auth, dir: recordingsDir}, nil
 }
 
 // WithAdmin serves the admin API.
 func WithAdmin(a *Admin) Option {
-	return func(mux *http.ServeMux) {
+	return func(api *API) {
+		api.handle(AdminRoute, "GET "+AdminPath+"/calls/{call}/recording", a.signedIn(a.recording))
 		for _, r := range []struct {
 			pattern string
 			h       func(*http.Request, string) (int, any, error)
@@ -75,9 +78,58 @@ func WithAdmin(a *Admin) Option {
 			{"GET /rejections", a.rejections},
 		} {
 			method, path, _ := strings.Cut(r.pattern, " ")
-			mux.HandleFunc(method+" "+AdminPath+path, a.serve(r.h))
+			api.handle(AdminRoute, method+" "+AdminPath+path, a.serve(r.h))
 		}
 	}
+}
+
+// signedIn lets only an admin's requests through to h.
+func (a *Admin) signedIn(h func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		who, ok := a.auth.Admin(r)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, adminError{Code: "admin_sign_in_required", Message: "Sign in as an admin."})
+			return
+		}
+		h(w, r, who)
+	}
+}
+
+// recording plays any stored call's recording, hidden and ignored ones too,
+// with range requests (R34). It's not audited, and not cached: an admin's
+// browser may be shared with listeners.
+func (a *Admin) recording(w http.ResponseWriter, r *http.Request, _ string) {
+	notFound := func() {
+		writeJSON(w, http.StatusNotFound, adminError{Code: "recording_not_found", Message: "No recording is stored for that call."})
+	}
+	var id pgtype.UUID
+	if err := id.Scan(r.PathValue("call")); err != nil {
+		notFound()
+		return
+	}
+	row, err := a.st.AdminRecording(r.Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		notFound()
+		return
+	}
+	if err != nil {
+		a.log.Error("admin recording failed", "error", store.SafeError(err))
+		writeJSON(w, http.StatusInternalServerError, adminError{Code: "internal", Message: "Something went wrong."})
+		return
+	}
+	f, err := recordings.Open(a.dir, row.RecordingPath, row.RecordingAt.Time)
+	if errors.Is(err, recordings.ErrMissing) {
+		a.log.Warn("a call's recording file is missing", "call", uuidString(id))
+		notFound()
+		return
+	}
+	if err != nil {
+		a.log.Error("admin recording failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, adminError{Code: "internal", Message: "Something went wrong."})
+		return
+	}
+	defer f.Close()
+	f.Serve(w, r, "no-store")
 }
 
 // adminError is a machine-readable refusal's body (R78): a stable code and
