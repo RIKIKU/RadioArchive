@@ -101,12 +101,31 @@ answer GET "/api/v1/calls/$pub/recording" -H 'Range: bytes=0-3' | grep -q '^HTTP
 grep -q 'OggS' "$media/b" || fail "the public recording isn't Ogg"
 grep -iq '^cache-control: private, max-age=31536000, immutable' "$media/h" || fail "public Cache-Control"
 
+# The public call downloads as the stored file, byte for byte, named for
+# its start in the API's TZ and its talkgroup (R62, R63, A17).
+answer GET "/api/v1/calls/$pub/download" >/dev/null
+grep -q '^HTTP/1.1 200' "$media/h" || fail "the public download: $(cat "$media/h")"
+grep -iq '^content-disposition: attachment; filename="[0-9]\{4\}-[0-9][0-9]-[0-9][0-9]_[0-9]\{6\}_DISP N_1001\.opus"' "$media/h" ||
+	fail "the download's file name: $(cat "$media/h")"
+docker compose cp "api:/var/lib/radioarchive/recordings/$(psql "SELECT c.recording_path $calls AND c.talkgroup = 1001")" "$media/stored.opus" >/dev/null
+test "$(sha256sum <"$media/b")" = "$(sha256sum <"$media/stored.opus")" || fail "the download isn't the stored file"
+
 # Each of 1003's calls answers exactly as a call that was never stored.
 never=$(answer GET /api/v1/calls/6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f/recording -H 'Range: bytes=0-')
 echo "$never" | grep -q '^HTTP/1.1 404' || fail "a call never stored: $never"
+neverdl=$(answer GET /api/v1/calls/6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f/download -H 'Range: bytes=0-')
+test "$neverdl" = "$never" || fail "a call never stored: its download answers
+$neverdl
+but its recording
+$never"
 for id in $hidden; do
 	got=$(answer GET "/api/v1/calls/$id/recording" -H 'Range: bytes=0-')
 	test "$got" = "$never" || fail "hidden $id answers
+$got
+but a call never stored answers
+$never"
+	got=$(answer GET "/api/v1/calls/$id/download" -H 'Range: bytes=0-')
+	test "$got" = "$never" || fail "hidden $id's download answers
 $got
 but a call never stored answers
 $never"

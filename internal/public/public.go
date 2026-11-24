@@ -18,7 +18,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/RIKIKU/RadioArchive/internal/filename"
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 )
 
@@ -29,6 +31,9 @@ const (
 	CallsPath = "/api/v1/calls"
 	// RecordingPath is a call's recording, with range requests (R20).
 	RecordingPath = "/api/v1/calls/{call}/recording"
+	// DownloadPath is a call's recording to save, byte for byte, under its
+	// file name (R62, R63; ADR 0014).
+	DownloadPath = "/api/v1/calls/{call}/download"
 )
 
 // Route is one public endpoint.
@@ -43,14 +48,28 @@ type API struct {
 	log    *slog.Logger
 	routes []Route
 	cat    catalogueBody
+	loc    *time.Location
+}
+
+// Option configures the public API.
+type Option func(*API)
+
+// WithLocation sets the deployment's time zone, which downloads are named
+// in (R63; default time.Local, which TZ sets). Tests set it.
+func WithLocation(loc *time.Location) Option {
+	return func(a *API) { a.loc = loc }
 }
 
 // New returns the public API, reading through g.
-func New(g *gate.Gate, log *slog.Logger) *API {
-	a := &API{g: g, log: log}
+func New(g *gate.Gate, log *slog.Logger, opts ...Option) *API {
+	a := &API{g: g, log: log, loc: time.Local}
+	for _, o := range opts {
+		o(a)
+	}
 	a.handle("QUERY "+CallsPath, a.calls)
 	a.handle("POST "+CallsPath, a.calls)
 	a.handle("GET "+RecordingPath, a.recording)
+	a.handle("GET "+DownloadPath, a.download)
 	a.handle("GET "+CataloguePath, a.catalogue)
 	a.handle("GET "+SearchPath, a.search)
 	a.handle("GET "+FiregroundPath, a.fireground)
@@ -224,5 +243,29 @@ func (a *API) recording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rec.Close()
+	rec.Serve(w, r)
+}
+
+// DownloadURL is the path a call's recording downloads from.
+func DownloadURL(callID string) string {
+	return "/api/v1/calls/" + callID + "/download"
+}
+
+// Single-call download (R62, R63; ADR 0014): the recording's own answer,
+// with range requests and its caching, saved under the call's file name.
+// An unavailable call answers exactly as it does for the recording.
+func (a *API) download(w http.ResponseWriter, r *http.Request) {
+	rec, c, err := a.g.Download(r.Context(), r.PathValue("call"))
+	if errors.Is(err, gate.ErrUnavailable) {
+		writeJSON(w, http.StatusNotFound, unavailable)
+		return
+	}
+	if err != nil {
+		a.failed(w, r, err)
+		return
+	}
+	defer rec.Close()
+	name := filename.Call(c.StartedAt, a.loc, c.Talkgroup.Label, c.Talkgroup.ID)
+	w.Header().Set("Content-Disposition", filename.Attachment(name))
 	rec.Serve(w, r)
 }
