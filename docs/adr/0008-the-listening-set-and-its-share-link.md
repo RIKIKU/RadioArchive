@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-24, by the coordinator: the owner delegated protocol choices)
 ---
 
 # 8. The listening set in the browser, and its share link
