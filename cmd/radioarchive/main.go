@@ -16,6 +16,8 @@
 //	                oldest recordings are deleted early (default 5%)
 //	RECORDINGS_EARLY_DELETE_FLOOR  calls that started within this are never
 //	                deleted early, as a Go duration (default 24h)
+//	TZ              the deployment's time zone, e.g. Australia/Sydney (default UTC):
+//	                the nightly run's, and the one downloads are named in (ADR 0014)
 //	NIGHTLY_AT      local time of the nightly retention run, HH:MM (default 03:00, in TZ)
 //	RECORDER_NOTICE_AFTER  how long a recorder is disconnected or deaf before
 //	                listeners see "Some talkgroups aren't being received

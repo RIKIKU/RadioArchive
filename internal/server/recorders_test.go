@@ -160,7 +160,7 @@ func newEnvAt(t *testing.T, serverVersion string) *env {
 	}
 	admin.WithRetention(e.job).WithRecorders(e.rs)
 	e.api = server.New(st, log, server.WithRecorders(e.rs), server.WithAdmin(admin),
-		server.WithPublic(public.New(e.gate, log)), server.WithApp(web.Serve(appBuild)))
+		server.WithPublic(public.New(e.gate, log, public.WithLocation(deploymentTZ(t)))), server.WithApp(web.Serve(appBuild)))
 	e.srv = httptest.NewServer(e.api)
 	t.Cleanup(func() {
 		e.srv.Close()

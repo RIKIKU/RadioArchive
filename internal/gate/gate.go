@@ -299,6 +299,37 @@ func (g *Gate) Recording(ctx context.Context, callID string) (*Recording, error)
 			return nil, ErrUnavailable
 		}
 	}
+	return g.open(ctx, id)
+}
+
+// Download opens a public call's recording to download (R62), with the
+// call it's of, which names the file (R63), or answers ErrUnavailable
+// exactly as Recording does.
+func (g *Gate) Download(ctx context.Context, callID string) (*Recording, Call, error) {
+	id, ok := ParseCallID(callID)
+	if !ok {
+		return nil, Call{}, ErrUnavailable
+	}
+	// Calls holds a delayed call back (R23) and gives what names the file.
+	cs, err := g.Calls(ctx, []string{id})
+	if err != nil {
+		return nil, Call{}, err
+	}
+	if len(cs) == 0 || cs[0].RecordingSize == nil {
+		return nil, Call{}, ErrUnavailable
+	}
+	// The recording is read through public_calls again, so a call hidden
+	// in between is still kept back.
+	rec, err := g.open(ctx, id)
+	if err != nil {
+		return nil, Call{}, err
+	}
+	return rec, cs[0], nil
+}
+
+// open opens the recording of call id, a canonical ID, if public_calls
+// has it.
+func (g *Gate) open(ctx context.Context, id string) (*Recording, error) {
 	qctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 	row, err := g.q.GatePublicRecording(qctx, uuidOf(id))

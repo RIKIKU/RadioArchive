@@ -74,6 +74,8 @@ leaves the server, and its calls answer exactly as calls that never existed
 curl -X QUERY -H 'Content-Type: application/json' --data '{"ids":["<call ID>"]}' http://127.0.0.1:8080/api/v1/calls
 # A recording, with range requests.
 curl -H 'Range: bytes=0-999' http://127.0.0.1:8080/api/v1/calls/<call ID>/recording
+# The same file to save, named for the call in the deployment's TZ.
+curl -OJ http://127.0.0.1:8080/api/v1/calls/<call ID>/download
 ```
 
 The live feed is one WebSocket per listener, `/api/v1/live`: the listener

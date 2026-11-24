@@ -12,12 +12,14 @@ import (
 
 // The gate is the public API's only way to the deployment's data (SPEC.md
 // R32, ADR 0004): its code may import this repo's gate and nothing else of
-// the repo, no third-party module (the database driver is one) but the
+// the repo but the download file names (internal/filename, ADR 0014), which
+// read nothing and only name what the gate gave, no third-party module (the database driver is one) but the
 // WebSocket library the live feed speaks through (ADR 0007), which reaches
 // no data, and none of the standard library's ways to a database, a file or
 // a process.
 var (
-	allowedRepo = map[string]bool{"github.com/RIKIKU/RadioArchive/internal/gate": true}
+	allowedRepo = map[string]bool{"github.com/RIKIKU/RadioArchive/internal/gate": true,
+		"github.com/RIKIKU/RadioArchive/internal/filename": true}
 	allowedMods = map[string]bool{"github.com/coder/websocket": true}
 	deniedStd   = []string{"os", "io/fs", "io/ioutil", "path/filepath", "database/sql", "syscall",
 		"unsafe", "plugin", "net/http/httputil", "embed", "runtime/cgo", "reflect"}
@@ -82,7 +84,7 @@ func TestImportRule(t *testing.T) {
 		}
 	}
 	for _, p := range []string{"net/http", "encoding/json", "github.com/RIKIKU/RadioArchive/internal/gate",
-		"github.com/coder/websocket"} {
+		"github.com/RIKIKU/RadioArchive/internal/filename", "github.com/coder/websocket"} {
 		if !importAllowed(p) {
 			t.Errorf("%s is refused", p)
 		}

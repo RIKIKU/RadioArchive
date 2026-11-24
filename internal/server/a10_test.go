@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	"github.com/RIKIKU/RadioArchive/internal/public"
@@ -39,6 +40,17 @@ var a10Probes = map[string][]a10Probe{
 			return r
 		}},
 		{"HEAD", func(f *a10World, id string) *http.Request { return f.req("HEAD", public.RecordingURL(id), "") }},
+	},
+	// The single-call download (R62, R63): its file name names the
+	// talkgroup, so a leak would be in Content-Disposition.
+	"GET " + public.DownloadPath: {
+		{"whole", func(f *a10World, id string) *http.Request { return f.req("GET", public.DownloadURL(id), "") }},
+		{"a range", func(f *a10World, id string) *http.Request {
+			r := f.req("GET", public.DownloadURL(id), "")
+			r.Header.Set("Range", "bytes=100-")
+			return r
+		}},
+		{"HEAD", func(f *a10World, id string) *http.Request { return f.req("HEAD", public.DownloadURL(id), "") }},
 	},
 	// The app shell (web): its one page, sent for any path outside the API,
 	// a call's among them, and in the listener's saved look; its files; and
@@ -197,6 +209,12 @@ func newA10World(t *testing.T) *a10World {
 	f.secretAudio = append(f.secretAudio, oggBytes('m')[:40])
 	e.mustAdmin(t, "PUT", fmt.Sprintf("/systems/%d/talkgroups/1005", e.sys),
 		map[string]any{"label": "SECRET 5", "name": "Covert ops", "tag": "other", "state": "ignored"}, 201)
+	// A call on 1006, delayed 5 minutes, which the clock below keeps
+	// within its delay (R23).
+	e.mustAdmin(t, "PUT", fmt.Sprintf("/systems/%d/talkgroups/1006", e.sys),
+		map[string]any{"label": "DLY 6", "name": "Delayed six", "tag": "dispatch", "delay_minutes": 5}, 201)
+	f.unavailable["delayed 1006, within its delay"] = store1(1006, nil, 'r')
+	f.secretAudio = append(f.secretAudio, oggBytes('r')[:40])
 	f.unavailable["never stored"] = "6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f"
 	f.unavailable["not a call ID"] = "1003"
 
@@ -217,6 +235,10 @@ func newA10World(t *testing.T) *a10World {
 		e.mustAdmin(t, "PATCH", fmt.Sprintf("/systems/%d/talkgroups/%d", e.sys, tg),
 			map[string]any{"fireground_channel": n, "groups": []string{"Covert group"}}, 200)
 	}
+
+	// Every call ended at the same time (recording's StopTimeMS); a minute
+	// later, 1006's is still within its delay.
+	e.clock.set(time.UnixMilli(1764000009870).Add(time.Minute))
 
 	f.secrets = []string{"1003", "1005", "Admin", "ADMIN", `"admin"`, "Covert ops", "SECRET 5", "Covert group"}
 	f.callName = map[string]string{}
