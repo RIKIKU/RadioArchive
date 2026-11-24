@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-25, by the owner)
 ---
 
 # 6. Talkgroup settings, the catalogue and the fireground lookup
