@@ -11,12 +11,17 @@ import (
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	"github.com/RIKIKU/RadioArchive/internal/public"
+	"github.com/RIKIKU/RadioArchive/web"
 )
 
 // Pinger reaches the database: store.Store's sqlc query Ping.
 type Pinger interface {
 	Ping(ctx context.Context) (int32, error)
 }
+
+// APIPath prefixes every API route: the recorder client's, the admin API's
+// and the public API's. The app shell never answers under it.
+const APIPath = "/api"
 
 // RecorderPath prefixes the recorder client's endpoints (ADR 0002).
 const RecorderPath = "/api/v1/recorder"
@@ -27,18 +32,21 @@ type RouteKind int
 // Route kinds. Every route the API serves is one of these, by its path:
 // the health check, the recorder client's (under RecorderPath, behind its
 // client key), the admin API's (under AdminPath, behind the admin
-// authenticator), or public. A public route can only come from
+// authenticator), public, or the app's. A public route can only come from
 // internal/public, whose handlers read through the hidden-talkgroup gate
-// (ADR 0004); New refuses any other route outside those prefixes.
+// (ADR 0004), and lives under APIPath. An app route can only come from the
+// web package, the browser app's static files, which carry no deployment
+// data, and lives outside APIPath. New refuses any other route.
 const (
 	HealthRoute RouteKind = iota
 	RecorderRoute
 	AdminRoute
 	PublicRoute
+	AppRoute
 )
 
 func (k RouteKind) String() string {
-	return [...]string{"health", "recorder", "admin", "public"}[k]
+	return [...]string{"health", "recorder", "admin", "public", "app"}[k]
 }
 
 // Route is one route the API serves.
@@ -48,15 +56,34 @@ type Route struct {
 }
 
 // API is the API's handler, with the table of what it serves.
+//
+// The app's routes are on a mux of their own, reached only by paths outside
+// APIPath and /healthz. So the app shell, a catch-all because the browser's
+// router owns every other path, can never answer for an API path, and an
+// API path that isn't mounted still answers 404 or 405.
 type API struct {
 	mux    *http.ServeMux
+	app    *http.ServeMux
 	routes []Route
 }
 
 // Option adds to the API's handler.
 type Option func(*API)
 
-func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.mux.ServeHTTP(w, r) }
+// ServeHTTP serves r. Every response says not to index it (R74).
+func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Robots-Tag", "noindex")
+	if apiPath(r.URL.Path) {
+		a.mux.ServeHTTP(w, r)
+		return
+	}
+	a.app.ServeHTTP(w, r)
+}
+
+// apiPath says whether path is the API's rather than the app's.
+func apiPath(path string) bool {
+	return path == "/healthz" || path == APIPath || under(path, APIPath)
+}
 
 // Routes are every route the API serves, and their kinds. The A10 harness
 // exercises every public one.
@@ -81,13 +108,19 @@ func (a *API) handle(kind RouteKind, pattern string, h http.Handler) {
 	case AdminRoute:
 		fits = under(path, AdminPath)
 	case PublicRoute:
-		fits = path != "/healthz" && !under(path, RecorderPath) && !under(path, AdminPath) &&
+		fits = under(path, APIPath) && !under(path, RecorderPath) && !under(path, AdminPath) &&
 			path != RecorderPath && path != AdminPath
+	case AppRoute:
+		fits = strings.HasPrefix(path, "/") && !apiPath(path)
 	}
 	if !fits {
 		panic(fmt.Sprintf("route %q isn't a %s route", pattern, kind))
 	}
-	a.mux.Handle(pattern, h)
+	if kind == AppRoute {
+		a.app.Handle(pattern, h)
+	} else {
+		a.mux.Handle(pattern, h)
+	}
 	a.routes = append(a.routes, Route{Pattern: pattern, Kind: kind})
 }
 
@@ -110,9 +143,19 @@ func WithPublic(p *public.API) Option {
 	}
 }
 
+// WithApp serves the browser app (SPEC.md section 5): its static files, and
+// its one page for every other path outside the API.
+func WithApp(app *web.App) Option {
+	return func(a *API) {
+		for _, r := range app.Routes() {
+			a.handle(AppRoute, r.Pattern, r.Handler)
+		}
+	}
+}
+
 // New returns the API's handler.
 func New(db Pinger, log *slog.Logger, opts ...Option) *API {
-	a := &API{mux: http.NewServeMux()}
+	a := &API{mux: http.NewServeMux(), app: http.NewServeMux()}
 	a.handle(HealthRoute, "GET /healthz", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()

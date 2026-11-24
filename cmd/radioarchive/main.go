@@ -38,6 +38,7 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/version"
+	"github.com/RIKIKU/RadioArchive/web"
 )
 
 func main() {
@@ -138,15 +139,16 @@ func serve(log *slog.Logger) error {
 	return srv.Shutdown(shutCtx)
 }
 
-// apiHandler is everything the API serves: the recorder client's endpoints
-// and the public API, which reads only through the hidden-talkgroup gate
-// (ADR 0004). The admin API (server.WithAdmin) joins it once admin sign-in
+// apiHandler is everything the API serves: the recorder client's endpoints,
+// the public API, which reads only through the hidden-talkgroup gate (ADR
+// 0004), and the browser app built into the binary (web), which serves no
+// data. The admin API (server.WithAdmin) joins it once admin sign-in
 // (Authentik, M4) exists. Until then only tests serve it, with an
 // authenticator that lives in their _test.go files, so no build of this
 // binary can serve it.
 func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, recordings string) *server.API {
 	return server.New(st, log, server.WithRecorders(rs),
-		server.WithPublic(public.New(gate.New(st, recordings, log), log)))
+		server.WithPublic(public.New(gate.New(st, recordings, log), log)), server.WithApp(web.New()))
 }
 
 // retentionJob is the nightly retention job and the low-disk check (R88),

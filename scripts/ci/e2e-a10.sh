@@ -112,6 +112,24 @@ $never"
 	test "$got" = "$gone" || fail "hidden $id's details differ from a call never stored"
 done
 
+# The app shell built into the binary: a hidden call's path answers exactly
+# as a call's never stored, in any look, and names none of 1003's calls.
+# (The page is static: the comparison, not a search for "1003", is the
+# check, as its asset names are hashes.)
+never=$(answer GET /calls/6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f)
+echo "$never" | grep -q '^HTTP/1.1 200' || fail "the app shell: $never"
+echo "$never" | grep -q '_app/immutable' || fail "the binary has no app built in: $never"
+for id in $hidden; do
+	for cookie in '' 'look=console; theme=dark'; do
+		got=$(answer GET "/calls/$id" -H "Cookie: $cookie")
+		want=$(answer GET /calls/6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f -H "Cookie: $cookie")
+		test "$got" = "$want" || fail "the app shell for hidden $id differs from a call never stored:
+$got
+$want"
+		if echo "$got" | grep -q "$id"; then fail "the app shell names hidden call $id"; fi
+	done
+done
+
 # Nothing was deleted to hide them.
 for path in $(psql "SELECT c.recording_path $calls AND c.talkgroup = 1003"); do
 	docker compose cp "api:/var/lib/radioarchive/recordings/$path" "$media/check.opus" >/dev/null ||
