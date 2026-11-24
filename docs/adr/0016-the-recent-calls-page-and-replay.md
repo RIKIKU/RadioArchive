@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-25, by the owner)
 ---
 
 # 16. The Recent calls page: its address, its default, the search by body, the time zone and replay

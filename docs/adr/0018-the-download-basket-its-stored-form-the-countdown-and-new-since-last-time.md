@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-25, by the owner)
 ---
 
 # 18. The download basket: its stored form, its place in the profile, the countdown and "new since last time"
