@@ -16,8 +16,9 @@ curl http://127.0.0.1:8080/healthz # ok
 . ./.env && RADIOARCHIVE_TEST_DATABASE_URL="postgres://radioarchive:$POSTGRES_PASSWORD@127.0.0.1:5432/radioarchive?sslmode=disable" go test ./...
 ```
 
-Listeners sign in with Authentik, only to save their preferences
-(`docs/adr/0009-listener-sign-in-and-the-saved-profile.md`). In the
+Listeners sign in with Authentik, only to save their preferences, which are kept
+in RadioArchive's database (`docs/adr/0009-listener-sign-in-and-the-saved-profile.md`,
+`docs/adr/0021-the-saved-profile-lives-in-radioarchives-database.md`). In the
 development stack, Authentik is at http://localhost:9000 and the sign-up codes
 it emails are at http://127.0.0.1:8025 (Mailpit). A database volume from
 before Authentik was added needs dropping once: `docker compose down --volumes`.

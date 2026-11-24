@@ -1,18 +1,18 @@
-# RadioArchive as an OIDC client of Authentik (SPEC.md R103, R110, ADR 0009).
+# RadioArchive as an OIDC client of Authentik (SPEC.md R103, ADR 0009, ADR 0021).
 #
 # This file is the part of RadioArchive's Authentik setup that both
 # deployments load: standalone, beside radioarchive-standalone.yaml, and in
 # the combined deployment (R103, R105), in PagerArchive's Authentik, which
 # keeps its own sign-in, enrolment and brand. So it holds only what is
-# RadioArchive's own: its OIDC provider and application, its sign-out flow,
-# and the account its API uses to save listeners' settings. Nothing here
-# names a flow of the standalone file.
+# RadioArchive's own: its OIDC provider and application and its sign-out
+# flow. Authentik keeps only who listeners are; their saved settings are in
+# RadioArchive's database (ADR 0021). Nothing here names a flow of the
+# standalone file.
 #
 # Applied automatically when mounted under /blueprints in the Authentik
 # containers. Reads these environment variables (set in compose.yaml):
 #   RA_APP_URL              the radio's public URL, e.g. https://radio.example.org
 #   RA_OIDC_CLIENT_SECRET   the radio's OIDC client secret
-#   RA_AUTHENTIK_API_TOKEN  the token the radio's API uses for Authentik's API
 #
 # Their names start RA_ so that they can sit beside PagerArchive's PA_ ones
 # in one Authentik.
@@ -20,7 +20,7 @@ version: 1
 metadata:
   name: RadioArchive
   labels:
-    blueprints.goauthentik.io/description: RadioArchive's OIDC client, its sign-out and its API account
+    blueprints.goauthentik.io/description: RadioArchive's OIDC client and its sign-out
 context:
   app_url: !Env [RA_APP_URL, "http://localhost:8080"]
 entries:
@@ -72,7 +72,7 @@ entries:
           url: !Format ["%s/?signed_out=1", !Context app_url]
           redirect_uri_type: logout
       signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
-      sub_mode: user_id # the user's ID, which the API's account reads profiles by
+      sub_mode: user_id # the user's ID, which the API keys saved profiles by (ADR 0021)
       grant_types: [authorization_code]
       include_claims_in_id_token: true
       access_code_validity: minutes=1
@@ -111,85 +111,33 @@ entries:
       target: !KeyOf app
       policy: !KeyOf pkce
       order: 0
-  # Gives the API's role "view user" and "change user" on the user signing
-  # in, and only on them, so the API can save their settings (see "the
-  # API's account" below). Never refuses: sign-in only saves preferences
-  # (R111), and listening never needs it (P3).
+
+  # ------------------------------------- removed: the API's account
+  # The API holds no Authentik token (ADR 0021): a signed-in listener's
+  # saved settings are in RadioArchive's own database, and Authentik keeps
+  # only who they are. An Authentik that loaded an earlier version of this
+  # file still has the API's account, its token, and the policy that gave
+  # the account "view user" and "change user" on each listener's user.
+  # These entries delete them (the policy's binding and the role's object
+  # permissions go with them), so no token of the radio's can change a
+  # user's groups. On an Authentik that never had them they do nothing.
   - model: authentik_policies_expression.expressionpolicy
-    id: profile-access
+    state: absent
     identifiers:
       name: radioarchive-profile-access
-    attrs:
-      expression: |
-        from authentik.rbac.models import Role
-
-        user = request.user
-        http = request.http_request
-        if http is None or not http.path.endswith("/application/o/authorize/"):
-            return True  # only when someone signs in to the radio
-        if getattr(user, "pk", None) is None or user.is_anonymous:
-            return True
-        role = Role.objects.filter(name="RadioArchive API").first()
-        if role is None:
-            return True
-        perms = ["authentik_core.view_user", "authentik_core.change_user"]
-        powerful = (user.is_superuser or getattr(user, "type", None) != "internal"
-                    or user.all_groups().filter(name="radioarchive-admins").exists())
-        if powerful:
-            role.remove_perms(perms, obj=user)
-        else:
-            role.assign_perms(perms, obj=user)
-        return True
-  - model: authentik_policies.policybinding
-    identifiers:
-      target: !KeyOf app
-      policy: !KeyOf profile-access
-      order: 1
-
-  # ------------------------------------------------- the API's account
-  # Least privilege (ADR 0009). Saving a listener's settings into their
-  # user's attributes takes "view user" and "change user": Authentik has
-  # nothing narrower for attributes, and "change user" also lets its holder
-  # rename a user, switch them off or change their groups (all but
-  # superuser groups). So the role holds neither for every user: it holds
-  # them only for each listener's own user, as object permissions, given
-  # when that listener signs in to the radio (the policy below). Authentik's
-  # administrators, radioarchive-admins' members and service accounts are
-  # never given them, and lose them at their next sign-in if they had them.
-  # The token can't create, delete or impersonate users, set passwords or
-  # reach anyone who has never signed in to the radio.
-  #
-  # The token never expires; rotate it by changing RA_AUTHENTIK_API_TOKEN
-  # and AUTHENTIK_API_TOKEN together.
-  - model: authentik_rbac.role
-    id: api-role
-    identifiers:
-      name: RadioArchive API
-    attrs:
-      permissions: []
-  - model: authentik_core.group
-    id: api-group
-    identifiers:
-      name: RadioArchive API
-    attrs:
-      is_superuser: false
-      roles:
-        - !KeyOf api-role
-  - model: authentik_core.user
-    id: api-user
-    identifiers:
-      username: radioarchive-api
-    attrs:
-      name: RadioArchive API
-      type: service_account
-      path: users/service
-      groups:
-        - !KeyOf api-group
   - model: authentik_core.token
+    state: absent
     identifiers:
       identifier: radioarchive-api
-    attrs:
-      intent: api
-      expiring: false
-      user: !KeyOf api-user
-      key: !Env RA_AUTHENTIK_API_TOKEN
+  - model: authentik_core.user
+    state: absent
+    identifiers:
+      username: radioarchive-api
+  - model: authentik_core.group
+    state: absent
+    identifiers:
+      name: RadioArchive API
+  - model: authentik_rbac.role
+    state: absent
+    identifiers:
+      name: RadioArchive API

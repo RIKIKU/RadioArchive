@@ -1,5 +1,5 @@
 // Package account is listeners' sign-in and the profile it saves (SPEC.md
-// P3, P4, R41, R48, R103, R110, R111; ADR 0009).
+// P3, P4, R41, R48, R103, R110, R111; ADR 0009, ADR 0021).
 //
 // Signing in only saves preferences. Nothing here is asked by the public
 // API, the live feed or the gate, and the server hands public routes no
@@ -7,10 +7,11 @@
 // listener hears. Nothing here unlocks the admin API either: the session is
 // not an admin authenticator, and the binary serves no admin API (ADR 0003).
 //
-// The server stores nothing about a listener (P4, R110): the session is a
-// sealed cookie, host-only, and the saved settings are an attribute of the
-// listener's Authentik user, written with the API's own token. Nothing is
-// logged about a request: no address, no email, no token.
+// The server stores nothing about a listener who hasn't signed in (P4): the
+// session is a sealed cookie, host-only. A signed-in listener's saved
+// settings are one row of RadioArchive's database, keyed by the OIDC issuer
+// and subject they sign in with (ADR 0021); Authentik keeps only who they
+// are. Nothing is logged about a request: no address, no email, no token.
 package account
 
 import (
@@ -25,7 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/RIKIKU/RadioArchive/internal/authentik"
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/oidcclient"
 )
@@ -61,13 +61,16 @@ const (
 	maxCookieLen = 3800 // a browser keeps at least 4,096 bytes a cookie
 )
 
-// Directory is where profiles live: Authentik's users (authentik.Client).
-type Directory interface {
-	// Attribute returns one of a user's attributes, nil if unset, and
-	// whether the user is active; authentik.ErrNoUser for no such user.
-	Attribute(ctx context.Context, subject, key string) (json.RawMessage, bool, error)
-	// SetAttribute sets one of a user's attributes, or removes it (nil).
-	SetAttribute(ctx context.Context, subject, key string, value json.RawMessage) error
+// Profiles is where profiles live: RadioArchive's database (store.Store,
+// ADR 0021), one an account, keyed by the issuer and subject it signs in
+// with.
+type Profiles interface {
+	// ListenerProfile returns the account's saved profile, nil for none.
+	ListenerProfile(ctx context.Context, issuer, subject string) ([]byte, error)
+	// SaveListenerProfile saves it, in place of the one the account had.
+	SaveListenerProfile(ctx context.Context, issuer, subject string, profile []byte) error
+	// ClearListenerProfile deletes it, if the account has one.
+	ClearListenerProfile(ctx context.Context, issuer, subject string) error
 }
 
 // Catalogue is the public catalogue (gate.Gate).
@@ -80,7 +83,7 @@ type Catalogue interface {
 type Config struct {
 	AppURL    *url.URL
 	OIDC      *oidcclient.Client
-	Directory Directory
+	Profiles  Profiles
 	Catalogue Catalogue
 	// Secret is what the cookies' key is derived from: the OIDC client
 	// secret.
@@ -107,8 +110,8 @@ func New(cfg Config) (*Service, error) {
 	if cfg.OIDC == nil {
 		return s, nil
 	}
-	if cfg.AppURL == nil || cfg.Directory == nil || cfg.Catalogue == nil {
-		return nil, errors.New("account: sign-in needs the app's URL, the directory and the catalogue")
+	if cfg.AppURL == nil || cfg.OIDC.Issuer == "" || cfg.Profiles == nil || cfg.Catalogue == nil {
+		return nil, errors.New("account: sign-in needs the app's URL, the issuer, the profiles and the catalogue")
 	}
 	var err error
 	if s.seal, err = newSealer(cfg.Secret); err != nil {
@@ -142,6 +145,11 @@ func (s *Service) Routes() []Route {
 
 // session is the signed-in listener, as their cookie holds it.
 type session struct {
+	// Issuer and Subject are the account, as its profile is keyed (ADR
+	// 0021). A session from another issuer than this deployment's (its
+	// AUTHENTIK_URL changed) isn't live: its subject would name someone
+	// else's account there.
+	Issuer  string `json:"o"`
 	Subject string `json:"s"`
 	Name    string `json:"n,omitempty"`
 	Email   string `json:"e,omitempty"`
@@ -182,7 +190,8 @@ func (s *Service) current(r *http.Request) (session, bool) {
 		return session{}, false
 	}
 	var se session
-	if s.seal.open(sessionCookie, c.Value, &se) != nil || se.Subject == "" || s.cfg.Now().Unix() >= se.Expires {
+	if s.seal.open(sessionCookie, c.Value, &se) != nil || se.Subject == "" || se.Issuer != s.cfg.OIDC.Issuer ||
+		s.cfg.Now().Unix() >= se.Expires {
 		return session{}, false
 	}
 	return se, true
@@ -297,7 +306,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, signInFailed, http.StatusSeeOther)
 		return
 	}
-	if err := s.startSession(w, session{Subject: id.Subject, Name: id.Name, Email: id.Email, IDToken: id.IDToken}); err != nil {
+	if err := s.startSession(w, session{Issuer: s.cfg.OIDC.Issuer, Subject: id.Subject, Name: id.Name, Email: id.Email, IDToken: id.IDToken}); err != nil {
 		http.Redirect(w, r, signInFailed, http.StatusSeeOther)
 		return
 	}
@@ -365,8 +374,10 @@ type State struct {
 	SignIn  bool     `json:"signin"`
 	Account *Who     `json:"account"`
 	Profile *Profile `json:"profile"`
-	// Saves says whether the account can hold settings: false for one the
-	// API's token may not reach (an administrator's, ADR 0009).
+	// Saves says whether the account can hold settings. Since the profile
+	// moved to RadioArchive's database (ADR 0021) every signed-in account
+	// can, so it is true whenever Account is set; the browser app still
+	// reads it.
 	Saves bool `json:"saves"`
 }
 
@@ -381,21 +392,8 @@ func (s *Service) account(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	who := &Who{ID: se.Subject, Name: se.Name, Email: se.Email}
-	p, active, err := s.profile(r.Context(), se.Subject)
-	switch {
-	case unreachable(err):
-		// An account the API's token may not reach (an administrator's),
-		// which Authentik answers as if it weren't there: signed in, with
-		// nothing saved.
-		st.Account = who
-		writeJSON(w, http.StatusOK, st)
-		return
-	case err == nil && !active:
-		// Switched off in Authentik since: signed out.
-		s.clear(w, sessionCookie, "/")
-		writeJSON(w, http.StatusOK, st)
-		return
-	case err != nil:
+	p, err := s.profile(r.Context(), se)
+	if err != nil {
 		s.cfg.Log.Warn("account: couldn't read the profile", "error", err.Error())
 		writeJSON(w, http.StatusServiceUnavailable, errUnavailable)
 		return
@@ -417,26 +415,19 @@ func (s *Service) account(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// unreachable is a user the API's token can't read or change.
-func unreachable(err error) bool {
-	return errors.Is(err, authentik.ErrNoUser) || errors.Is(err, authentik.ErrNotPermitted)
-}
-
-var errNotSaved = apiError{Code: "account_not_saved", Message: "This account's settings aren't saved here."}
-
 // profile is what the account holds, nil for nothing.
-func (s *Service) profile(ctx context.Context, subject string) (*Profile, bool, error) {
-	raw, active, err := s.cfg.Directory.Attribute(ctx, subject, Attribute)
+func (s *Service) profile(ctx context.Context, se session) (*Profile, error) {
+	raw, err := s.cfg.Profiles.ListenerProfile(ctx, se.Issuer, se.Subject)
 	if err != nil || raw == nil {
-		return nil, active, err
+		return nil, err
 	}
 	p, err := parseProfile(raw)
 	if err != nil {
 		// Not one this version wrote: shown as nothing, replaced on save.
 		s.cfg.Log.Warn("account: the saved profile isn't one, so it's left out", "error", err.Error())
-		return nil, active, nil
+		return nil, nil
 	}
-	return &p, active, nil
+	return &p, nil
 }
 
 // signedInChange admits a change to the account: same site, signed in, and
@@ -473,16 +464,7 @@ func (s *Service) saveProfile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiError{Code: "not_a_profile", Message: err.Error()})
 		return
 	}
-	before, active, err := s.profile(r.Context(), se.Subject)
-	if unreachable(err) {
-		writeJSON(w, http.StatusForbidden, errNotSaved)
-		return
-	}
-	if err == nil && !active {
-		s.clear(w, sessionCookie, "/")
-		writeJSON(w, http.StatusUnauthorized, errSignInNeeded)
-		return
-	}
+	before, err := s.profile(r.Context(), se)
 	if err != nil {
 		s.cfg.Log.Warn("account: couldn't read the profile", "error", err.Error())
 		writeJSON(w, http.StatusServiceUnavailable, errUnavailable)
@@ -497,7 +479,7 @@ func (s *Service) saveProfile(w http.ResponseWriter, r *http.Request) {
 	save := kept(next, before, publicIn(cat))
 	raw, err := json.Marshal(save)
 	if err == nil {
-		err = s.cfg.Directory.SetAttribute(r.Context(), se.Subject, Attribute, raw)
+		err = s.cfg.Profiles.SaveListenerProfile(r.Context(), se.Issuer, se.Subject, raw)
 	}
 	if err != nil {
 		s.cfg.Log.Warn("account: couldn't save the profile", "error", err.Error())
@@ -508,19 +490,14 @@ func (s *Service) saveProfile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// clearProfile empties the account (R110): everything it holds, hidden
-// talkgroups' entries too.
+// clearProfile empties the account (R110): its row is deleted, everything
+// it held with it, hidden talkgroups' entries too.
 func (s *Service) clearProfile(w http.ResponseWriter, r *http.Request) {
 	se, ok := s.signedInChange(w, r)
 	if !ok {
 		return
 	}
-	err := s.cfg.Directory.SetAttribute(r.Context(), se.Subject, Attribute, nil)
-	if unreachable(err) {
-		writeJSON(w, http.StatusForbidden, errNotSaved)
-		return
-	}
-	if err != nil {
+	if err := s.cfg.Profiles.ClearListenerProfile(r.Context(), se.Issuer, se.Subject); err != nil {
 		s.cfg.Log.Warn("account: couldn't clear the profile", "error", err.Error())
 		writeJSON(w, http.StatusServiceUnavailable, errUnavailable)
 		return

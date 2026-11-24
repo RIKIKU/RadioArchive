@@ -32,9 +32,9 @@
 //	                        (default: AUTHENTIK_URL)
 //	OIDC_CLIENT_ID          the radio's OIDC client and application slug (default radioarchive)
 //	OIDC_CLIENT_SECRET      its secret, or OIDC_CLIENT_SECRET_FILE naming a file holding it
-//	AUTHENTIK_API_TOKEN     the API's Authentik token, or AUTHENTIK_API_TOKEN_FILE
 //
-// The secret and the token are never logged.
+// The secret is never logged. The API holds no Authentik API token: a
+// signed-in listener's saved settings live in its own database (ADR 0021).
 package main
 
 import (
@@ -205,10 +205,10 @@ func serve(log *slog.Logger) error {
 // binary can serve it.
 //
 // Listeners' sign-in (internal/account, ADR 0009) only saves their
-// preferences, in their Authentik profile: it serves no admin route and
-// authenticates no admin.
+// preferences, in RadioArchive's database (ADR 0021): it serves no admin
+// route and authenticates no admin.
 func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate, sc signInConfig) (*server.API, error) {
-	acc, err := sc.service(g, log)
+	acc, err := sc.service(g, st, log)
 	if err != nil {
 		return nil, err
 	}

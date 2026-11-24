@@ -20,12 +20,12 @@ import (
 // The zero value is sign-in off.
 type signInConfig struct {
 	appURL, authentikURL, internalURL *url.URL
-	clientID, clientSecret, apiToken  string
+	clientID, clientSecret            string
 }
 
 func (c signInConfig) on() bool { return c.authentikURL != nil }
 
-// String never shows the secret or the token: a config printed by mistake
+// String never shows the secret: a config printed by mistake
 // leaks nothing.
 func (c signInConfig) String() string {
 	if !c.on() {
@@ -70,9 +70,6 @@ func signInFromEnv(getenv func(string) string) (signInConfig, error) {
 	if c.clientSecret, err = secret(getenv, "OIDC_CLIENT_SECRET"); err != nil {
 		return signInConfig{}, err
 	}
-	if c.apiToken, err = secret(getenv, "AUTHENTIK_API_TOKEN"); err != nil {
-		return signInConfig{}, err
-	}
 	return c, nil
 }
 
@@ -98,8 +95,9 @@ func secret(getenv func(string) string, name string) (string, error) {
 	return v, nil
 }
 
-// service is the account the settings describe.
-func (c signInConfig) service(g *gate.Gate, log *slog.Logger) (*account.Service, error) {
+// service is the account the settings describe, saving signed-in listeners'
+// profiles in profiles (the store, ADR 0021).
+func (c signInConfig) service(g *gate.Gate, profiles account.Profiles, log *slog.Logger) (*account.Service, error) {
 	if !c.on() {
 		return account.New(account.Config{Log: log})
 	}
@@ -113,7 +111,7 @@ func (c signInConfig) service(g *gate.Gate, log *slog.Logger) (*account.Service,
 			RedirectURL:  c.appURL.JoinPath("auth", "callback").String(),
 			HTTP:         hc,
 		},
-		Directory: &authentik.Client{URL: c.authentikURL, Token: c.apiToken, HTTP: hc},
+		Profiles:  profiles,
 		Catalogue: g,
 		Secret:    []byte(c.clientSecret),
 		Log:       log,

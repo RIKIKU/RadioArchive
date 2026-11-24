@@ -6,6 +6,8 @@ status: proposed
 
 Date: 2026-11-25
 
+> **Where the profile lives is superseded by [ADR 0021](0021-the-saved-profile-lives-in-radioarchives-database.md).** The basket is still the profile's `basket` field, in the same form; the profile is now a row of RadioArchive's database rather than ADR 0009's Authentik attribute, and clearing deletes that row.
+
 The download basket keeps call IDs, when each was put in, and the listener's own conversations (a name, an optional note, calls in order), never anything of a call's talkgroup. It lives in the browser's `localStorage`, and in the listener's profile when signed in, in ADR 0009's `radioarchive` attribute, in the same form, going with the listening set as one profile. What the Basket page shows of a call comes from the call details each time. The call details gain `deletes_at`, the moment the nightly retention run will delete the call, so the browser counts down without knowing the setting. "New since last time" is the calls put in a scope since that scope's last download. These are the implementer's choices where `SPEC.md` P1, P4, P5, R41, R45, R46, R64, R65, R67, R84, R88 and R110 leave room (spec "How to use this spec", item 6). Built in [The download basket and its conversations](https://github.com/RIKIKU/RadioArchive/issues/81).
 
 ## Summary

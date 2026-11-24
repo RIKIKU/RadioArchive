@@ -34,11 +34,10 @@ wait_for() {
 
 docker compose up -d --build --wait --wait-timeout 600
 # Authentik answers before its blueprints are applied: wait for the radio's
-# provider and for the API's token, which the blueprints make.
+# provider, which they make. (The API holds no Authentik token: saved
+# settings are in its own database, ADR 0021.)
 wait_for 300 "Authentik's radioarchive provider" \
 	curl -fsS "$AUTHENTIK_URL/application/o/radioarchive/.well-known/openid-configuration"
-wait_for 300 "the API's Authentik token" \
-	sh -c 'curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $AUTHENTIK_API_TOKEN" "$AUTHENTIK_URL/api/v3/core/users/me/" | grep -qx 200'
 wait_for 120 "the API" curl -fsS "$APP_URL/healthz"
 # Authentik's first pages after a start are slow; load them once first.
 for flow in radioarchive-authentication radioarchive-signup; do
