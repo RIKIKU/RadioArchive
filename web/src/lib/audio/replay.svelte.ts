@@ -85,7 +85,7 @@ export class Replay {
 	#fetching: Promise<void> | undefined;
 	#moreFailed = false;
 	/** Each press is a run: what an earlier one fetches later is ignored. */
-	#run = 0;
+	#press = 0;
 
 	/** Plays a call's recording from its start. Call it from the press. */
 	play(info: CallInfo, url: string) {
@@ -121,7 +121,7 @@ export class Replay {
 	}
 
 	#begin() {
-		this.#run++;
+		this.#press++;
 		this.#queue = [];
 		this.#more = undefined;
 		this.#fetching = undefined;
@@ -132,35 +132,35 @@ export class Replay {
 	#topUp() {
 		const more = this.#more;
 		if (!more || this.#fetching || this.#queue.length > 1) return;
-		const run = this.#run;
+		const run = this.#press;
 		this.#fetching = more()
 			.then(
 				({ items, more: left }) => {
-					if (run !== this.#run) return;
+					if (run !== this.#press) return;
 					this.#queue.push(...items);
 					if (!left) this.#more = undefined;
 					if (this.list) this.list = { ...this.list, of: this.list.of + items.length, more: left };
 				},
 				() => {
-					if (run !== this.#run) return;
+					if (run !== this.#press) return;
 					this.#more = undefined;
 					this.#moreFailed = true;
 					if (this.list) this.list = { ...this.list, more: false };
 				}
 			)
 			.finally(() => {
-				if (run === this.#run) this.#fetching = undefined;
+				if (run === this.#press) this.#fetching = undefined;
 			});
 	}
 
 	/** After a call of a list has played: the next one, fetching it first if need be; else it's over. */
 	async #advance() {
-		const run = this.#run;
+		const run = this.#press;
 		let next = this.#queue.shift();
 		while (!next && (this.#fetching || this.#more)) {
 			this.#topUp();
 			await this.#fetching;
-			if (run !== this.#run) return;
+			if (run !== this.#press) return;
 			next = this.#queue.shift();
 		}
 		if (next && this.list) {
