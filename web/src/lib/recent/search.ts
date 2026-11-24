@@ -169,7 +169,8 @@ export interface RecentCall {
 	ended_at: string | null;
 	duration_ms: number | null;
 	in_progress: boolean;
-	transmissions: { unit: number; offset_ms: number; duration_ms: number | null }[];
+	/** Each unit's key-up; alias is the unit's in the call's system (R26, R27), null when it has none. */
+	transmissions: { unit: number; alias: string | null; offset_ms: number; duration_ms: number | null }[];
 	recording: { url: string; type: string; size: number } | null;
 	/** When retention will delete it (ADR 0018); null when the server doesn't say. */
 	deletes_at: string | null;
@@ -202,8 +203,19 @@ export function fieldOf(code: string): 'dates' | 'unit' | 'talkgroups' | undefin
 	return undefined;
 }
 
-/** The units heard on a call, each once, in the order heard. */
-export const unitsOf = (c: RecentCall): number[] => [...new Set(c.transmissions.map((t) => t.unit))];
+/** A unit as listeners see it (R27): its alias, else its radio ID. */
+export const unitName = (unit: number, alias: string | null | undefined): string => alias || String(unit);
+
+/**
+ * The units heard on a call, each once, in the order heard, as listeners
+ * see them (R27): the one place a call's units are turned into what's
+ * shown (ADR 0017, ADR 0019).
+ */
+export function unitsOf(c: RecentCall): string[] {
+	const seen = new Map<number, string>();
+	for (const t of c.transmissions) if (!seen.has(t.unit)) seen.set(t.unit, unitName(t.unit, t.alias));
+	return [...seen.values()];
+}
 
 /** The catalogue's talkgroup a call is on, for its groups, colour and alert. */
 export function talkgroupOf(ix: Index, c: RecentCall): Talkgroup | undefined {
@@ -274,7 +286,7 @@ export function callInfoOf(ix: Index, c: RecentCall): CallInfo {
 		talkgroup: { id: c.talkgroup.id, label: c.talkgroup.label, name: nameOf(c), tag: c.talkgroup.tag, groups: t?.groups ?? [], led_colour: t?.led_colour ?? null, alert: t?.alert ?? null },
 		patched: c.patched_talkgroups,
 		system: ix.single ? undefined : c.system,
-		unit: unit ? { id: unit.unit, name: '' } : null,
+		unit: unit ? { id: unit.unit, name: unitName(unit.unit, unit.alias) } : null,
 		startedAt: c.started_at,
 		source: 'recording',
 		durationMs: c.duration_ms ?? undefined

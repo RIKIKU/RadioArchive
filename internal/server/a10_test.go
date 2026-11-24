@@ -129,6 +129,21 @@ var a10Probes = map[string][]a10Probe{
 		{"1005's name", searchProbe("Covert ops")},
 		{"part of an ID", searchProbe("100")},
 	},
+	// Unit search (R32; ADR 0019) for the unit heard on one call alone: by
+	// its ID, its alias and the start of it, in other case. A unit heard
+	// only on an unavailable call must answer as one never heard (the
+	// deleted call's). Searches every alias and ID shares ignore the call:
+	// they find the public calls' units, and nothing of the rest.
+	"GET " + public.UnitSearchPath: {
+		{"its unit's ID", func(f *a10World, id string) *http.Request { return f.unitReq("GET", fmt.Sprint(f.unit[id])) }},
+		{"its unit's alias", func(f *a10World, id string) *http.Request { return f.unitReq("GET", f.alias[id]) }},
+		{"the start of its unit's alias", func(f *a10World, id string) *http.Request {
+			return f.unitReq("GET", strings.ToLower(f.alias[id][:len(f.alias[id])-1]))
+		}},
+		{"a word every alias has", func(f *a10World, _ string) *http.Request { return f.unitReq("GET", "callsign") }},
+		{"a digit every ID starts with", func(f *a10World, _ string) *http.Request { return f.unitReq("GET", "7") }},
+		{"HEAD", func(f *a10World, id string) *http.Request { return f.unitReq("HEAD", f.alias[id]) }},
+	},
 	// The fireground lookup names a talkgroup by its number: a public
 	// call's probe asks for 1002's (41, with and without a leading zero),
 	// a deleted call's for one no talkgroup has (99), and every other for
@@ -239,6 +254,10 @@ func searchProbe(q string) func(f *a10World, _ string) *http.Request {
 	return func(f *a10World, _ string) *http.Request {
 		return f.req("GET", public.SearchPath+"?q="+url.QueryEscape(q), "")
 	}
+}
+
+func (f *a10World) unitReq(method, q string) *http.Request {
+	return f.req(method, public.UnitSearchPath+"?q="+url.QueryEscape(q), "")
 }
 
 // fireground is the fireground channel number a probe for call id asks for.
@@ -352,6 +371,10 @@ type a10World struct {
 	at    map[string]time.Time
 	unit  map[string]int64
 	names map[string]string
+	// For unit search's probes: the alias of each call's unit, which is
+	// heard on that call alone ("Callsign PP" for the call stored with
+	// seed 'p').
+	alias map[string]string
 }
 
 func (f *a10World) req(method, path, body string) *http.Request {
@@ -375,7 +398,7 @@ func newA10World(t *testing.T) *a10World {
 	_, key := e.recorder(t)
 	f := &a10World{e: e, unavailable: map[string]string{}}
 	n := int64(100)
-	f.at, f.unit, f.names = map[string]time.Time{}, map[string]int64{}, map[string]string{}
+	f.at, f.unit, f.names, f.alias = map[string]time.Time{}, map[string]int64{}, map[string]string{}, map[string]string{}
 	// Each call starts a second after the one before and has a unit of its
 	// own, so a range or a unit can hold just one call.
 	store1 := func(tg int32, patched []int32, seed byte) string {
@@ -392,6 +415,7 @@ func newA10World(t *testing.T) *a10World {
 		}
 		f.at[resp.CallID] = time.UnixMilli(m.StartTimeMS).UTC()
 		f.unit[resp.CallID] = 7000 + n
+		f.alias[resp.CallID] = fmt.Sprintf("Callsign %c%c", seed-32, seed-32)
 		return resp.CallID
 	}
 	f.public = []string{store1(1001, []int32{1002}, 'p'), store1(1001, nil, 'q')}
@@ -456,18 +480,31 @@ func newA10World(t *testing.T) *a10World {
 			f.names[id] = "1003"
 		default:
 			f.names[id] = "4711"
-			// A time and a unit no call has, after every call.
-			f.at[id], f.unit[id] = time.Unix(1764000100+200, 0).UTC(), 6999
+			// A time and a unit no call has, after every call: a unit
+			// with an alias, never heard.
+			f.at[id], f.unit[id], f.alias[id] = time.Unix(1764000100+200, 0).UTC(), 6999, "Callsign ZZ"
 		}
 	}
 	f.names[f.deleted] = "4711"
+
+	// Every call's unit has an alias of its own (R26). A unit heard only
+	// on an unavailable call must be found by neither its alias nor its ID
+	// (ADR 0019), and answer as 6999, never heard, and the deleted call's,
+	// whose transmissions went with it.
+	units := map[int64]string{}
+	for id, u := range f.unit {
+		units[u] = f.alias[id]
+	}
+	for u, alias := range units {
+		e.mustAdmin(t, "PUT", fmt.Sprintf("/systems/%d/units/%d", e.sys, u), map[string]any{"alias": alias}, 201)
+	}
 
 	f.secrets = []string{"1003", "1005", "Admin", "ADMIN", `"admin"`, "Covert ops", "SECRET 5", "Covert group"}
 	f.callName = map[string]string{}
 	for k, id := range f.unavailable {
 		f.callName[id] = k
 		if !strings.HasPrefix(k, "never") && !strings.HasPrefix(k, "not") {
-			f.secrets = append(f.secrets, id)
+			f.secrets = append(f.secrets, id, f.alias[id])
 		}
 	}
 	return f

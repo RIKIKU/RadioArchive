@@ -73,7 +73,7 @@ Timing: a unit filter reads the unit's call IDs whatever their talkgroups, then 
 
 ## Left out
 
-- **Unit aliases and unit search** are #83's, waiting on #75's open question 1. The unit filter takes a radio ID only.
+- **Unit aliases and unit search** are #83's, waiting on #75's open question 1. The unit filter takes a radio ID only. (Since built: ADR 0019.)
 - **Play from here** is the page's (#79), waiting on #75's open question 3; the route already gives the following calls in either order.
 - **Request limits** (R73's 120 a minute and its `429`) are M5's. Only the bounds A22 needs are here.
 

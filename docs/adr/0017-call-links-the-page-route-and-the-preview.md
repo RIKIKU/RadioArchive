@@ -53,7 +53,7 @@ Listen live adds the talkgroup for the session (R47), shown on Listen as "added 
 ## Left for later
 
 - **Play from here** under the card is #92's, blocked on #75's open question 3. The list below the card is `RecentList`, where #92 adds it to every row.
-- **Unit aliases** on the card and its list are #83's (R27). The card shows radio IDs; `unitsOf` is the one place that turns transmissions into the units shown.
+- **Unit aliases** on the card and its list are #83's (R27). The card shows radio IDs; `unitsOf` is the one place that turns transmissions into the units shown. (Since built: ADR 0019.)
 - **Add to basket** on the card and in the dock is #81's.
 
 ## Open points for the owner

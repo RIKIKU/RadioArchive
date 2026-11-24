@@ -57,6 +57,7 @@ type Catalogue struct {
 	byID       map[talkgroupKey]int // system and talkgroup → index in Talkgroups
 	keys       [][]string           // per talkgroup: name, label, tag, ID, lower case
 	delayed    bool                 // some talkgroup has a delay
+	units      unitBook             // every unit's alias (ADR 0019), never listed
 }
 
 type talkgroupKey struct {
@@ -118,6 +119,13 @@ func (g *Gate) Catalogue(ctx context.Context) (*Catalogue, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The units' aliases are kept at the same generation (migration 00016,
+	// ADR 0019). They're never part of the public catalogue's answer.
+	units, err := g.q.GateUnits(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("units: %s", store.SafeError(err))
+	}
+	c.units = unitBookOf(units)
 	g.cat = c
 	return c, nil
 }

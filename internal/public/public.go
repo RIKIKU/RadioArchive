@@ -77,6 +77,7 @@ func New(g *gate.Gate, log *slog.Logger, opts ...Option) *API {
 	a.handle("GET "+CataloguePath, a.catalogue)
 	a.handle("GET "+SearchPath, a.search)
 	a.handle("GET "+FiregroundPath, a.fireground)
+	a.handle("GET "+UnitSearchPath, a.unitSearch)
 	a.handle("GET "+LivePath, a.live)
 	a.handle("GET "+RecentCallsPath, a.recentCalls)
 	a.handle("QUERY "+RecentCallsPath, a.recentCallsBody)
@@ -144,9 +145,12 @@ type Talkgroup struct {
 
 // Transmission is one unit's key-up, from the call's start.
 type Transmission struct {
-	Unit       int64  `json:"unit"`
-	OffsetMS   int32  `json:"offset_ms"`
-	DurationMS *int32 `json:"duration_ms"`
+	Unit int64 `json:"unit"`
+	// Alias is the unit's alias in the call's system (R26, R27; ADR 0019),
+	// null when it has none, so its ID is shown.
+	Alias      *string `json:"alias"`
+	OffsetMS   int32   `json:"offset_ms"`
+	DurationMS *int32  `json:"duration_ms"`
 }
 
 // Recording is where a call's recording plays from.
@@ -238,7 +242,12 @@ func callOf(c gate.Call, del gate.Deletion) Call {
 		out.EndedAt, out.DurationMS = &s, &d
 	}
 	for _, t := range c.Transmissions {
-		out.Transmissions = append(out.Transmissions, Transmission(t))
+		tx := Transmission{Unit: t.Unit, OffsetMS: t.OffsetMS, DurationMS: t.DurationMS}
+		if t.Alias != "" {
+			a := t.Alias
+			tx.Alias = &a
+		}
+		out.Transmissions = append(out.Transmissions, tx)
 	}
 	if c.RecordingSize != nil {
 		out.Recording = &Recording{URL: RecordingURL(c.ID), Type: "audio/ogg", Size: *c.RecordingSize}

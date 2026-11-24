@@ -149,6 +149,9 @@ type Transmission struct {
 	Unit       int64
 	OffsetMS   int32
 	DurationMS *int32
+	// Alias is the unit's alias in the call's system (R26, R27), "" when it
+	// has none.
+	Alias string
 }
 
 // Call is a public call.
@@ -231,6 +234,7 @@ func (g *Gate) Calls(ctx context.Context, ids []string) ([]Call, error) {
 		if g.held(cat, r.SystemID, c) {
 			continue
 		}
+		cat.nameUnits(r.SystemID, &c)
 		byID[c.ID] = c
 	}
 	out := make([]Call, 0, len(byID))
@@ -279,7 +283,7 @@ func callOf(r db.GatePublicCallsRow) (Call, error) {
 		c.EndedAt = &t
 	}
 	for _, t := range txs {
-		c.Transmissions = append(c.Transmissions, Transmission(t))
+		c.Transmissions = append(c.Transmissions, Transmission{Unit: t.Unit, OffsetMS: t.OffsetMS, DurationMS: t.DurationMS})
 	}
 	return c, nil
 }

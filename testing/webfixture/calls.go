@@ -30,9 +30,11 @@ type fixtureCall struct {
 //
 //   - 1001 Dispatch North: 60 calls, 7 minutes apart from 2 hours ago back,
 //     units 2001-2004 in turn, 2010 too on every fifth;
-//   - 1002 Fireground 41: 8 calls, 50 minutes apart, unit 3001, and one in
-//     progress since 20 minutes ago, unit 3002;
-//   - 1003 Admin (hidden): 3 calls, unit 9003 heard on them alone; a 1001
+//   - 1002 Fireground 41: 8 calls, 50 minutes apart, with the fixture's
+//     units in turn (R26: 5001 "Engine 1" with 5150 of the "Portables",
+//     5200 with no alias, 5001 alone), and one in progress since 20
+//     minutes ago, unit 3002;
+//   - 1003 Admin (hidden): 3 calls, unit 9003 "Covert radio" heard on them alone; a 1001
 //     call patched with 1003, unit 9004; and a 1004 (ignored) call, unit
 //     9005. None of these may show;
 //   - A17's call: 1001, 26 hours ago at 7 s past the minute, unit 2099
@@ -51,7 +53,7 @@ func fixtureCalls(from time.Time) []fixtureCall {
 	}
 	for i := range 8 {
 		cs = append(cs, fixtureCall{talkgroup: 1002, start: base.Add(-3*time.Minute - time.Duration(i)*50*time.Minute),
-			length: 6 * time.Second, units: []int64{3001}})
+			length: 6 * time.Second, units: [][]int64{{5001, 5150}, {5200}, {5001}}[i%3]})
 	}
 	cs = append(cs, fixtureCall{talkgroup: 1002, start: now.Add(-20 * time.Minute), units: []int64{3002}, inProgress: true})
 	for i := range 3 {

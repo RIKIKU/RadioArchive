@@ -202,7 +202,7 @@ func TestIntegrationZipA18(t *testing.T) {
 	}
 	want := []string{c1, "2026-03-03T18:06:07.120Z", "2026-03-03T18:06:16.870Z", "2026-03-04T05:06:07.120+11:00",
 		"2026-03-04T05:06:16.870+11:00", "9.750", "Example network", "1001", "Dispatch North", "DISP N", "North",
-		"dispatch", "5001;5123", ";", "0.292;4.830", "2026-03-04_050607_DISP N_1001.opus"}
+		"dispatch", "5001;5123", "Engine 1;Portables", "0.292;4.830", "2026-03-04_050607_DISP N_1001.opus"}
 	if !slices.Equal(rows[2], want) {
 		t.Errorf("index.csv's row for the first call:\n%q\nwant\n%q", rows[2], want)
 	}

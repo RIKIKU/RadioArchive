@@ -8,9 +8,11 @@
 	//   Load more. An empty set is every public talkgroup (ADR 0013).
 	// - Filters: public talkgroups (ArchiveUx's Suggest, over the catalogue
 	//   the page has), a date and time range (ArchiveUx's DateRange, with
-	//   times of day, on the deployment's clock), a unit by radio ID (#83
-	//   adds aliases), newest or oldest first. No free text. They live in the
-	//   page's address, as chosen, so a filtered list can be linked to.
+	//   times of day, on the deployment's clock), a unit (Suggest again, over
+	//   unit search by alias or radio ID, ADR 0019; or a radio ID typed),
+	//   newest or oldest first. No free text. They live in the page's
+	//   address, as chosen, so a filtered list can be linked to; a unit is
+	//   there by its radio ID.
 	// - The search's refusals (R73: over 31 days, too slow) show under the
 	//   form as ArchiveUx section 5 says: a field's under that field, the
 	//   rest under the form.
@@ -46,6 +48,7 @@
 		type Refusal,
 		type Scope
 	} from '#lib/recent/search.ts';
+	import { UnitSearch, unitKey, unitLabel, type FoundUnit } from '#lib/recent/units.ts';
 
 	const listening = listeningState();
 	const player = usePlayer();
@@ -92,17 +95,61 @@
 	let scope: Scope = $state('set');
 	let chosen: Talkgroup[] = $state([]);
 	let range = $state({ from: '', to: '', fromTime: '', toTime: '' });
-	let unit = $state('');
 	let order: 'newest' | 'oldest' = $state('newest');
 	let text = $state('');
+	// The unit: what's in its box, and the unit picked from its suggestions
+	// (its key, `[system.]id`, and how the box shows it).
+	let unitText = $state('');
+	let picked: { key: string; label: string } | undefined = $state();
+	// The filter's unit as the listener sees it: its alias when unit search
+	// knows it, else as the address has it.
+	let unitShown = $state('');
 	$effect(() => {
 		const f = filters;
 		scope = f.scope;
 		chosen = ix ? chosenOf(ix, f) : [];
 		range = { from: f.from, to: f.to, fromTime: f.fromTime, toTime: f.toTime };
-		unit = f.unit;
 		order = f.order;
+		unitText = f.unit;
+		unitShown = f.unit;
+		picked = undefined;
+		if (f.unit) void nameUnit(f.unit);
 	});
+
+	let unitBox: { refresh(): void } | undefined = $state();
+	const units = new UnitSearch(() => unitBox?.refresh());
+
+	// The address's unit by its alias, as unit search finds it (by its
+	// radio ID); one it doesn't find (never heard on a public call) stays
+	// as it was typed.
+	async function nameUnit(key: string) {
+		const id = key.split('.').pop() ?? key;
+		const u = (await units.get(id)).find((x) => unitKey(x) === key || (!key.includes('.') && String(x.id) === key));
+		if (!u || filters.unit !== key) return;
+		const label = unitLabel(u);
+		unitShown = label;
+		if (unitText === key) {
+			unitText = label;
+			picked = { key, label };
+		}
+	}
+
+	// Unit suggestions: unit search's, for what's in the box.
+	function suggestUnit(t: string) {
+		const found = units.for(t) ?? [];
+		const sys = (u: FoundUnit) => (u.system === undefined || !ix ? undefined : ix.catalogue.systems?.find((s) => s.id === u.system));
+		return {
+			target: { start: 0, end: t.length },
+			options: found.map((u) => ({ kind: 'value' as const, id: unitKey(u), value: unitLabel(u), insert: '', section: sys(u)?.name || sys(u)?.label })),
+			what: 'unit'
+		};
+	}
+	function pickUnit(o: { kind: string; id?: string; value?: string }) {
+		if (o.kind !== 'value' || !o.id) return;
+		picked = { key: o.id, label: o.value ?? o.id };
+		unitText = picked.label;
+		if (errors.unit) errors = { ...errors, unit: undefined };
+	}
 
 	let open = $state(false);
 	let submitted = false;
@@ -140,8 +187,10 @@
 		e.preventDefault();
 		const next: typeof errors = {};
 		if (scope === 'chosen' && !chosen.length) next.talkgroups = 'Choose at least one talkgroup, or another option above.';
-		const u = unit.trim();
-		if (u && !UNIT.test(u)) next.unit = 'Enter a radio ID in digits, such as 2001.';
+		// A unit picked from the list, or a radio ID typed.
+		const typed = unitText.trim();
+		const u = picked && picked.label === typed ? picked.key : typed;
+		if (u && !UNIT.test(u)) next.unit = 'Choose a unit from the list, or enter a radio ID in digits, such as 2001.';
 		errors = next;
 		formError = '';
 		if (Object.keys(next).length) {
@@ -209,7 +258,7 @@
 			const to = filters.to || filters.from;
 			parts.push(to === filters.from && !filters.fromTime && !filters.toTime ? dayLabel(filters.from, '') : `${dayLabel(filters.from, filters.fromTime)} – ${dayLabel(to, filters.toTime)}`);
 		}
-		if (filters.unit) parts.push(`Unit ${filters.unit}`);
+		if (filters.unit) parts.push(`Unit ${unitShown || filters.unit}`);
 		parts.push(filters.order === 'oldest' ? 'Oldest first' : 'Newest first');
 		return parts.join(' · ');
 	});
@@ -286,18 +335,25 @@
 			</div>
 
 			<div class="field">
-				<label for="recent-unit">Unit</label>
-				<input
+				<Suggest
+					bind:this={unitBox}
+					bind:text={unitText}
+					suggest={suggestUnit}
+					onpick={pickUnit}
+					oninput={() => {
+						picked = undefined;
+						if (errors.unit) errors = { ...errors, unit: undefined };
+					}}
 					id="recent-unit"
-					type="text"
-					inputmode="numeric"
-					autocomplete="off"
-					bind:value={unit}
-					aria-invalid={errors.unit ? 'true' : undefined}
-					aria-describedby="unit-hint{errors.unit ? ' unit-error' : ''}"
-					oninput={() => errors.unit && (errors = { ...errors, unit: undefined })}
+					label="Unit"
+					showLabel
+					icon="search"
+					placeholder="Alias or radio ID"
+					listLabel="Units"
+					describedby="unit-hint{errors.unit ? ' unit-error' : ''}"
+					invalid={!!errors.unit}
 				/>
-				<p class="field-hint" id="unit-hint">By radio ID, such as 2001.</p>
+				<p class="field-hint" id="unit-hint">By alias or radio ID, such as Engine 1 or 2001.</p>
 				{#if errors.unit}<p class="field-error" id="unit-error">{errors.unit}</p>{/if}
 			</div>
 

@@ -260,3 +260,12 @@ type Transmission struct {
 	Unit       int64
 	DurationMs *int32
 }
+
+type Unit struct {
+	SystemID  int64
+	FirstID   int64
+	LastID    int64
+	Alias     string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
