@@ -15,6 +15,7 @@ import (
 
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/public"
+	"github.com/RIKIKU/RadioArchive/internal/retention"
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/storetest"
@@ -44,8 +45,13 @@ func TestIntegrationP4NothingKept(t *testing.T) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	dir := t.TempDir()
-	// As serve wires it: the gate and its live feed.
-	g := gate.New(st, dir, log)
+	// As serve wires it: the gate, told when retention deletes a call, and
+	// its live feed.
+	job, err := retention.New(retention.Config{Store: st, Dir: dir, Log: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := gate.New(st, dir, log, gate.WithRetention(job))
 	go g.Live().Run(ctx)
 	rs, err := server.NewRecorders(st, log, server.RecordersConfig{RecordingsDir: dir, ServerVersion: version.Version,
 		Live: g.Live(), Notice: g.Live()})
@@ -105,10 +111,20 @@ func TestIntegrationP4NothingKept(t *testing.T) {
 		{"QUERY", "/api/v1/calls", `{"ids":["6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f"]}`},
 		{"POST", "/api/v1/calls", `{"ids":["6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f"]}`},
 		{"GET", "/api/v1/calls/6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f/recording", ""},
+		// The basket (R64, ADR 0018) lives in the browser: its page, its
+		// availability check (the call list, above), its zips and the call
+		// link keep nothing either.
+		{"GET", "/basket", ""},
+		{"GET", "/api/v1/recent-calls", ""},
+		{"GET", public.ZipURL(public.ZipRequest{Calls: []string{"6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f"},
+			Conversations: []public.ZipConversation{{Name: "Structure fire", Note: "A note", Calls: []string{"0f8e2c1a-6b3d-4e5f-9a7b-1c2d3e4f5a6b"}}}}), ""},
+		{"POST", "/api/v1/zip", `{"calls":["6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f"],"conversations":[]}`},
+		{"GET", "/calls/6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f", ""},
 		{"GET", "/api/v1/account", ""},
 		{"GET", "/auth/signin?return=/", ""},
 		{"GET", "/auth/callback?code=x&state=y", ""},
 		{"PUT", "/api/v1/account/profile", `{"v":1,"talkgroups":[{"id":1001}]}`},
+		{"PUT", "/api/v1/account/profile", `{"v":1,"talkgroups":[],"basket":{"calls":[{"id":"6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f","added":1764000000000}],"conversations":[]}}`},
 		{"POST", "/auth/signout", ""},
 		{"GET", "/auth/end-session", ""},
 	} {

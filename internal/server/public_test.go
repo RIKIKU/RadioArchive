@@ -142,6 +142,21 @@ func TestIntegrationCallDetails(t *testing.T) {
 	if len(got[0].PatchedTalkgroups) != 0 || got[0].PatchedTalkgroups == nil {
 		t.Errorf("unpatched call's patched_talkgroups %v, want []", got[0].PatchedTalkgroups)
 	}
+	// When retention will delete it (R64; ADR 0018): the nightly run (03:00
+	// in the test's UTC) after its start plus the period, 30 days by
+	// default, and as the setting changes.
+	if x.DeletesAt == nil || *x.DeletesAt != "2025-12-25T03:00:00.000Z" {
+		t.Errorf("deletes_at %v, want 2025-12-25T03:00:00.000Z", x.DeletesAt)
+	}
+	if err := e.job.SetDays(context.Background(), 7); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.publicCalls(t, a); len(got) != 1 || got[0].DeletesAt == nil || *got[0].DeletesAt != "2025-12-02T03:00:00.000Z" {
+		t.Errorf("with 7 days, deletes_at %+v, want 2025-12-02T03:00:00.000Z", got)
+	}
+	if err := e.job.SetDays(context.Background(), 30); err != nil {
+		t.Fatal(err)
+	}
 
 	// Limits and bad bodies (R73, R78).
 	ids := make([]string, gate.MaxCalls+1)

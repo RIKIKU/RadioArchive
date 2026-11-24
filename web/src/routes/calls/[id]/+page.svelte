@@ -4,8 +4,9 @@
 	//
 	// - The card: the talkgroup's name (R24) and group, the start date and
 	//   time on the deployment's clock (TZ), the duration, the units heard
-	//   (by radio ID; #83 adds aliases), Play, Download and Share. Live
-	//   listening doesn't start; Start listening stays in the dock.
+	//   (by radio ID; #83 adds aliases), Play, Download, Share and Add to
+	//   basket (ADR 0018). Live listening doesn't start; Start listening
+	//   stays in the dock.
 	// - In progress: the card says so and offers live listening, which adds
 	//   the talkgroup for the session (R47). The page asks again every few
 	//   seconds, so once the call ends and its recording arrives the same
@@ -22,6 +23,7 @@
 	import { Icon } from 'archiveux/components';
 	import RecentList from '#lib/recent/RecentList.svelte';
 	import ShareButton from '#lib/share/ShareButton.svelte';
+	import AddToBasket from '#lib/basket/AddToBasket.svelte';
 	import { usePlayer } from '#lib/audio/context.ts';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import { indexOf, keyOf, resolve, type Catalogue, type Index } from '#lib/listening/set.ts';
@@ -220,6 +222,7 @@
 				<button type="button" class="play" onclick={() => call && listenLive(call)}><Icon name="play" /><span>Listen live</span></button>
 			{/if}
 			<ShareButton callId={call.id} label="{name}, {startOf(call.started_at, timeZone)}" />
+			<AddToBasket callId={call.id} label="{name}, {startOf(call.started_at, timeZone)}" />
 		</div>
 		{#if call.in_progress}
 			<p class="note" role="status">
@@ -240,7 +243,7 @@
 		<h2 id="more-heading">More calls on {name}</h2>
 		<p class="meta">From this call on, oldest first. Times are {zoneLabel(timeZone)} time. <a href={allHref}>All recent calls on {name}</a></p>
 		<RecentList search={below} {ix} {timeZone} {player} label="Calls on {name}" current={call.id} onlive={listenLive}>
-			{#snippet actions(c: RecentCall)}<ShareButton callId={c.id} label="{nameOf(c)}, {startOf(c.started_at, timeZone)}" />{/snippet}
+			{#snippet actions(c: RecentCall)}<ShareButton callId={c.id} label="{nameOf(c)}, {startOf(c.started_at, timeZone)}" /><AddToBasket callId={c.id} label="{nameOf(c)}, {startOf(c.started_at, timeZone)}" />{/snippet}
 		</RecentList>
 	</section>
 {/if}

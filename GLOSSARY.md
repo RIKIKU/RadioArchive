@@ -36,6 +36,10 @@ _Avoid_: Latency, lag
 How long a call and its recording are kept, in days, before the nightly job deletes them; the same for every talkgroup, hidden ones included.
 _Avoid_: TTL, expiry, archive period
 
+**Deletion moment**:
+When the nightly job will delete a call: the first nightly run after the call's start plus the retention period. A basket item counts down to it.
+_Avoid_: Expiry, expiry date, TTL
+
 **Retention shortened**:
 Recordings deleted before their retention period is over, oldest first, because the recordings volume ran low on free space.
 _Avoid_: Purge, eviction, early expiry

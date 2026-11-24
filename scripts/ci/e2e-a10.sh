@@ -94,6 +94,12 @@ for method in QUERY POST; do
 	for id in $hidden; do
 		if echo "$list" | grep -q "$id"; then fail "$method /api/v1/calls lists hidden call $id"; fi
 	done
+	# The basket's availability check (R64, ADR 0018): the public call's
+	# details say when retention will delete it, and a basket holding 1003's
+	# calls too gets exactly the answer of one holding the public call alone.
+	echo "$list" | grep -q '"deletes_at":"20[0-9]' || fail "$method /api/v1/calls has no deletes_at: $list"
+	alone=$(answer "$method" /api/v1/calls -H 'Content-Type: application/json' --data "{\"ids\":[\"$pub\"]}")
+	test "$alone" = "$list" || fail "$method /api/v1/calls with 1003's calls answers otherwise than without them"
 done
 
 # The public recording plays, with range requests.

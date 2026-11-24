@@ -32,5 +32,21 @@ test('the same profile: talkgroups and marks in any order; nothing else of the b
 	const b = profileOf([{ id: 1001 }, { id: 1002, priority: true }], 'console', 'dark', true);
 	expect(sameProfile(a, b)).toBe(true);
 	expect(sameProfile(a, { ...b, alerts: false })).toBe(false);
-	expect(Object.keys(a).sort()).toEqual(['alerts', 'look', 'talkgroups', 'theme', 'v']);
+	expect(Object.keys(a).sort()).toEqual(['alerts', 'basket', 'look', 'talkgroups', 'theme', 'v']);
+});
+
+// The basket goes with the set, as one profile (R64, R110; ADR 0018).
+test('first sign-in: the basket counts as the set does; nothing is merged', () => {
+	const call = { id: '0f8e2c1a-6b3d-4e5f-9a7b-1c2d3e4f5a6b', added: 1 };
+	const basket = { calls: [call], conversations: [] };
+	const withBasket = profileOf([{ id: 1001 }], 'harbour', 'system', false, basket);
+	// An account with a basket but no set holds something: it asks.
+	expect(firstStep(false, account({ basket }), browser)).toBe('ask');
+	// An account with neither gets the browser's.
+	expect(firstStep(false, account({ basket: { calls: [], conversations: [] } }), withBasket)).toBe('save');
+	// The same set with another basket isn't the same profile.
+	expect(firstStep(false, account({ talkgroups: [{ id: 1001 }], look: 'harbour', theme: 'system' }), withBasket)).toBe('ask');
+	expect(firstStep(false, { ...withBasket }, withBasket)).toBe('match');
+	// A profile from before M3 (no basket) holds an empty one.
+	expect(sameProfile(account({ talkgroups: [{ id: 1001 }] }), browser)).toBe(true);
 });

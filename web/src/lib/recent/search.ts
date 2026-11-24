@@ -171,6 +171,8 @@ export interface RecentCall {
 	in_progress: boolean;
 	transmissions: { unit: number; offset_ms: number; duration_ms: number | null }[];
 	recording: { url: string; type: string; size: number } | null;
+	/** When retention will delete it (ADR 0018); null when the server doesn't say. */
+	deletes_at: string | null;
 }
 
 export interface RecentPage {

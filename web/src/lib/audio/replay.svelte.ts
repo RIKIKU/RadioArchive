@@ -49,9 +49,31 @@ export class Replay {
 	#peak = 0;
 	#firstFrame = false;
 
+	/** A conversation played in order (R64; ADR 0018): its name, and which of its calls is playing. */
+	list: { name: string; at: number; of: number } | undefined = $state();
+	#queue: { info: CallInfo; url: string }[] = [];
+
 	/** Plays a call's recording from its start. Call it from the press. */
 	play(info: CallInfo, url: string) {
-		this.stop();
+		this.#queue = [];
+		this.list = undefined;
+		this.#start(info, url);
+	}
+
+	/**
+	 * Plays calls one after another, in their order, from their recordings:
+	 * a conversation's Play all. Call it from the press; the rest follow on
+	 * the same output. Stop ends them all.
+	 */
+	playAll(name: string, calls: { info: CallInfo; url: string }[]) {
+		if (!calls.length) return;
+		this.#queue = calls.slice(1);
+		this.list = { name, at: 1, of: calls.length };
+		this.#start(calls[0].info, calls[0].url);
+	}
+
+	#start(info: CallInfo, url: string) {
+		this.#stopCurrent();
 		const gen = ++this.#gen;
 		if (!this.#ctx) {
 			const ctx = new AudioContext({ latencyHint: 'interactive' });
@@ -71,8 +93,14 @@ export class Replay {
 		void this.#run(gen, url, resumed);
 	}
 
-	/** Stops the call being replayed, if one is. */
+	/** Stops the call being replayed, if one is, and the calls after it. */
 	stop() {
+		this.#queue = [];
+		this.list = undefined;
+		this.#stopCurrent();
+	}
+
+	#stopCurrent() {
 		const c = this.call;
 		this.#gen++;
 		this.#halt();
@@ -100,6 +128,8 @@ export class Replay {
 		} catch (err) {
 			if (gen !== this.#gen) return;
 			this.#halt();
+			this.#queue = [];
+			this.list = undefined;
 			this.failure = String(err).includes('404') ? "This call isn't available any more." : "Couldn't play that call. Try again.";
 			return;
 		}
@@ -123,6 +153,12 @@ export class Replay {
 			announce('radioarchive:played', { call_id: c?.callId, path, source: 'recording', replay: true, frames: this.#frames, peak: this.#peak });
 			this.#gen++;
 			this.#halt();
+			// Play all: the next call, on the output the press started.
+			const next = this.#queue.shift();
+			if (next && this.list) {
+				this.list = { ...this.list, at: this.list.at + 1 };
+				this.#start(next.info, next.url);
+			} else this.list = undefined;
 		};
 		wait();
 	}

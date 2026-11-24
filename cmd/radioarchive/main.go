@@ -141,9 +141,16 @@ func serve(log *slog.Logger) error {
 	defer st.Close()
 	log.Info("migrations applied")
 
+	job, err := retentionJob(st, log)
+	if err != nil {
+		return err
+	}
+	go job.Run(ctx)
+
 	// The gate, and its live feed, which the recorder endpoints hand every
-	// live call to (ADR 0007).
-	g := gate.New(st, recordingsDir(), log)
+	// live call to (ADR 0007). The retention job tells it when each call
+	// will be deleted (ADR 0018).
+	g := gate.New(st, recordingsDir(), log, gate.WithRetention(job))
 	go g.Live().Run(ctx)
 	rs, err := server.NewRecorders(st, log, server.RecordersConfig{
 		RecordingsDir: recordingsDir(),
@@ -157,12 +164,6 @@ func serve(log *slog.Logger) error {
 		return err
 	}
 	go rs.Run(ctx)
-
-	job, err := retentionJob(st, log)
-	if err != nil {
-		return err
-	}
-	go job.Run(ctx)
 
 	sc, err := signInFromEnv(os.Getenv)
 	if err != nil {

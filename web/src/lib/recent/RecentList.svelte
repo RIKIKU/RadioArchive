@@ -10,7 +10,7 @@
 	// (R46), which pauses live listening; a call still in progress has no
 	// recording yet, so it offers live listening instead. Download saves the
 	// stored file under R63's name (ADR 0014). Share (ADR 0017) and Add to
-	// basket (#81) go in the row's actions, after Download (actions). Under
+	// basket (ADR 0018) go in the row's actions, after Download (actions). Under
 	// a call card, the card's call is marked "This call" (current).
 	import type { Snippet } from 'svelte';
 	import { Icon } from 'archiveux/components';

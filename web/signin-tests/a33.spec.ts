@@ -240,6 +240,58 @@ test('clearing empties the account and leaves the browser its set; signing out e
 	await expect(page.locator('input[name="uidField"]')).toBeVisible({ timeout: 60_000 });
 });
 
+// The download basket goes with the set (R64, R110; ADR 0018): saved to
+// the profile, there in another browser, and cleared with the rest. The
+// stack has no calls, so the basket's are made-up IDs, which the basket
+// shows as no longer available; the conversation is the listener's own.
+test('the basket is saved to the account, appears in another browser, and Clear saved settings removes it', async ({ browser, request, baseURL }) => {
+	const call = '0f8e2c1a-6b3d-4e5f-9a7b-1c2d3e4f5a6b';
+	const page = await browserWith(browser, [{ id: 1001 }]);
+	await page.evaluate(
+		(id) =>
+			localStorage.setItem(
+				'radioarchive.basket',
+				JSON.stringify({ v: 1, calls: [{ id, added: 1764000000000 }], conversations: [{ id: 'c1', name: 'Structure fire', calls: [{ id, added: 1764000000000 }] }] })
+			),
+		call
+	);
+	const email = address('basket');
+	await signUp(page, request, baseURL!, email);
+	type Saved = { calls: { id: string }[]; conversations: { name: string }[] };
+	const basketOf = async (p: Page) => ((await account(p)).profile as unknown as { basket?: Saved } | null)?.basket;
+	await expect.poll(async () => (await basketOf(page))?.conversations.map((c) => c.name), { timeout: 15_000 }).toEqual(['Structure fire']);
+	// A change in the basket is saved too.
+	await page.goto('/basket');
+	await page.getByRole('button', { name: 'New conversation' }).click();
+	await page.getByLabel('Name required').fill('Grass fire');
+	await page.getByRole('button', { name: 'Create' }).click();
+	await expect.poll(async () => (await basketOf(page))?.conversations.map((c) => c.name), { timeout: 15_000 }).toEqual(['Structure fire', 'Grass fire']);
+
+	// Another browser, with the same set and an empty basket, signed in to
+	// the same account: the basket goes with the set, so it's asked once,
+	// and nothing is merged.
+	const other = await browserWith(browser, [{ id: 1001 }]);
+	await signIn(other, baseURL!, email);
+	const prompt = other.getByRole('region', { name: 'Use the listening set saved to your account?' });
+	await expect(prompt).toContainText('1 call in its basket');
+	await prompt.getByRole('button', { name: "Use my account's set" }).click();
+	await other.goto('/basket');
+	await expect(other.getByRole('article', { name: 'Structure fire' })).toBeVisible();
+	await expect(other.getByRole('article', { name: 'Grass fire' })).toBeVisible();
+	await expect(other.locator('[data-state="unavailable"]').first()).toHaveText(/No longer available/);
+	await accessible(other);
+
+	// Cleared: the account holds no basket; this browser keeps its own.
+	await openMenu(other);
+	await other.getByRole('button', { name: 'Clear saved settings' }).click();
+	await other.getByRole('region', { name: 'Clear what your account holds?' }).getByRole('button', { name: "Clear my account's settings" }).click();
+	await expect(other.getByRole('status').filter({ hasText: 'Your account holds nothing now.' })).toBeVisible();
+	expect((await account(other)).profile).toBeNull();
+	await expect(other.getByRole('article', { name: 'Structure fire' })).toBeVisible();
+	await other.context().close();
+	await page.context().close();
+});
+
 test('screenshots: the account menu signed out and in, the prompt and the clear', async ({ browser, request, baseURL }) => {
 	test.skip(!process.env.RA_SHOTS, 'only when RA_SHOTS names a folder');
 	const email = address('shots');
@@ -258,7 +310,7 @@ test('screenshots: the account menu signed out and in, the prompt and the clear'
 		await shot(page, `first-sign-in-prompt-${width}`);
 		await prompt.getByRole('button', { name: "Use my account's set" }).click();
 		await openMenu(page);
-		await expect(page.getByText('Your listening set and settings are saved to your account.')).toBeVisible();
+		await expect(page.getByText('Your listening set, basket and settings are saved to your account.')).toBeVisible();
 		await shot(page, `account-signed-in-${width}`);
 		await page.getByRole('button', { name: 'Clear saved settings' }).click();
 		await expect(page.getByRole('region', { name: 'Clear what your account holds?' })).toBeVisible();

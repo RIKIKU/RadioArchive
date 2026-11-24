@@ -72,6 +72,34 @@ func TestCutoff(t *testing.T) {
 	}
 }
 
+// A call goes at the first nightly run whose cut-off is after its start:
+// the run after its start plus the period (ADR 0005, ADR 0018). A19's call,
+// recorded 29 days ago with 30 days' retention, is deleted in 1 to 2 days.
+func TestDeletesAt(t *testing.T) {
+	j := &Job{cfg: Config{At: 3 * time.Hour, Location: time.UTC}}
+	for _, c := range []struct{ started, want string }{
+		{"2026-10-25T02:59:59Z", "2026-11-24T03:00:00Z"},
+		// Exactly on the cut-off: kept, as `started_at < cutoff` keeps it.
+		{"2026-10-25T03:00:00Z", "2026-11-25T03:00:00Z"},
+		{"2026-10-25T14:00:00Z", "2026-11-25T03:00:00Z"},
+	} {
+		started, _ := time.Parse(time.RFC3339, c.started)
+		want, _ := time.Parse(time.RFC3339, c.want)
+		got := j.DeletesAt(30, started)
+		if !got.Equal(want) {
+			t.Errorf("DeletesAt(30, %s) = %s, want %s", c.started, got, c.want)
+		}
+		// The run then deletes it, and the run before keeps it.
+		if !started.Before(Cutoff(got, 30)) || started.Before(Cutoff(got.AddDate(0, 0, -1), 30)) {
+			t.Errorf("%s: the run at %s doesn't delete it first", c.started, got)
+		}
+	}
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	if left := j.DeletesAt(30, now.AddDate(0, 0, -29)).Sub(now); left < 24*time.Hour || left >= 48*time.Hour {
+		t.Errorf("A19: a call recorded 29 days ago is deleted in %s", left)
+	}
+}
+
 func TestDiskState(t *testing.T) {
 	var space Space
 	var fail error

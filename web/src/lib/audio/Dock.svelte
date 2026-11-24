@@ -12,7 +12,8 @@
 	// Controls (R44): Pause or Resume, Skip, Jump to live, Hold, Stop
 	// listening. Each has its name in words: shown on a desktop, read out on
 	// a phone, where the buttons show their icons only. Share (R45, ADR
-	// 0017) copies the playing call's link; Add to basket is #81's.
+	// 0017) copies the playing call's link; Add to basket (ADR 0018) puts it
+	// in the download basket, live or not.
 	//
 	// A call replayed from recent calls (R46; ADR 0016) shows first, with
 	// its own Stop and Share, whether live listening is paused or never
@@ -21,6 +22,7 @@
 	import type { Player, CallInfo } from './player.svelte.ts';
 	import { dockIcons } from './icons.ts';
 	import ShareButton from '#lib/share/ShareButton.svelte';
+	import AddToBasket from '#lib/basket/AddToBasket.svelte';
 
 	let { player }: { player: Player } = $props();
 
@@ -46,11 +48,13 @@
 			<p class="meta np-unit">
 				<span class="unit">{unitOf(r)}</span>{#if r.system}<span class="sep" aria-hidden="true">·</span><span class="system">{r.system.name}</span>{/if}
 				<span class="sep" aria-hidden="true">·</span><span class="elapsed"><span class="visually-hidden">{'Played '}</span>{clock(player.replay.elapsed)}</span>
+				{#if player.replay.list}{@const l = player.replay.list}<span class="sep" aria-hidden="true">·</span><span class="list">{l.name}: call {l.at} of {l.of}</span>{/if}
 			</p>
 		</div>
 		<div class="controls" role="group" aria-label="Replay controls">
 			<button type="button" class="secondary" onclick={() => player.replay.stop()}><Icon svg={dockIcons.stop} /><span class="label">Stop replay</span></button>
 			<ShareButton callId={r.callId} label={r.talkgroup.name} icon compact />
+			<AddToBasket callId={r.callId} label={r.talkgroup.name} icon compact />
 		</div>
 	</div>
 {:else if player.replay.failure}
@@ -124,7 +128,7 @@
 				>
 			{/if}
 			<button type="button" class="secondary" onclick={() => player.stop()}><Icon svg={dockIcons.stop} /><span class="label">Stop listening</span></button>
-			{#if c}<ShareButton callId={c.callId} label={c.talkgroup.name} icon compact />{/if}
+			{#if c}<ShareButton callId={c.callId} label={c.talkgroup.name} icon compact /><AddToBasket callId={c.callId} label={c.talkgroup.name} icon compact />{/if}
 		</div>
 	</div>
 {/if}

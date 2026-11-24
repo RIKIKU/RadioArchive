@@ -326,9 +326,14 @@ func (a *API) serveRecent(w http.ResponseWriter, r *http.Request, q url.Values) 
 		a.failed(w, r, err)
 		return
 	}
+	del, err := a.g.Deletion(r.Context())
+	if err != nil {
+		a.failed(w, r, err)
+		return
+	}
 	out := RecentCallsResponse{Calls: make([]Call, 0, len(page.Calls))}
 	for _, c := range page.Calls {
-		out.Calls = append(out.Calls, callOf(c))
+		out.Calls = append(out.Calls, callOf(c, del))
 	}
 	if page.Next != nil {
 		next := cursorOf(*page.Next)

@@ -24,6 +24,7 @@
 	import { DateRange, Suggest } from 'archiveux/components';
 	import RecentList from '#lib/recent/RecentList.svelte';
 	import ShareButton from '#lib/share/ShareButton.svelte';
+	import AddToBasket from '#lib/basket/AddToBasket.svelte';
 	import { usePlayer } from '#lib/audio/context.ts';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import { indexOf, keyOf, resolve, search as searchTalkgroups, type Catalogue, type Index, type Talkgroup } from '#lib/listening/set.ts';
@@ -318,7 +319,7 @@
 
 	<p class="meta zone">Times are {zoneLabel(timeZone)} time.</p>
 	<RecentList {search} {ix} {timeZone} {player} {onrefusal} onlive={listenLive}>
-		{#snippet actions(c: RecentCall)}<ShareButton callId={c.id} label="{nameOf(c)}, {startOf(c.started_at, timeZone)}" />{/snippet}
+		{#snippet actions(c: RecentCall)}<ShareButton callId={c.id} label="{nameOf(c)}, {startOf(c.started_at, timeZone)}" /><AddToBasket callId={c.id} label="{nameOf(c)}, {startOf(c.started_at, timeZone)}" />{/snippet}
 	</RecentList>
 {/if}
 

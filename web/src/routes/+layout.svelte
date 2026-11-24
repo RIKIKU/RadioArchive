@@ -21,6 +21,8 @@
 	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import { indexOf, resolve, type Catalogue } from '#lib/listening/set.ts';
 	import { Account } from '#lib/account/account.svelte.ts';
+	import { basketState } from '#lib/basket/state.svelte.ts';
+	import { dockIcons } from '#lib/audio/icons.ts';
 	import type { Profile } from '#lib/account/profile.ts';
 
 	let { children } = $props();
@@ -33,6 +35,8 @@
 	let alerts = $state(alertsOn());
 
 	const listening = listeningState();
+	// The download basket (R64; ADR 0018), saved with the set (R110).
+	const basket = basketState();
 
 	// The player, in the dock. Priority marks are the saved set's (R43); the
 	// talkgroups added for the session have none.
@@ -53,6 +57,7 @@
 	}
 	const acct = new Account({
 		listening,
+		basket,
 		look: () => look,
 		theme: () => theme,
 		alerts: () => alerts,
@@ -118,13 +123,16 @@
 	const signInHref = $derived(`/auth/signin?return=${encodeURIComponent(page.url.pathname + page.url.search)}`);
 	const who = $derived(acct.who ? { name: acct.who.name, email: acct.who.email } : null);
 
-	// R84's pages, as they arrive: Listen and Recent calls (Basket is #81's).
-	// The phone's bottom bar says Recent.
-	const top = [
+	// R84's pages, as they arrive: Listen, Recent calls and Basket, with how
+	// many calls the basket holds as a quiet pill. The phone's bottom bar
+	// says Recent.
+	const held = $derived(basket.basket.calls.length);
+	const top = $derived([
 		{ href: '/', label: 'Listen', icon: 'play', text: 'Live calls from your listening set' },
-		{ href: '/recent', label: 'Recent calls', icon: 'clock', text: 'Search and replay the archive' }
-	];
-	const bar = [top[0], { ...top[1], label: 'Recent' }];
+		{ href: '/recent', label: 'Recent calls', icon: 'clock', text: 'Search and replay the archive' },
+		{ href: '/basket', label: 'Basket', svg: dockIcons.basket, text: 'Calls to download', count: held, quiet: true, says: held ? `, ${held} ${held === 1 ? 'call' : 'calls'}` : undefined }
+	]);
+	const bar = $derived([top[0], { ...top[1], label: 'Recent' }, top[2]]);
 	const brand = { name: 'RadioArchive', mark: 'RA', href: '/' };
 </script>
 
@@ -149,7 +157,7 @@
 				{#if acct.who}
 					<p class="saved" role="status">
 						{#if acct.mode === 'saving'}
-							{acct.saveFailed ? "Couldn't save to your account. It tries again at your next change." : 'Your listening set and settings are saved to your account.'}
+							{acct.saveFailed ? "Couldn't save to your account. It tries again at your next change." : 'Your listening set, basket and settings are saved to your account.'}
 						{:else if acct.mode === 'asking'}
 							Choose which listening set to keep.
 						{:else if acct.mode === 'not-saved'}
@@ -181,8 +189,8 @@
 		<section class="panel" aria-labelledby="account-offer-heading">
 			<h2 id="account-offer-heading">Use the listening set saved to your account?</h2>
 			<p>
-				Your account has {plural(offered.length || acct.offer.talkgroups.length, 'talkgroup')}{#if acct.offer.talkgroups.some((e) => e.priority)}, with priority marks{/if}.
-				This browser has {plural(listening.saved.length, 'talkgroup')}. Nothing is merged: choose one.
+				Your account has {plural(offered.length || acct.offer.talkgroups.length, 'talkgroup')}{#if acct.offer.talkgroups.some((e) => e.priority)}, with priority marks{/if}{#if acct.offer.basket?.calls.length}, and {plural(acct.offer.basket.calls.length, 'call')} in its basket{/if}.
+				This browser has {plural(listening.saved.length, 'talkgroup')}{#if basket.basket.calls.length}, and {plural(basket.basket.calls.length, 'call')} in its basket{/if}. Nothing is merged: choose one.
 			</p>
 			{#if offered.length}
 				<ul class="names" aria-label="Your account's listening set">
@@ -193,14 +201,14 @@
 				<button type="button" onclick={() => acct.useAccounts()}>Use my account's set</button>
 				<button type="button" class="secondary" onclick={() => acct.keepBrowsers()}>Keep this browser's set</button>
 			</div>
-			<p class="hint">Keeping this browser's set saves it to your account in place of the one there. Either way, the look and playback settings go with the set.</p>
+			<p class="hint">Keeping this browser's set saves it to your account in place of the one there. Either way, the look, the playback settings and the download basket go with the set.</p>
 		</section>
 	{/if}
 
 	{#if acct.clearing === 'confirm'}
 		<section class="panel" aria-labelledby="account-clear-heading">
 			<h2 id="account-clear-heading">Clear what your account holds?</h2>
-			<p>Your listening set, priority marks, playback settings and look are removed from your account. This browser keeps its own.</p>
+			<p>Your listening set, priority marks, playback settings, look and download basket are removed from your account. This browser keeps its own.</p>
 			<div class="actions">
 				<button type="button" class="danger" onclick={() => acct.clear()}>Clear my account's settings</button>
 				<button type="button" class="secondary" onclick={() => (acct.clearing = '')}>Cancel</button>

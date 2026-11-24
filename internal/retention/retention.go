@@ -380,6 +380,16 @@ func (j *Job) NextRun(now time.Time) time.Time {
 	return r
 }
 
+// DeletesAt is when the nightly job will delete a call that started at
+// started, with a period of days: the first scheduled run whose cut-off
+// (Cutoff) is after the call's start, so the nightly run after its start
+// plus the period (ADR 0005). Low disk may delete it sooner (R88); the
+// public call details give this moment, so the browser needn't know the
+// setting (ADR 0018).
+func (j *Job) DeletesAt(days int, started time.Time) time.Time {
+	return j.NextRun(started.Add(time.Duration(days) * 24 * time.Hour))
+}
+
 // previousRun is the last scheduled nightly run at or before now.
 func (j *Job) previousRun(now time.Time) time.Time {
 	r := j.runOn(now)
