@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -51,6 +52,9 @@ type Gate struct {
 	q   *db.Queries
 	dir string
 	log *slog.Logger
+
+	catMu sync.Mutex
+	cat   *Catalogue // the last built, at its generation
 }
 
 // New returns the gate over st, with the recordings volume at

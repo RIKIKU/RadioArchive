@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -85,6 +86,11 @@ func WithAdmin(a *Admin) Option {
 			{"PUT /recorders/{recorder}/attachments/{short_name}", a.attach},
 			{"DELETE /recorders/{recorder}/attachments/{short_name}", a.detach},
 			{"GET /rejections", a.rejections},
+			{"GET /groups", a.listGroups},
+			{"POST /groups", a.createGroup},
+			{"PATCH /groups/{group}", a.patchGroup},
+			{"GET /tags", a.listTags},
+			{"PATCH /tags/{tag}", a.patchTag},
 		} {
 			method, path, _ := strings.Cut(r.pattern, " ")
 			api.handle(AdminRoute, method+" "+AdminPath+path, a.serve(r.h))
@@ -243,12 +249,16 @@ type System struct {
 	Label      string     `json:"label"`
 	Name       string     `json:"name"`
 	AutoCreate bool       `json:"auto_create"`
+	Alert      *string    `json:"alert"`
+	LEDColour  *string    `json:"led_colour"`
+	SortOrder  int32      `json:"sort_order"`
 	CreatedAt  *time.Time `json:"created_at,omitempty"`
 	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
 }
 
 func systemOf(r db.GetSystemRow) System {
 	return System{ID: r.ID, Label: r.Label, Name: r.Name, AutoCreate: r.AutoCreate,
+		Alert: r.Alert, LEDColour: r.LedColour, SortOrder: r.SortOrder,
 		CreatedAt: ts(r.CreatedAt), UpdatedAt: ts(r.UpdatedAt)}
 }
 
@@ -308,7 +318,11 @@ func (a *Admin) createSystem(r *http.Request, who string) (int, any, error) {
 	if err := text("name", in.Name, 0, 200); err != nil {
 		return 0, nil, err
 	}
-	s, err := a.st.CreateSystem(r.Context(), db.CreateSystemParams{ID: in.ID, Label: in.Label, Name: in.Name, AutoCreate: in.AutoCreate})
+	if err := checkSettings(in.Alert, in.LEDColour); err != nil {
+		return 0, nil, err
+	}
+	s, err := a.st.CreateSystem(r.Context(), db.CreateSystemParams{ID: in.ID, Label: in.Label, Name: in.Name,
+		AutoCreate: in.AutoCreate, Alert: in.Alert, LedColour: in.LEDColour, SortOrder: in.SortOrder})
 	if err != nil {
 		return 0, nil, systemConflict(err, in.ID, in.Label)
 	}
@@ -325,6 +339,7 @@ func (a *Admin) patchSystem(r *http.Request, who string) (int, any, error) {
 		Label      *string `json:"label"`
 		Name       *string `json:"name"`
 		AutoCreate *bool   `json:"auto_create"`
+		settingsFields
 	}
 	if err := decode(r, &in); err != nil {
 		return 0, nil, err
@@ -339,7 +354,12 @@ func (a *Admin) patchSystem(r *http.Request, who string) (int, any, error) {
 			return 0, nil, err
 		}
 	}
-	s, err := a.st.UpdateSystem(r.Context(), db.UpdateSystemParams{ID: id, Label: in.Label, Name: in.Name, AutoCreate: in.AutoCreate})
+	if err := in.check(); err != nil {
+		return 0, nil, err
+	}
+	s, err := a.st.UpdateSystem(r.Context(), db.UpdateSystemParams{ID: id, Label: in.Label, Name: in.Name,
+		AutoCreate: in.AutoCreate, SortOrder: in.SortOrder, SetAlert: in.Alert.Set, Alert: in.Alert.Value,
+		SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil, refuseAdmin(http.StatusNotFound, "system_not_found", "No system has ID %d.", id)
 	}
@@ -393,24 +413,37 @@ func (a *Admin) deleteSystem(r *http.Request, who string) (int, any, error) {
 	return http.StatusNoContent, nil, nil
 }
 
-// Talkgroups (R21, R22): as much as ingest needs.
+// Talkgroups (R21-R23, R100).
 
-// Talkgroup is a talkgroup as the admin API shows it.
+// Talkgroup is a talkgroup as the admin API shows it. Alert and LEDColour
+// are its own: null takes them from its tag, groups or system (ADR 0006).
 type Talkgroup struct {
-	SystemID   int64      `json:"system_id"`
-	ID         int32      `json:"id"`
-	Label      string     `json:"label"`
-	Name       string     `json:"name"`
-	Tag        *string    `json:"tag"`
-	State      string     `json:"state"`
-	Unreviewed bool       `json:"unreviewed"`
-	CreatedAt  *time.Time `json:"created_at,omitempty"`
-	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
+	SystemID          int64      `json:"system_id"`
+	ID                int32      `json:"id"`
+	Label             string     `json:"label"`
+	Name              string     `json:"name"`
+	Tag               *string    `json:"tag"`
+	Groups            []string   `json:"groups"`
+	State             string     `json:"state"`
+	Unreviewed        bool       `json:"unreviewed"`
+	DelayMinutes      int32      `json:"delay_minutes"`
+	Alert             *string    `json:"alert"`
+	LEDColour         *string    `json:"led_colour"`
+	SortOrder         int32      `json:"sort_order"`
+	FiregroundChannel *int32     `json:"fireground_channel"`
+	CreatedAt         *time.Time `json:"created_at,omitempty"`
+	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
 }
 
 func talkgroupOf(t db.GetTalkgroupRow) Talkgroup {
+	groups := t.Groups
+	if groups == nil {
+		groups = []string{}
+	}
 	return Talkgroup{SystemID: t.SystemID, ID: t.TalkgroupID, Label: t.Label, Name: t.Name, Tag: t.Tag,
-		State: string(t.State), Unreviewed: t.Unreviewed, CreatedAt: ts(t.CreatedAt), UpdatedAt: ts(t.UpdatedAt)}
+		Groups: groups, State: string(t.State), Unreviewed: t.Unreviewed, DelayMinutes: t.DelayMinutes,
+		Alert: t.Alert, LEDColour: t.LedColour, SortOrder: t.SortOrder, FiregroundChannel: t.FiregroundChannel,
+		CreatedAt: ts(t.CreatedAt), UpdatedAt: ts(t.UpdatedAt)}
 }
 
 func (a *Admin) listTalkgroups(r *http.Request, _ string) (int, any, error) {
@@ -472,16 +505,26 @@ func parseState(s string) (db.TalkgroupState, error) {
 	return "", refuseAdmin(http.StatusBadRequest, "invalid_state", "state must be public, hidden or ignored.")
 }
 
-// talkgroupFields are a talkgroup's editable fields; nil is "unchanged" in
-// a PATCH.
+// maxGroups is the most groups one talkgroup may be in.
+const maxGroups = 50
+
+// talkgroupFields are a talkgroup's editable fields. In a PATCH, absent is
+// "unchanged"; null clears alert, LED colour and fireground channel number,
+// and groups: [] takes the talkgroup out of every group. In a PUT, absent is
+// the default: no groups, no delay, sort order 0, none of its own alert or
+// LED colour, and no fireground channel number.
 type talkgroupFields struct {
-	Label *string `json:"label"`
-	Name  *string `json:"name"`
-	Tag   *string `json:"tag"`
-	State *string `json:"state"`
+	Label             *string                    `json:"label"`
+	Name              *string                    `json:"name"`
+	Tag               *string                    `json:"tag"`
+	State             *string                    `json:"state"`
+	Groups            *[]string                  `json:"groups"`
+	DelayMinutes      *int32                     `json:"delay_minutes"`
+	FiregroundChannel optional[firegroundNumber] `json:"fireground_channel"`
+	settingsFields
 }
 
-func (f talkgroupFields) check() (*db.TalkgroupState, error) {
+func (f *talkgroupFields) check() (*db.TalkgroupState, error) {
 	if f.Label != nil {
 		if err := text("label", *f.Label, 0, 100); err != nil {
 			return nil, err
@@ -497,11 +540,42 @@ func (f talkgroupFields) check() (*db.TalkgroupState, error) {
 			return nil, err
 		}
 	}
+	if f.Groups != nil {
+		if len(*f.Groups) > maxGroups {
+			return nil, refuseAdmin(http.StatusBadRequest, "too_many_groups", "A talkgroup is in at most %d groups.", maxGroups)
+		}
+		var gs []string
+		for _, g := range *f.Groups {
+			if err := text("group", g, 1, 100); err != nil {
+				return nil, err
+			}
+			if !slices.Contains(gs, g) {
+				gs = append(gs, g)
+			}
+		}
+		*f.Groups = gs
+	}
+	if f.DelayMinutes != nil && (*f.DelayMinutes < 0 || *f.DelayMinutes > store.MaxDelayMinutes) {
+		return nil, refuseAdmin(http.StatusBadRequest, "invalid_delay_minutes",
+			"delay_minutes must be a whole number of minutes from 0 to %d.", store.MaxDelayMinutes)
+	}
+	if err := f.settingsFields.check(); err != nil {
+		return nil, err
+	}
 	if f.State == nil {
 		return nil, nil
 	}
 	st, err := parseState(*f.State)
 	return &st, err
+}
+
+// fireground is the fireground channel number the edit gives, if any.
+func (f *talkgroupFields) fireground() *int32 {
+	if f.FiregroundChannel.Value == nil {
+		return nil
+	}
+	n := int32(*f.FiregroundChannel.Value)
+	return &n
 }
 
 // writeTalkgroup applies an admin's add or edit in one transaction. Either
@@ -522,6 +596,7 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 	if full && in.Tag == nil {
 		return 0, nil, refuseAdmin(http.StatusBadRequest, "tag_required", "A talkgroup needs a tag.")
 	}
+	fg := in.fireground()
 	ctx := r.Context()
 	code := http.StatusOK
 	err = a.st.InTx(ctx, func(_ pgx.Tx, q *db.Queries) error {
@@ -529,6 +604,12 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 			return refuseAdmin(http.StatusNotFound, "system_not_found", "No system has ID %d.", sys)
 		} else if err != nil {
 			return dbErr("system", err)
+		}
+		if fg != nil {
+			// R100: one talkgroup per number, across the deployment.
+			if err := firegroundTaken(ctx, q, *fg, sys, tg); err != nil {
+				return err
+			}
 		}
 		var tagID *int64
 		if in.Tag != nil {
@@ -545,7 +626,8 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 			} else if err != nil {
 				return dbErr("talkgroup", err)
 			}
-			p := db.PutTalkgroupParams{SystemID: sys, TalkgroupID: tg, TagID: tagID, State: store.Public}
+			p := db.PutTalkgroupParams{SystemID: sys, TalkgroupID: tg, TagID: tagID, State: store.Public,
+				Alert: in.Alert.Value, LedColour: in.LEDColour.Value, FiregroundChannel: fg}
 			if in.Label != nil {
 				p.Label = *in.Label
 			}
@@ -555,18 +637,43 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 			if state != nil {
 				p.State = *state
 			}
-			return tagErr(q.PutTalkgroup(ctx, p))
+			if in.DelayMinutes != nil {
+				p.DelayMinutes = *in.DelayMinutes
+			}
+			if in.SortOrder != nil {
+				p.SortOrder = *in.SortOrder
+			}
+			if err := talkgroupErr(q.PutTalkgroup(ctx, p)); err != nil {
+				return err
+			}
+			if in.Groups == nil {
+				in.Groups = &[]string{}
+			}
+		} else {
+			n, err := q.PatchTalkgroup(ctx, db.PatchTalkgroupParams{SystemID: sys, TalkgroupID: tg,
+				Label: in.Label, Name: in.Name, TagID: tagID, State: state,
+				DelayMinutes: in.DelayMinutes, SortOrder: in.SortOrder,
+				SetAlert: in.Alert.Set, Alert: in.Alert.Value,
+				SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value,
+				SetFiregroundChannel: in.FiregroundChannel.Set, FiregroundChannel: fg})
+			if err != nil {
+				return talkgroupErr(err)
+			}
+			if n == 0 {
+				return refuseAdmin(http.StatusNotFound, "talkgroup_not_found", "System %d has no talkgroup %d.", sys, tg)
+			}
 		}
-		n, err := q.PatchTalkgroup(ctx, db.PatchTalkgroupParams{SystemID: sys, TalkgroupID: tg,
-			Label: in.Label, Name: in.Name, TagID: tagID, State: state})
-		if err != nil {
-			return tagErr(err)
-		}
-		if n == 0 {
-			return refuseAdmin(http.StatusNotFound, "talkgroup_not_found", "System %d has no talkgroup %d.", sys, tg)
+		if in.Groups != nil {
+			return setGroups(ctx, q, sys, tg, *in.Groups)
 		}
 		return nil
 	})
+	if code, constraint := pgCode(err); code == "23505" && constraint == "talkgroups_fireground_channel" && fg != nil {
+		// Another admin gave the number away meanwhile.
+		if taken := firegroundTaken(ctx, a.st.Queries, *fg, sys, tg); taken != nil {
+			err = taken
+		}
+	}
 	if err != nil {
 		return 0, nil, err
 	}
@@ -578,10 +685,55 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 	return code, t, nil
 }
 
-// tagErr explains the table's check that a reviewed talkgroup has a tag.
-func tagErr(err error) error {
-	if code, _ := pgCode(err); code == "23514" {
+// setGroups puts a talkgroup in exactly these groups, creating any that
+// don't exist yet, as a tag is.
+func setGroups(ctx context.Context, q *db.Queries, sys int64, tg int32, names []string) error {
+	ids := make([]int64, 0, len(names))
+	for _, n := range names {
+		id, err := q.EnsureGroup(ctx, n)
+		if err != nil {
+			return dbErr("group", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := q.ClearTalkgroupGroups(ctx, db.ClearTalkgroupGroupsParams{SystemID: sys, TalkgroupID: tg}); err != nil {
+		return dbErr("talkgroup groups", err)
+	}
+	if err := q.AddTalkgroupGroups(ctx, db.AddTalkgroupGroupsParams{SystemID: sys, TalkgroupID: tg, GroupIds: ids}); err != nil {
+		return dbErr("talkgroup groups", err)
+	}
+	return nil
+}
+
+// firegroundTaken refuses a fireground channel number another talkgroup
+// has, naming that talkgroup (R100): "Fireground 41".
+func firegroundTaken(ctx context.Context, q *db.Queries, n int32, sys int64, tg int32) error {
+	h, err := q.FiregroundHolder(ctx, db.FiregroundHolderParams{Channel: n, SystemID: sys, TalkgroupID: tg})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return dbErr("fireground channel", err)
+	}
+	name := h.Name
+	if name == "" {
+		name = h.Label
+	}
+	if name == "" {
+		name = strconv.Itoa(int(h.TalkgroupID))
+	}
+	return refuseAdmin(http.StatusConflict, "fireground_channel_taken",
+		"Fireground channel %d is already talkgroup %d %q in system %s.", n, h.TalkgroupID, name, h.SystemLabel)
+}
+
+// talkgroupErr explains the table's check that a reviewed talkgroup has a
+// tag.
+func talkgroupErr(err error) error {
+	if code, constraint := pgCode(err); code == "23514" && constraint == "talkgroups_check" {
 		return refuseAdmin(http.StatusBadRequest, "tag_required", "A talkgroup needs a tag once it's reviewed.")
+	}
+	if code, constraint := pgCode(err); code == "23505" && constraint == "talkgroups_fireground_channel" {
+		return err // writeTalkgroup names the talkgroup that has it
 	}
 	if err != nil {
 		return dbErr("talkgroup", err)

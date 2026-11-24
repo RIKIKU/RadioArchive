@@ -31,18 +31,21 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 key=$(docker compose exec -T api radioarchive recorder add "$name" | grep -o 'rak_[A-Za-z0-9_-]*')
 test -n "$key"
 
-# The test fixture's EX with 1001 public and 1003 "Admin" hidden. The
-# fixture's calls are dated November 2025, so retention is set long enough
-# that a nightly run (R88) during the test keeps them.
+# The test fixture's EX with 1001 public, 1002 "Fireground 41" public with
+# fireground channel number 41, and 1003 "Admin" hidden, here with number
+# 43. The fixture's calls are dated November 2025, so retention is set long
+# enough that a nightly run (R88) during the test keeps them.
 psql "INSERT INTO settings (key, value) VALUES ('retention_days', '3650')
 	ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 	INSERT INTO systems (id, label, name) VALUES (1, 'EX', 'Example network') ON CONFLICT DO NOTHING;
-	INSERT INTO tags (name) VALUES ('dispatch'), ('admin') ON CONFLICT DO NOTHING;
+	INSERT INTO tags (name) VALUES ('dispatch'), ('fireground'), ('admin') ON CONFLICT DO NOTHING;
 	INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id)
 	SELECT 1, 1001, 'DISP N', 'Dispatch North', id FROM tags WHERE name = 'dispatch' ON CONFLICT DO NOTHING;
-	INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state)
-	SELECT 1, 1003, 'ADMIN', 'Admin', id, 'hidden' FROM tags WHERE name = 'admin'
-	ON CONFLICT (system_id, talkgroup_id) DO UPDATE SET state = 'hidden';
+	INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, fireground_channel)
+	SELECT 1, 1002, 'FG 41', 'Fireground 41', id, 41 FROM tags WHERE name = 'fireground' ON CONFLICT DO NOTHING;
+	INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state, fireground_channel)
+	SELECT 1, 1003, 'ADMIN', 'Admin', id, 'hidden', 43 FROM tags WHERE name = 'admin'
+	ON CONFLICT (system_id, talkgroup_id) DO UPDATE SET state = 'hidden', fireground_channel = 43;
 	INSERT INTO attachments (recorder_id, short_name, system_id) SELECT id, 'ex', 1 FROM recorders WHERE name = '$name';" >/dev/null
 
 mkdir -p "$media/app/media"
@@ -130,10 +133,34 @@ $want"
 	done
 done
 
+# The catalogue and search (R77) list the public talkgroups and nothing of
+# 1003, uncached (R74).
+cat=$(answer GET /api/v1/catalogue)
+echo "$cat" | grep -q '"id":1001' || fail "the catalogue doesn't list 1001: $cat"
+grep -iq '^cache-control: no-store' "$media/h" || fail "the catalogue's Cache-Control"
+for q in "" 1003 Admin ADMIN admin 100; do
+	got=$(answer GET "/api/v1/catalogue/search?q=$q")
+	echo "$got" | grep -q '^HTTP/1.1 200' || fail "search $q: $got"
+	if echo "$cat$got" | grep -E -q '1003|Admin|ADMIN|"admin"'; then fail "the catalogue or search $q leaks 1003: $cat$got"; fi
+done
+
+# Fireground lookup (R101): 041 finds 1002; 1003's number answers byte for
+# byte as a number no talkgroup has.
+answer GET /api/v1/fireground/041 | grep -q '"id":1002' || fail "fireground 041 doesn't find 1002"
+unknown=$(answer GET /api/v1/fireground/99)
+echo "$unknown" | grep -q '^HTTP/1.1 404' || fail "fireground 99: $unknown"
+for n in 43 043; do
+	got=$(answer GET "/api/v1/fireground/$n")
+	test "$got" = "$unknown" || fail "fireground $n (hidden 1003) answers
+$got
+but 99 answers
+$unknown"
+done
+
 # Nothing was deleted to hide them.
 for path in $(psql "SELECT c.recording_path $calls AND c.talkgroup = 1003"); do
 	docker compose cp "api:/var/lib/radioarchive/recordings/$path" "$media/check.opus" >/dev/null ||
 		fail "hidden recording $path is gone from the volume"
 done
 
-echo "ok: A10 end to end (1003 hidden, 3 recordings: the public API shows none of them)"
+echo "ok: A10 end to end (1003 hidden, 3 recordings: the public API, catalogue and fireground lookup show none of them)"

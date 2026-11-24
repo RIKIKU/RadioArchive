@@ -45,6 +45,24 @@ func (q *Queries) AddLiveTransmission(ctx context.Context, arg AddLiveTransmissi
 	return err
 }
 
+const addTalkgroupGroups = `-- name: AddTalkgroupGroups :exec
+INSERT INTO talkgroup_groups (system_id, talkgroup_id, group_id)
+SELECT $1::bigint, $2::integer, g
+FROM unnest($3::bigint[]) AS g
+ON CONFLICT DO NOTHING
+`
+
+type AddTalkgroupGroupsParams struct {
+	SystemID    int64
+	TalkgroupID int32
+	GroupIds    []int64
+}
+
+func (q *Queries) AddTalkgroupGroups(ctx context.Context, arg AddTalkgroupGroupsParams) error {
+	_, err := q.db.Exec(ctx, addTalkgroupGroups, arg.SystemID, arg.TalkgroupID, arg.GroupIds)
+	return err
+}
+
 const addTransmission = `-- name: AddTransmission :exec
 INSERT INTO transmissions (call_id, offset_ms, unit, duration_ms)
 VALUES ($1, $2, $3, $4)
@@ -225,6 +243,21 @@ func (q *Queries) CallState(ctx context.Context, arg CallStateParams) (Talkgroup
 	return state, err
 }
 
+const clearTalkgroupGroups = `-- name: ClearTalkgroupGroups :exec
+DELETE FROM talkgroup_groups
+WHERE system_id = $1 AND talkgroup_id = $2
+`
+
+type ClearTalkgroupGroupsParams struct {
+	SystemID    int64
+	TalkgroupID int32
+}
+
+func (q *Queries) ClearTalkgroupGroups(ctx context.Context, arg ClearTalkgroupGroupsParams) error {
+	_, err := q.db.Exec(ctx, clearTalkgroupGroups, arg.SystemID, arg.TalkgroupID)
+	return err
+}
+
 const countRecordingsBefore = `-- name: CountRecordingsBefore :one
 
 SELECT count(*) FROM calls
@@ -239,6 +272,37 @@ func (q *Queries) CountRecordingsBefore(ctx context.Context, cutoff pgtype.Times
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const createGroup = `-- name: CreateGroup :one
+INSERT INTO groups (name, alert, led_colour, sort_order)
+VALUES ($1, $2, $3, $4)
+RETURNING id, name, alert, led_colour, sort_order
+`
+
+type CreateGroupParams struct {
+	Name      string
+	Alert     *string
+	LedColour *string
+	SortOrder int32
+}
+
+func (q *Queries) CreateGroup(ctx context.Context, arg CreateGroupParams) (Group, error) {
+	row := q.db.QueryRow(ctx, createGroup,
+		arg.Name,
+		arg.Alert,
+		arg.LedColour,
+		arg.SortOrder,
+	)
+	var i Group
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Alert,
+		&i.LedColour,
+		&i.SortOrder,
+	)
+	return i, err
 }
 
 const createRecorder = `-- name: CreateRecorder :one
@@ -263,9 +327,10 @@ func (q *Queries) CreateRecorder(ctx context.Context, arg CreateRecorderParams) 
 
 const createSystem = `-- name: CreateSystem :one
 
-INSERT INTO systems (id, label, name, auto_create)
-VALUES ($1, $2, $3, $4)
-RETURNING id, label, name, auto_create, created_at, updated_at
+INSERT INTO systems (id, label, name, auto_create, alert, led_colour, sort_order)
+VALUES ($1, $2, $3, $4,
+        $5, $6, $7)
+RETURNING id, label, name, auto_create, alert, led_colour, sort_order, created_at, updated_at
 `
 
 type CreateSystemParams struct {
@@ -273,6 +338,9 @@ type CreateSystemParams struct {
 	Label      string
 	Name       string
 	AutoCreate bool
+	Alert      *string
+	LedColour  *string
+	SortOrder  int32
 }
 
 type CreateSystemRow struct {
@@ -280,6 +348,9 @@ type CreateSystemRow struct {
 	Label      string
 	Name       string
 	AutoCreate bool
+	Alert      *string
+	LedColour  *string
+	SortOrder  int32
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 }
@@ -291,6 +362,9 @@ func (q *Queries) CreateSystem(ctx context.Context, arg CreateSystemParams) (Cre
 		arg.Label,
 		arg.Name,
 		arg.AutoCreate,
+		arg.Alert,
+		arg.LedColour,
+		arg.SortOrder,
 	)
 	var i CreateSystemRow
 	err := row.Scan(
@@ -298,6 +372,9 @@ func (q *Queries) CreateSystem(ctx context.Context, arg CreateSystemParams) (Cre
 		&i.Label,
 		&i.Name,
 		&i.AutoCreate,
+		&i.Alert,
+		&i.LedColour,
+		&i.SortOrder,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -427,6 +504,22 @@ func (q *Queries) EndLiveCall(ctx context.Context, arg EndLiveCallParams) error 
 	return err
 }
 
+const ensureGroup = `-- name: EnsureGroup :one
+
+INSERT INTO groups (name) VALUES ($1)
+ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+RETURNING id
+`
+
+// Groups and tags (R22): names, with alert, LED colour and sort order.
+// A group named on a talkgroup is created on first use, as a tag is.
+func (q *Queries) EnsureGroup(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRow(ctx, ensureGroup, name)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const ensureTag = `-- name: EnsureTag :one
 INSERT INTO tags (name) VALUES ($1)
 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
@@ -463,6 +556,135 @@ func (q *Queries) ExtendLivePatch(ctx context.Context, arg ExtendLivePatchParams
 	var state TalkgroupState
 	err := row.Scan(&state)
 	return state, err
+}
+
+const firegroundHolder = `-- name: FiregroundHolder :one
+SELECT t.system_id, s.label AS system_label, t.talkgroup_id, t.label, t.name
+FROM talkgroups t JOIN systems s ON s.id = t.system_id
+WHERE t.fireground_channel = $1::integer
+  AND NOT (t.system_id = $2::bigint AND t.talkgroup_id = $3::integer)
+`
+
+type FiregroundHolderParams struct {
+	Channel     int32
+	SystemID    int64
+	TalkgroupID int32
+}
+
+type FiregroundHolderRow struct {
+	SystemID    int64
+	SystemLabel string
+	TalkgroupID int32
+	Label       string
+	Name        string
+}
+
+// The talkgroup, other than this one, that has a fireground channel number
+// (R100), to name it in the refusal.
+func (q *Queries) FiregroundHolder(ctx context.Context, arg FiregroundHolderParams) (FiregroundHolderRow, error) {
+	row := q.db.QueryRow(ctx, firegroundHolder, arg.Channel, arg.SystemID, arg.TalkgroupID)
+	var i FiregroundHolderRow
+	err := row.Scan(
+		&i.SystemID,
+		&i.SystemLabel,
+		&i.TalkgroupID,
+		&i.Label,
+		&i.Name,
+	)
+	return i, err
+}
+
+const gateCatalogue = `-- name: GateCatalogue :many
+SELECT p.system_id, s.label AS system_label, s.name AS system_name,
+       s.alert AS system_alert, s.led_colour AS system_led_colour,
+       p.talkgroup_id, p.label, p.name, p.delay_minutes, p.alert, p.led_colour, p.fireground_channel,
+       g.name AS tag, g.sort_order AS tag_sort_order, g.alert AS tag_alert, g.led_colour AS tag_led_colour,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object('name', x.name, 'sort_order', x.sort_order,
+                                                     'alert', x.alert, 'led_colour', x.led_colour)
+                                  ORDER BY x.sort_order, x.name)
+                 FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
+                 WHERE m.system_id = p.system_id AND m.talkgroup_id = p.talkgroup_id),
+                '[]'::jsonb)::jsonb AS groups
+FROM public_talkgroups p
+JOIN systems s ON s.id = p.system_id
+LEFT JOIN tags g ON g.id = p.tag_id
+ORDER BY s.sort_order, s.id, p.sort_order, p.talkgroup_id
+`
+
+type GateCatalogueRow struct {
+	SystemID          int64
+	SystemLabel       string
+	SystemName        string
+	SystemAlert       *string
+	SystemLedColour   *string
+	TalkgroupID       int32
+	Label             string
+	Name              string
+	DelayMinutes      int32
+	Alert             *string
+	LedColour         *string
+	FiregroundChannel *int32
+	Tag               *string
+	TagSortOrder      *int32
+	TagAlert          *string
+	TagLedColour      *string
+	Groups            []byte
+}
+
+// Every public talkgroup, with what its settings are taken from: its own,
+// its tag's, its groups' (in their order) and its system's.
+func (q *Queries) GateCatalogue(ctx context.Context) ([]GateCatalogueRow, error) {
+	rows, err := q.db.Query(ctx, gateCatalogue)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GateCatalogueRow
+	for rows.Next() {
+		var i GateCatalogueRow
+		if err := rows.Scan(
+			&i.SystemID,
+			&i.SystemLabel,
+			&i.SystemName,
+			&i.SystemAlert,
+			&i.SystemLedColour,
+			&i.TalkgroupID,
+			&i.Label,
+			&i.Name,
+			&i.DelayMinutes,
+			&i.Alert,
+			&i.LedColour,
+			&i.FiregroundChannel,
+			&i.Tag,
+			&i.TagSortOrder,
+			&i.TagAlert,
+			&i.TagLedColour,
+			&i.Groups,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const gateCatalogueGeneration = `-- name: GateCatalogueGeneration :one
+
+SELECT n FROM catalogue_generation
+`
+
+// The catalogue (R15, R22, R24, R42, R77, R101; ADR 0006). It reads
+// talkgroups only through the public_talkgroups view (migration 00007), as
+// the call queries read public_calls, and only internal/gate calls it.
+// Moves at the commit of any change the catalogue is built from.
+func (q *Queries) GateCatalogueGeneration(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, gateCatalogueGeneration)
+	var n int64
+	err := row.Scan(&n)
+	return n, err
 }
 
 const gatePublicCalls = `-- name: GatePublicCalls :many
@@ -592,7 +814,8 @@ func (q *Queries) GetSetting(ctx context.Context, key string) (string, error) {
 }
 
 const getSystem = `-- name: GetSystem :one
-SELECT id, label, name, auto_create, created_at, updated_at FROM systems WHERE id = $1
+SELECT id, label, name, auto_create, alert, led_colour, sort_order, created_at, updated_at
+FROM systems WHERE id = $1
 `
 
 type GetSystemRow struct {
@@ -600,6 +823,9 @@ type GetSystemRow struct {
 	Label      string
 	Name       string
 	AutoCreate bool
+	Alert      *string
+	LedColour  *string
+	SortOrder  int32
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 }
@@ -612,6 +838,9 @@ func (q *Queries) GetSystem(ctx context.Context, id int64) (GetSystemRow, error)
 		&i.Label,
 		&i.Name,
 		&i.AutoCreate,
+		&i.Alert,
+		&i.LedColour,
+		&i.SortOrder,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -620,6 +849,10 @@ func (q *Queries) GetSystem(ctx context.Context, id int64) (GetSystemRow, error)
 
 const getTalkgroup = `-- name: GetTalkgroup :one
 SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.unreviewed,
+       ARRAY(SELECT x.name FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
+             WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
+             ORDER BY x.sort_order, x.name)::text[] AS groups,
+       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel,
        t.created_at, t.updated_at
 FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
 WHERE t.system_id = $1 AND t.talkgroup_id = $2
@@ -631,15 +864,21 @@ type GetTalkgroupParams struct {
 }
 
 type GetTalkgroupRow struct {
-	SystemID    int64
-	TalkgroupID int32
-	Label       string
-	Name        string
-	Tag         *string
-	State       TalkgroupState
-	Unreviewed  bool
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
+	SystemID          int64
+	TalkgroupID       int32
+	Label             string
+	Name              string
+	Tag               *string
+	State             TalkgroupState
+	Unreviewed        bool
+	Groups            []string
+	DelayMinutes      int32
+	Alert             *string
+	LedColour         *string
+	SortOrder         int32
+	FiregroundChannel *int32
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
 }
 
 func (q *Queries) GetTalkgroup(ctx context.Context, arg GetTalkgroupParams) (GetTalkgroupRow, error) {
@@ -653,6 +892,12 @@ func (q *Queries) GetTalkgroup(ctx context.Context, arg GetTalkgroupParams) (Get
 		&i.Tag,
 		&i.State,
 		&i.Unreviewed,
+		&i.Groups,
+		&i.DelayMinutes,
+		&i.Alert,
+		&i.LedColour,
+		&i.SortOrder,
+		&i.FiregroundChannel,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -725,6 +970,36 @@ func (q *Queries) ListAttachments(ctx context.Context) ([]ListAttachmentsRow, er
 	return items, nil
 }
 
+const listGroups = `-- name: ListGroups :many
+SELECT id, name, alert, led_colour, sort_order FROM groups ORDER BY sort_order, name
+`
+
+func (q *Queries) ListGroups(ctx context.Context) ([]Group, error) {
+	rows, err := q.db.Query(ctx, listGroups)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Group
+	for rows.Next() {
+		var i Group
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Alert,
+			&i.LedColour,
+			&i.SortOrder,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecorders = `-- name: ListRecorders :many
 SELECT id, name, created_at, key_rotated_at, retired_at
 FROM recorders
@@ -766,7 +1041,8 @@ func (q *Queries) ListRecorders(ctx context.Context) ([]ListRecordersRow, error)
 }
 
 const listSystems = `-- name: ListSystems :many
-SELECT id, label, name, auto_create, created_at, updated_at FROM systems ORDER BY id
+SELECT id, label, name, auto_create, alert, led_colour, sort_order, created_at, updated_at
+FROM systems ORDER BY id
 `
 
 type ListSystemsRow struct {
@@ -774,6 +1050,9 @@ type ListSystemsRow struct {
 	Label      string
 	Name       string
 	AutoCreate bool
+	Alert      *string
+	LedColour  *string
+	SortOrder  int32
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 }
@@ -792,8 +1071,41 @@ func (q *Queries) ListSystems(ctx context.Context) ([]ListSystemsRow, error) {
 			&i.Label,
 			&i.Name,
 			&i.AutoCreate,
+			&i.Alert,
+			&i.LedColour,
+			&i.SortOrder,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTags = `-- name: ListTags :many
+SELECT id, name, alert, led_colour, sort_order FROM tags ORDER BY sort_order, name
+`
+
+func (q *Queries) ListTags(ctx context.Context) ([]Tag, error) {
+	rows, err := q.db.Query(ctx, listTags)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Tag
+	for rows.Next() {
+		var i Tag
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Alert,
+			&i.LedColour,
+			&i.SortOrder,
 		); err != nil {
 			return nil, err
 		}
@@ -808,6 +1120,10 @@ func (q *Queries) ListSystems(ctx context.Context) ([]ListSystemsRow, error) {
 const listTalkgroups = `-- name: ListTalkgroups :many
 
 SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.unreviewed,
+       ARRAY(SELECT x.name FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
+             WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
+             ORDER BY x.sort_order, x.name)::text[] AS groups,
+       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel,
        t.created_at, t.updated_at
 FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
 WHERE t.system_id = $1
@@ -815,15 +1131,21 @@ ORDER BY t.talkgroup_id
 `
 
 type ListTalkgroupsRow struct {
-	SystemID    int64
-	TalkgroupID int32
-	Label       string
-	Name        string
-	Tag         *string
-	State       TalkgroupState
-	Unreviewed  bool
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
+	SystemID          int64
+	TalkgroupID       int32
+	Label             string
+	Name              string
+	Tag               *string
+	State             TalkgroupState
+	Unreviewed        bool
+	Groups            []string
+	DelayMinutes      int32
+	Alert             *string
+	LedColour         *string
+	SortOrder         int32
+	FiregroundChannel *int32
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
 }
 
 // Talkgroups (R21, R22).
@@ -844,6 +1166,12 @@ func (q *Queries) ListTalkgroups(ctx context.Context, systemID int64) ([]ListTal
 			&i.Tag,
 			&i.State,
 			&i.Unreviewed,
+			&i.Groups,
+			&i.DelayMinutes,
+			&i.Alert,
+			&i.LedColour,
+			&i.SortOrder,
+			&i.FiregroundChannel,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -938,28 +1266,52 @@ SET label = COALESCE($1, label),
     name = COALESCE($2, name),
     tag_id = COALESCE($3, tag_id),
     state = COALESCE($4::talkgroup_state, state),
+    delay_minutes = COALESCE($5::integer, delay_minutes),
+    sort_order = COALESCE($6::integer, sort_order),
+    alert = CASE WHEN $7::bool THEN $8::text ELSE alert END,
+    led_colour = CASE WHEN $9::bool THEN $10::text ELSE led_colour END,
+    fireground_channel = CASE WHEN $11::bool
+        THEN $12::integer ELSE fireground_channel END,
     unreviewed = false,
     updated_at = now()
-WHERE system_id = $5 AND talkgroup_id = $6
+WHERE system_id = $13 AND talkgroup_id = $14
 `
 
 type PatchTalkgroupParams struct {
-	Label       *string
-	Name        *string
-	TagID       *int64
-	State       *TalkgroupState
-	SystemID    int64
-	TalkgroupID int32
+	Label                *string
+	Name                 *string
+	TagID                *int64
+	State                *TalkgroupState
+	DelayMinutes         *int32
+	SortOrder            *int32
+	SetAlert             bool
+	Alert                *string
+	SetLedColour         bool
+	LedColour            *string
+	SetFiregroundChannel bool
+	FiregroundChannel    *int32
+	SystemID             int64
+	TalkgroupID          int32
 }
 
 // An admin's partial edit, of the fields given. It marks the talkgroup
-// reviewed, so it needs a tag by then (the table's check).
+// reviewed, so it needs a tag by then (the table's check). Alert, LED
+// colour and fireground channel number may be cleared, so each has a flag
+// saying it's given.
 func (q *Queries) PatchTalkgroup(ctx context.Context, arg PatchTalkgroupParams) (int64, error) {
 	result, err := q.db.Exec(ctx, patchTalkgroup,
 		arg.Label,
 		arg.Name,
 		arg.TagID,
 		arg.State,
+		arg.DelayMinutes,
+		arg.SortOrder,
+		arg.SetAlert,
+		arg.Alert,
+		arg.SetLedColour,
+		arg.LedColour,
+		arg.SetFiregroundChannel,
+		arg.FiregroundChannel,
 		arg.SystemID,
 		arg.TalkgroupID,
 	)
@@ -995,24 +1347,34 @@ func (q *Queries) PruneRejectedCalls(ctx context.Context, cutoff pgtype.Timestam
 }
 
 const putTalkgroup = `-- name: PutTalkgroup :exec
-INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state)
+INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state,
+                        delay_minutes, alert, led_colour, sort_order, fireground_channel)
 VALUES ($1, $2, $3, $4,
-        $5, $6)
+        $5, $6, $7, $8,
+        $9, $10, $11)
 ON CONFLICT (system_id, talkgroup_id) DO UPDATE
 SET label = EXCLUDED.label, name = EXCLUDED.name, tag_id = EXCLUDED.tag_id, state = EXCLUDED.state,
+    delay_minutes = EXCLUDED.delay_minutes, alert = EXCLUDED.alert, led_colour = EXCLUDED.led_colour,
+    sort_order = EXCLUDED.sort_order, fireground_channel = EXCLUDED.fireground_channel,
     unreviewed = false, updated_at = now()
 `
 
 type PutTalkgroupParams struct {
-	SystemID    int64
-	TalkgroupID int32
-	Label       string
-	Name        string
-	TagID       *int64
-	State       TalkgroupState
+	SystemID          int64
+	TalkgroupID       int32
+	Label             string
+	Name              string
+	TagID             *int64
+	State             TalkgroupState
+	DelayMinutes      int32
+	Alert             *string
+	LedColour         *string
+	SortOrder         int32
+	FiregroundChannel *int32
 }
 
-// An admin's add or full edit. It marks the talkgroup reviewed.
+// An admin's add or full edit. It marks the talkgroup reviewed. Its groups
+// are set apart (ClearTalkgroupGroups, AddTalkgroupGroups).
 func (q *Queries) PutTalkgroup(ctx context.Context, arg PutTalkgroupParams) error {
 	_, err := q.db.Exec(ctx, putTalkgroup,
 		arg.SystemID,
@@ -1021,6 +1383,11 @@ func (q *Queries) PutTalkgroup(ctx context.Context, arg PutTalkgroupParams) erro
 		arg.Name,
 		arg.TagID,
 		arg.State,
+		arg.DelayMinutes,
+		arg.Alert,
+		arg.LedColour,
+		arg.SortOrder,
+		arg.FiregroundChannel,
 	)
 	return err
 }
@@ -1436,21 +1803,70 @@ func (q *Queries) UnattachedRejections(ctx context.Context) ([]UnattachedRejecti
 	return items, nil
 }
 
+const updateGroup = `-- name: UpdateGroup :one
+UPDATE groups
+SET name = COALESCE($1, name),
+    sort_order = COALESCE($2::integer, sort_order),
+    alert = CASE WHEN $3::bool THEN $4::text ELSE alert END,
+    led_colour = CASE WHEN $5::bool THEN $6::text ELSE led_colour END
+WHERE id = $7
+RETURNING id, name, alert, led_colour, sort_order
+`
+
+type UpdateGroupParams struct {
+	Name         *string
+	SortOrder    *int32
+	SetAlert     bool
+	Alert        *string
+	SetLedColour bool
+	LedColour    *string
+	ID           int64
+}
+
+func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (Group, error) {
+	row := q.db.QueryRow(ctx, updateGroup,
+		arg.Name,
+		arg.SortOrder,
+		arg.SetAlert,
+		arg.Alert,
+		arg.SetLedColour,
+		arg.LedColour,
+		arg.ID,
+	)
+	var i Group
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Alert,
+		&i.LedColour,
+		&i.SortOrder,
+	)
+	return i, err
+}
+
 const updateSystem = `-- name: UpdateSystem :one
 UPDATE systems
 SET label = COALESCE($1, label),
     name = COALESCE($2, name),
     auto_create = COALESCE($3, auto_create),
+    sort_order = COALESCE($4::integer, sort_order),
+    alert = CASE WHEN $5::bool THEN $6::text ELSE alert END,
+    led_colour = CASE WHEN $7::bool THEN $8::text ELSE led_colour END,
     updated_at = now()
-WHERE id = $4
-RETURNING id, label, name, auto_create, created_at, updated_at
+WHERE id = $9
+RETURNING id, label, name, auto_create, alert, led_colour, sort_order, created_at, updated_at
 `
 
 type UpdateSystemParams struct {
-	Label      *string
-	Name       *string
-	AutoCreate *bool
-	ID         int64
+	Label        *string
+	Name         *string
+	AutoCreate   *bool
+	SortOrder    *int32
+	SetAlert     bool
+	Alert        *string
+	SetLedColour bool
+	LedColour    *string
+	ID           int64
 }
 
 type UpdateSystemRow struct {
@@ -1458,16 +1874,25 @@ type UpdateSystemRow struct {
 	Label      string
 	Name       string
 	AutoCreate bool
+	Alert      *string
+	LedColour  *string
+	SortOrder  int32
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 }
 
-// Changes only the fields given.
+// Changes only the fields given. Alert and LED colour may be cleared (NULL:
+// none of its own), so each has a flag saying it's given.
 func (q *Queries) UpdateSystem(ctx context.Context, arg UpdateSystemParams) (UpdateSystemRow, error) {
 	row := q.db.QueryRow(ctx, updateSystem,
 		arg.Label,
 		arg.Name,
 		arg.AutoCreate,
+		arg.SortOrder,
+		arg.SetAlert,
+		arg.Alert,
+		arg.SetLedColour,
+		arg.LedColour,
 		arg.ID,
 	)
 	var i UpdateSystemRow
@@ -1476,8 +1901,52 @@ func (q *Queries) UpdateSystem(ctx context.Context, arg UpdateSystemParams) (Upd
 		&i.Label,
 		&i.Name,
 		&i.AutoCreate,
+		&i.Alert,
+		&i.LedColour,
+		&i.SortOrder,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateTag = `-- name: UpdateTag :one
+UPDATE tags
+SET name = COALESCE($1, name),
+    sort_order = COALESCE($2::integer, sort_order),
+    alert = CASE WHEN $3::bool THEN $4::text ELSE alert END,
+    led_colour = CASE WHEN $5::bool THEN $6::text ELSE led_colour END
+WHERE id = $7
+RETURNING id, name, alert, led_colour, sort_order
+`
+
+type UpdateTagParams struct {
+	Name         *string
+	SortOrder    *int32
+	SetAlert     bool
+	Alert        *string
+	SetLedColour bool
+	LedColour    *string
+	ID           int64
+}
+
+func (q *Queries) UpdateTag(ctx context.Context, arg UpdateTagParams) (Tag, error) {
+	row := q.db.QueryRow(ctx, updateTag,
+		arg.Name,
+		arg.SortOrder,
+		arg.SetAlert,
+		arg.Alert,
+		arg.SetLedColour,
+		arg.LedColour,
+		arg.ID,
+	)
+	var i Tag
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Alert,
+		&i.LedColour,
+		&i.SortOrder,
 	)
 	return i, err
 }
