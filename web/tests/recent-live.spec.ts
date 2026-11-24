@@ -178,6 +178,7 @@ test('@live R46: play from here plays the call, then the later ones oldest first
 				expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width} px scrolls sideways`).toBeLessThanOrEqual(width);
 				if (shots) {
 					await page.mouse.move(0, 0);
+					await page.locator(`[data-call-id="${b}"]`).scrollIntoViewIfNeeded();
 					await page.screenshot({ path: `${shots}/play-from-here-${look}-${theme}-${width}.png` });
 				}
 			}
