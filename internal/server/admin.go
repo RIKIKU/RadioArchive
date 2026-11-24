@@ -49,6 +49,22 @@ type Admin struct {
 	dir  string
 	ret  *retention.Job
 	rs   *Recorders
+	ls   ListenerSessions
+}
+
+// ListenerSessions ends signed-in listeners' sessions (account.Service,
+// ADR 0022).
+type ListenerSessions interface {
+	// EndAccountSessions ends every session of the listener with this
+	// subject, returning how many there were.
+	EndAccountSessions(ctx context.Context, subject string) (int64, error)
+}
+
+// WithListenerSessions serves ending a listener's sessions: the first half
+// of disabling a listener (M4), before they are disabled in Authentik.
+func (a *Admin) WithListenerSessions(l ListenerSessions) *Admin {
+	a.ls = l
+	return a
 }
 
 // WithRetention serves the retention setting and the recordings volume's
@@ -110,7 +126,33 @@ func WithAdmin(a *Admin) Option {
 			api.handle(AdminRoute, "GET "+AdminPath+"/recorders/{recorder}", a.serve(a.getRecorder))
 			api.handle(AdminRoute, "PATCH "+AdminPath+"/recorders/{recorder}", a.serve(a.patchRecorder))
 		}
+		if a.ls != nil {
+			api.handle(AdminRoute, "DELETE "+AdminPath+"/listeners/{subject}/sessions", a.serve(a.endListenerSessions))
+		}
 	}
+}
+
+// EndedSessions is DELETE /api/v1/admin/listeners/{subject}/sessions: how
+// many of the listener's sessions were ended.
+type EndedSessions struct {
+	Ended int64 `json:"ended"`
+}
+
+// endListenerSessions signs a listener out everywhere at once: each of
+// their browsers is signed out at its next request (ADR 0022). The subject
+// is the listener's Authentik user ID. The log names the admin and the
+// count, not the listener.
+func (a *Admin) endListenerSessions(r *http.Request, who string) (int, any, error) {
+	subject := r.PathValue("subject")
+	if subject == "" || len(subject) > 255 {
+		return 0, nil, refuseAdmin(http.StatusBadRequest, "bad_subject", "Name the listener by their Authentik user ID.")
+	}
+	n, err := a.ls.EndAccountSessions(r.Context(), subject)
+	if err != nil {
+		return 0, nil, err
+	}
+	a.log.Info("admin ended a listener's sessions", "admin", who, "ended", n)
+	return http.StatusOK, EndedSessions{Ended: n}, nil
 }
 
 // signedIn lets only an admin's requests through to h.

@@ -3,6 +3,8 @@ package account
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,10 +17,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/oidcclient"
 	"github.com/RIKIKU/RadioArchive/internal/oidcclient/oidctest"
+	"github.com/RIKIKU/RadioArchive/internal/store"
 )
 
 // A made-up listener, and secrets that must never reach a log.
@@ -70,6 +74,144 @@ func (d *profiles) ClearListenerProfile(_ context.Context, iss, sub string) erro
 	return nil
 }
 
+// sessions is a made-up store: sessions, in memory, by their ID's hash,
+// living by the times the service passes, as the database's do.
+type sessions struct {
+	mu     sync.Mutex
+	rows   map[string]sessionRow
+	refuse error    // every call fails with this
+	tokens []string // every ID token kept, which no log may hold
+}
+
+type sessionRow struct {
+	se      store.ListenerSession
+	idToken string
+}
+
+func (d *sessions) StartListenerSession(_ context.Context, h []byte, se store.ListenerSession, tok string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.refuse != nil {
+		return d.refuse
+	}
+	if len(h) != 32 {
+		return errors.New("not a SHA-256")
+	}
+	d.rows[string(h)] = sessionRow{se: se, idToken: tok}
+	if tok != "" {
+		d.tokens = append(d.tokens, tok)
+	}
+	return nil
+}
+
+func (d *sessions) ListenerSession(_ context.Context, h []byte, now time.Time) (*store.ListenerSession, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.refuse != nil {
+		return nil, d.refuse
+	}
+	r, ok := d.rows[string(h)]
+	if !ok || !r.se.Expires.After(now) {
+		return nil, nil
+	}
+	se := r.se
+	return &se, nil
+}
+
+func (d *sessions) RenewListenerSession(_ context.Context, h []byte, now, expires time.Time) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.refuse != nil {
+		return d.refuse
+	}
+	if r, ok := d.rows[string(h)]; ok {
+		r.se.LastUsed, r.se.Expires = now, expires
+		d.rows[string(h)] = r
+	}
+	return nil
+}
+
+func (d *sessions) EndListenerSession(_ context.Context, h []byte) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.refuse != nil {
+		return "", d.refuse
+	}
+	r := d.rows[string(h)]
+	delete(d.rows, string(h))
+	return r.idToken, nil
+}
+
+func (d *sessions) EndAccountListenerSessions(_ context.Context, iss, sub string) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.refuse != nil {
+		return 0, d.refuse
+	}
+	var n int64
+	for h, r := range d.rows {
+		if r.se.Issuer == iss && r.se.Subject == sub {
+			delete(d.rows, h)
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (d *sessions) EndExpiredListenerSessions(_ context.Context, now time.Time) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.refuse != nil {
+		return 0, d.refuse
+	}
+	var n int64
+	for h, r := range d.rows {
+		if !r.se.Expires.After(now) {
+			delete(d.rows, h)
+			n++
+		}
+	}
+	return n, nil
+}
+
+// only is the one session kept, failing unless there's exactly one.
+func (d *sessions) only(t *testing.T) (hash string, row sessionRow) {
+	t.Helper()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.rows) != 1 {
+		t.Fatalf("%d sessions kept, want 1", len(d.rows))
+	}
+	for h, r := range d.rows {
+		return h, r
+	}
+	return "", sessionRow{}
+}
+
+func (d *sessions) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.rows)
+}
+
+// clock is the service's clock, moved by the test.
+type clock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *clock) add(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
 // catalogue is the public catalogue: 1001 and 1002 on system 1. 1003 is
 // hidden, so it isn't there.
 type catalogue struct{}
@@ -83,6 +225,8 @@ func (catalogue) Catalogue(context.Context) (*gate.Catalogue, error) {
 type world struct {
 	p    *oidctest.Provider
 	db   *profiles
+	ss   *sessions
+	clk  *clock
 	app  *httptest.Server
 	logs *bytes.Buffer
 	c    *http.Client // a browser: cookies, no redirects followed
@@ -103,7 +247,8 @@ func mustURL(t *testing.T, s string) *url.URL {
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
-	w := &world{p: oidctest.New(t, clientSecret, subject, email, "Made Up"), db: &profiles{rows: map[[2]string][]byte{}}, logs: &bytes.Buffer{}}
+	w := &world{p: oidctest.New(t, clientSecret, subject, email, "Made Up"), db: &profiles{rows: map[[2]string][]byte{}},
+		ss: &sessions{rows: map[string]sessionRow{}}, clk: &clock{t: time.Now()}, logs: &bytes.Buffer{}}
 	mux := http.NewServeMux()
 	w.app = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		// Every request comes from a listener's address, through a proxy.
@@ -117,8 +262,9 @@ func newWorld(t *testing.T) *world {
 		AppURL: appURL,
 		OIDC: &oidcclient.Client{Issuer: w.p.Issuer(), ClientID: oidctest.ClientID,
 			ClientSecret: clientSecret, RedirectURL: w.app.URL + "/auth/callback", HTTP: http.DefaultClient},
-		Profiles: w.db, Catalogue: catalogue{}, Secret: []byte(clientSecret),
+		Sessions: w.ss, Profiles: w.db, Catalogue: catalogue{}, Secret: []byte(clientSecret),
 		Log: slog.New(slog.NewJSONHandler(w.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Now: w.clk.now,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +280,10 @@ func newWorld(t *testing.T) *world {
 			t.Logf("the account's log:\n%s", w.logs)
 		}
 		// Nothing about a listener, or a secret, is ever logged (P4, R90).
-		for _, s := range []string{clientIP, forwardedIP, email, clientSecret, "Made Up"} {
+		w.ss.mu.Lock()
+		secrets := append([]string{clientIP, forwardedIP, email, clientSecret, "Made Up"}, w.ss.tokens...)
+		w.ss.mu.Unlock()
+		for _, s := range secrets {
 			if strings.Contains(w.logs.String(), s) {
 				t.Errorf("the log holds %q:\n%s", s, w.logs)
 			}
@@ -200,7 +349,9 @@ func cookieNamed(resp *http.Response, name string) *http.Cookie {
 }
 
 // Sign-in is the authorization code flow with PKCE S256, state and nonce,
-// and ends in a host-only session cookie, back where the listener was.
+// and ends in a host-only session cookie, back where the listener was. The
+// cookie holds only a random session ID; the session's row is kept under
+// its SHA-256, with the account and the ID token (ADR 0022).
 func TestSignIn(t *testing.T) {
 	w := newWorld(t)
 	if st := w.state(t); !st.SignIn || st.Account != nil || st.Profile != nil {
@@ -214,8 +365,23 @@ func TestSignIn(t *testing.T) {
 	if c == nil || c.Domain != "" || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" {
 		t.Fatalf("session cookie %+v: want host-only, HttpOnly, SameSite=Lax, Path=/", c)
 	}
-	if strings.Contains(c.Value, email) || strings.Contains(c.Value, subject+`"`) {
-		t.Error("the session cookie can be read")
+	if c.MaxAge != int(sessionFor.Seconds()) {
+		t.Errorf("session cookie Max-Age %d, want 30 days", c.MaxAge)
+	}
+	id, err := base64.RawURLEncoding.DecodeString(c.Value)
+	if err != nil || len(id) != 32 {
+		t.Fatalf("session cookie %q: want 256 random bits, base64url", c.Value)
+	}
+	h, row := w.ss.only(t)
+	if sum := sha256.Sum256(id); h != string(sum[:]) || bytes.Contains([]byte(h), id) {
+		t.Error("the session isn't kept under its ID's SHA-256 alone")
+	}
+	if row.se.Issuer != w.p.Issuer() || row.se.Subject != subject || row.se.Email != email || row.se.Name != "Made Up" ||
+		row.idToken == "" || !row.se.Expires.Equal(w.clk.now().Add(sessionFor)) {
+		t.Errorf("the session's row: %+v", row)
+	}
+	if strings.Contains(c.Value, row.idToken) {
+		t.Error("the cookie holds the ID token")
 	}
 	// The token request carried the verifier for the challenge (checked by
 	// the provider, which answered).
@@ -477,34 +643,53 @@ func TestProfileKeyedByIssuer(t *testing.T) {
 	for _, c := range w.c.Jar.Cookies(mustURL(t, w.app.URL)) {
 		r.AddCookie(c)
 	}
-	if _, ok := s2.current(r); ok {
-		t.Error("a session from another issuer is live")
+	if _, ok, err := s2.current(httptest.NewRecorder(), r); ok || err != nil {
+		t.Errorf("a session from another issuer is live (%v)", err)
 	}
-	if _, ok := s.current(r); !ok {
-		t.Error("the session isn't live where it was made")
+	if _, ok, err := s.current(httptest.NewRecorder(), r); !ok || err != nil {
+		t.Errorf("the session isn't live where it was made (%v)", err)
 	}
 }
 
-// Signing out ends the session here, then Authentik's, with the ID token
-// only in a cookie for that one hop, and comes back to the Listen page.
+// Signing out deletes the session's row at once, then ends Authentik's
+// session, with the ID token held in memory under a one-time handle (never
+// in a cookie or the answer) for that one hop, and comes back to the
+// Listen page. The old cookie, replayed, is no session.
 func TestSignOut(t *testing.T) {
 	w := newWorld(t)
 	w.signIn(t, "/")
-	if resp := w.do(t, "POST", signOutPath, ""); resp.StatusCode != http.StatusForbidden {
-		t.Errorf("sign-out from no site = %d, want 403", resp.StatusCode)
+	_, row := w.ss.only(t)
+	old := w.c.Jar.Cookies(mustURL(t, w.app.URL))
+	if resp := w.do(t, "POST", signOutPath, ""); resp.StatusCode != http.StatusForbidden || w.ss.count() != 1 {
+		t.Errorf("sign-out from no site = %d, want 403 and the session kept", resp.StatusCode)
 	}
 	resp := w.do(t, "POST", signOutPath, "", "Origin", w.app.URL)
+	body, _ := io.ReadAll(resp.Body)
 	var next Next
-	_ = json.NewDecoder(resp.Body).Decode(&next)
+	_ = json.Unmarshal(body, &next)
 	if next.Redirect != endSessionPath || cookieNamed(resp, sessionCookie) == nil || cookieNamed(resp, sessionCookie).MaxAge >= 0 {
 		t.Fatalf("sign-out: %+v", next)
+	}
+	if w.ss.count() != 0 {
+		t.Fatal("the session's row outlived signing out")
+	}
+	so := cookieNamed(resp, signOutCookie)
+	if so == nil || so.Path != endSessionPath || !so.HttpOnly || strings.Contains(so.Value, row.idToken) || bytes.Contains(body, []byte(row.idToken)) {
+		t.Fatalf("sign-out handle %+v, answer %s: the ID token must stay on the server", so, body)
 	}
 	if st := w.state(t); st.Account != nil {
 		t.Fatalf("still signed in: %+v", st)
 	}
+	r := httptest.NewRequest("GET", AccountPath, nil)
+	for _, c := range old {
+		r.AddCookie(c)
+	}
+	if _, ok, _ := w.svc.current(httptest.NewRecorder(), r); ok {
+		t.Error("the signed-out cookie, replayed, is a session")
+	}
 	resp = w.do(t, "GET", endSessionPath, "")
 	to, _ := url.Parse(resp.Header.Get("Location"))
-	if !strings.HasPrefix(to.String(), w.p.URL+"/end-session?") || to.Query().Get("id_token_hint") == "" ||
+	if !strings.HasPrefix(to.String(), w.p.URL+"/end-session?") || to.Query().Get("id_token_hint") != row.idToken ||
 		to.Query().Get("post_logout_redirect_uri") != w.app.URL+"/?signed_out=1" {
 		t.Fatalf("end-session went to %s", to)
 	}
@@ -558,17 +743,130 @@ func TestSealedCookies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, _ := s.seal(signOutCookie, "x")
+	v, _ := s.seal(signInCookie, "x")
 	var out string
-	if s.open(sessionCookie, v, &out) == nil {
-		t.Error("a sign-out cookie opened as a session")
+	if s.open("another use", v, &out) == nil {
+		t.Error("a sign-in cookie opened as another")
 	}
 	b := []byte(v)
 	b[len(b)-2] ^= 1
-	if s.open(signOutCookie, string(b), &out) == nil {
+	if s.open(signInCookie, string(b), &out) == nil {
 		t.Error("a changed cookie opened")
 	}
 	if _, err := newSealer([]byte("short")); err == nil {
 		t.Error("a short secret was taken")
+	}
+}
+
+// Ending an account's sessions (an admin disabling a listener, M4) signs
+// every browser signed in as it out at its very next request, and leaves
+// other accounts' sessions alone (ADR 0022).
+func TestEndAccountSessions(t *testing.T) {
+	w := newWorld(t)
+	w.signIn(t, "/")
+	// A second browser of the same listener, and someone else's session.
+	jar, _ := cookiejar.New(nil)
+	first := w.c
+	w.c = &http.Client{Jar: jar, CheckRedirect: first.CheckRedirect}
+	w.signIn(t, "/")
+	w.c = first
+	if err := w.ss.StartListenerSession(context.Background(), bytes.Repeat([]byte{7}, 32),
+		store.ListenerSession{Issuer: w.p.Issuer(), Subject: "43", LastUsed: w.clk.now(), Expires: w.clk.now().Add(time.Hour)}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if st := w.state(t); st.Account == nil {
+		t.Fatal("not signed in")
+	}
+	n, err := w.svc.EndAccountSessions(context.Background(), subject)
+	if err != nil || n != 2 {
+		t.Fatalf("EndAccountSessions = %d, %v; want 2", n, err)
+	}
+	if w.ss.count() != 1 {
+		t.Errorf("%d sessions left, want only the other account's", w.ss.count())
+	}
+	resp := w.do(t, "GET", AccountPath, "")
+	var st State
+	_ = json.NewDecoder(resp.Body).Decode(&st)
+	if st.Account != nil || cookieNamed(resp, sessionCookie) == nil || cookieNamed(resp, sessionCookie).MaxAge >= 0 {
+		t.Errorf("after the sessions ended: %+v, cookie %+v", st, cookieNamed(resp, sessionCookie))
+	}
+	if resp := w.put(t, `{"v":1,"talkgroups":[]}`); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("save after the sessions ended = %d, want 401", resp.StatusCode)
+	}
+	if n, err := w.svc.EndAccountSessions(context.Background(), ""); n != 0 || err != nil {
+		t.Errorf("no subject ended %d, %v", n, err)
+	}
+}
+
+// A session lasts 30 days from its last use, renewed at most hourly, row
+// and cookie; one unused for 30 days has ended, and the hourly sweep
+// deletes it (ADR 0022).
+func TestSessionLife(t *testing.T) {
+	w := newWorld(t)
+	w.signIn(t, "/")
+	start := w.clk.now()
+	w.clk.add(30 * time.Minute)
+	resp := w.do(t, "GET", AccountPath, "")
+	if _, row := w.ss.only(t); !row.se.LastUsed.Equal(start) || cookieNamed(resp, sessionCookie) != nil {
+		t.Errorf("renewed within the hour: used %v, cookie %+v", row.se.LastUsed, cookieNamed(resp, sessionCookie))
+	}
+	w.clk.add(31 * time.Minute)
+	resp = w.do(t, "GET", AccountPath, "")
+	_, row := w.ss.only(t)
+	if c := cookieNamed(resp, sessionCookie); !row.se.Expires.Equal(w.clk.now().Add(sessionFor)) || c == nil || c.MaxAge != int(sessionFor.Seconds()) {
+		t.Errorf("not renewed after an hour: expires %v, cookie %+v", row.se.Expires, c)
+	}
+	// Signed in until 30 days after that use, and not a moment longer.
+	w.clk.add(sessionFor - time.Second)
+	if st := w.state(t); st.Account == nil {
+		t.Fatal("signed out before 30 days")
+	}
+	w.clk.add(sessionFor)
+	if st := w.state(t); st.Account != nil {
+		t.Fatal("still signed in 30 days after the last use")
+	}
+	// The sweep runs as Run starts.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w.svc.Run(ctx)
+	if w.ss.count() != 0 {
+		t.Error("the expired session wasn't deleted")
+	}
+}
+
+// The sessions' database down: the account says it's unavailable rather
+// than signed out, and a sign-in can't finish.
+func TestSessionStoreDown(t *testing.T) {
+	w := newWorld(t)
+	w.signIn(t, "/")
+	w.ss.refuse = errors.New("read the listener's session: SQLSTATE 57P01")
+	if resp := w.do(t, "GET", AccountPath, ""); resp.StatusCode != http.StatusServiceUnavailable || cookieNamed(resp, sessionCookie) != nil {
+		t.Errorf("database down: GET = %d", resp.StatusCode)
+	}
+	if resp := w.put(t, `{"v":1,"talkgroups":[]}`); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("database down: PUT = %d", resp.StatusCode)
+	}
+	if resp := w.signIn(t, "/"); resp.Header.Get("Location") != signInFailed {
+		t.Errorf("database down: sign-in went to %q", resp.Header.Get("Location"))
+	}
+	w.ss.refuse = nil
+	if st := w.state(t); st.Account == nil {
+		t.Errorf("back up: %+v", st)
+	}
+}
+
+// A cookie that isn't a session ID (one sealed before ADR 0022, or junk)
+// is never looked up, and is cleared.
+func TestNotASessionID(t *testing.T) {
+	w := newWorld(t)
+	for _, v := range []string{"junk", strings.Repeat("A", 43), base64.RawURLEncoding.EncodeToString(make([]byte, 300))} {
+		r := httptest.NewRequest("GET", AccountPath, nil)
+		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: v})
+		if _, ok, err := w.svc.current(httptest.NewRecorder(), r); ok || err != nil {
+			t.Errorf("%q is a session (%v)", v, err)
+		}
+	}
+	if w.ss.count() != 0 {
+		t.Error("a session was kept")
 	}
 }

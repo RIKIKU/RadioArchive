@@ -690,3 +690,31 @@ ON CONFLICT (issuer, subject) DO UPDATE SET profile = EXCLUDED.profile, updated_
 
 -- name: DeleteListenerProfile :exec
 DELETE FROM listener_profiles WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject);
+
+-- Signed-in listeners' sessions (ADR 0022): one row a signed-in browser,
+-- keyed by the SHA-256 of the session ID its cookie holds. Times come from
+-- the API's clock, so a session's life is the API's to decide.
+
+-- name: InsertListenerSession :exec
+INSERT INTO listener_sessions (id_hash, issuer, subject, name, email, id_token, last_used_at, expires_at)
+VALUES (sqlc.arg(id_hash), sqlc.arg(issuer), sqlc.arg(subject), sqlc.arg(name), sqlc.arg(email),
+        sqlc.narg(id_token), sqlc.arg(used_at), sqlc.arg(expires_at));
+
+-- name: GetListenerSession :one
+SELECT issuer, subject, name, email, last_used_at, expires_at
+FROM listener_sessions WHERE id_hash = sqlc.arg(id_hash) AND expires_at > sqlc.arg(at);
+
+-- name: TouchListenerSession :exec
+UPDATE listener_sessions SET last_used_at = sqlc.arg(used_at), expires_at = sqlc.arg(expires_at)
+WHERE id_hash = sqlc.arg(id_hash);
+
+-- name: DeleteListenerSession :many
+-- Signing out: the session's ID token, for Authentik's end-session
+-- endpoint. No row when the session had already ended.
+DELETE FROM listener_sessions WHERE id_hash = sqlc.arg(id_hash) RETURNING id_token;
+
+-- name: DeleteAccountListenerSessions :execrows
+DELETE FROM listener_sessions WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject);
+
+-- name: DeleteExpiredListenerSessions :execrows
+DELETE FROM listener_sessions WHERE expires_at <= sqlc.arg(at);

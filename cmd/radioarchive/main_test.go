@@ -83,7 +83,7 @@ func TestIntegrationNoAdminAPI(t *testing.T) {
 	if err != nil || !sc.on() {
 		t.Fatalf("sign-in settings: %v, on %v", err, sc.on())
 	}
-	api, err := apiHandler(st, slog.New(slog.DiscardHandler), rs, gate.New(st, dir, slog.New(slog.DiscardHandler)), sc)
+	api, _, err := apiHandler(st, slog.New(slog.DiscardHandler), rs, gate.New(st, dir, slog.New(slog.DiscardHandler)), sc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestIntegrationNoAdminAPI(t *testing.T) {
 	// Nor the retention setting; and nothing in the binary triggers a
 	// retention run but its schedule (the tests call the job directly).
 	for _, p := range []string{"/systems", "/attachments", "/rejections", "/retention",
-		"/calls/00000000-0000-4000-8000-000000000000/recording"} {
+		"/calls/00000000-0000-4000-8000-000000000000/recording", "/listeners/42/sessions"} {
 		resp, err := http.Get(srv.URL + server.AdminPath + p)
 		if err != nil {
 			t.Fatal(err)

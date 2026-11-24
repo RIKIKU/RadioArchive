@@ -386,6 +386,23 @@ func (q *Queries) CreateSystem(ctx context.Context, arg CreateSystemParams) (Cre
 	return i, err
 }
 
+const deleteAccountListenerSessions = `-- name: DeleteAccountListenerSessions :execrows
+DELETE FROM listener_sessions WHERE issuer = $1 AND subject = $2
+`
+
+type DeleteAccountListenerSessionsParams struct {
+	Issuer  string
+	Subject string
+}
+
+func (q *Queries) DeleteAccountListenerSessions(ctx context.Context, arg DeleteAccountListenerSessionsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAccountListenerSessions, arg.Issuer, arg.Subject)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteCallsBefore = `-- name: DeleteCallsBefore :many
 DELETE FROM calls
 WHERE id IN (SELECT c.id FROM calls c WHERE c.started_at < $1
@@ -420,6 +437,18 @@ func (q *Queries) DeleteCallsBefore(ctx context.Context, arg DeleteCallsBeforePa
 	return items, nil
 }
 
+const deleteExpiredListenerSessions = `-- name: DeleteExpiredListenerSessions :execrows
+DELETE FROM listener_sessions WHERE expires_at <= $1
+`
+
+func (q *Queries) DeleteExpiredListenerSessions(ctx context.Context, at pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredListenerSessions, at)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteListenerProfile = `-- name: DeleteListenerProfile :exec
 DELETE FROM listener_profiles WHERE issuer = $1 AND subject = $2
 `
@@ -432,6 +461,32 @@ type DeleteListenerProfileParams struct {
 func (q *Queries) DeleteListenerProfile(ctx context.Context, arg DeleteListenerProfileParams) error {
 	_, err := q.db.Exec(ctx, deleteListenerProfile, arg.Issuer, arg.Subject)
 	return err
+}
+
+const deleteListenerSession = `-- name: DeleteListenerSession :many
+DELETE FROM listener_sessions WHERE id_hash = $1 RETURNING id_token
+`
+
+// Signing out: the session's ID token, for Authentik's end-session
+// endpoint. No row when the session had already ended.
+func (q *Queries) DeleteListenerSession(ctx context.Context, idHash []byte) ([]*string, error) {
+	rows, err := q.db.Query(ctx, deleteListenerSession, idHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*string
+	for rows.Next() {
+		var id_token *string
+		if err := rows.Scan(&id_token); err != nil {
+			return nil, err
+		}
+		items = append(items, id_token)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const deleteOldestCall = `-- name: DeleteOldestCall :one
@@ -1254,6 +1309,39 @@ func (q *Queries) GetListenerProfile(ctx context.Context, arg GetListenerProfile
 	return profile, err
 }
 
+const getListenerSession = `-- name: GetListenerSession :one
+SELECT issuer, subject, name, email, last_used_at, expires_at
+FROM listener_sessions WHERE id_hash = $1 AND expires_at > $2
+`
+
+type GetListenerSessionParams struct {
+	IDHash []byte
+	At     pgtype.Timestamptz
+}
+
+type GetListenerSessionRow struct {
+	Issuer     string
+	Subject    string
+	Name       string
+	Email      string
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+}
+
+func (q *Queries) GetListenerSession(ctx context.Context, arg GetListenerSessionParams) (GetListenerSessionRow, error) {
+	row := q.db.QueryRow(ctx, getListenerSession, arg.IDHash, arg.At)
+	var i GetListenerSessionRow
+	err := row.Scan(
+		&i.Issuer,
+		&i.Subject,
+		&i.Name,
+		&i.Email,
+		&i.LastUsedAt,
+		&i.ExpiresAt,
+	)
+	return i, err
+}
+
 const getSetting = `-- name: GetSetting :one
 
 SELECT value FROM settings WHERE key = $1
@@ -1404,6 +1492,41 @@ func (q *Queries) IgnoredInPatch(ctx context.Context, arg IgnoredInPatchParams) 
 	var talkgroup_id int32
 	err := row.Scan(&talkgroup_id)
 	return talkgroup_id, err
+}
+
+const insertListenerSession = `-- name: InsertListenerSession :exec
+
+INSERT INTO listener_sessions (id_hash, issuer, subject, name, email, id_token, last_used_at, expires_at)
+VALUES ($1, $2, $3, $4, $5,
+        $6, $7, $8)
+`
+
+type InsertListenerSessionParams struct {
+	IDHash    []byte
+	Issuer    string
+	Subject   string
+	Name      string
+	Email     string
+	IDToken   *string
+	UsedAt    pgtype.Timestamptz
+	ExpiresAt pgtype.Timestamptz
+}
+
+// Signed-in listeners' sessions (ADR 0022): one row a signed-in browser,
+// keyed by the SHA-256 of the session ID its cookie holds. Times come from
+// the API's clock, so a session's life is the API's to decide.
+func (q *Queries) InsertListenerSession(ctx context.Context, arg InsertListenerSessionParams) error {
+	_, err := q.db.Exec(ctx, insertListenerSession,
+		arg.IDHash,
+		arg.Issuer,
+		arg.Subject,
+		arg.Name,
+		arg.Email,
+		arg.IDToken,
+		arg.UsedAt,
+		arg.ExpiresAt,
+	)
+	return err
 }
 
 const listAttachments = `-- name: ListAttachments :many
@@ -2379,6 +2502,22 @@ func (q *Queries) TalkgroupRejections(ctx context.Context, systemID *int64) ([]T
 		return nil, err
 	}
 	return items, nil
+}
+
+const touchListenerSession = `-- name: TouchListenerSession :exec
+UPDATE listener_sessions SET last_used_at = $1, expires_at = $2
+WHERE id_hash = $3
+`
+
+type TouchListenerSessionParams struct {
+	UsedAt    pgtype.Timestamptz
+	ExpiresAt pgtype.Timestamptz
+	IDHash    []byte
+}
+
+func (q *Queries) TouchListenerSession(ctx context.Context, arg TouchListenerSessionParams) error {
+	_, err := q.db.Exec(ctx, touchListenerSession, arg.UsedAt, arg.ExpiresAt, arg.IDHash)
+	return err
 }
 
 const touchRecorderCall = `-- name: TouchRecorderCall :exec
