@@ -85,8 +85,8 @@ test('@live Share in now playing copies the live call\'s link, which opens its c
 	test.setTimeout(2 * 60_000);
 	await catchCopies(page);
 	await listen(page);
-	const sending = sendCalls([{ unit: 5401, atMs: 200, pcm: seconds(6) }]);
-	const first = await firstOf(page, 5401, 'live');
+	const sending = sendCalls([{ unit: 5501, atMs: 200, pcm: seconds(6) }]);
+	const first = await firstOf(page, 5501, 'live');
 	await dock(page).locator('.player').getByRole('button', { name: /^Share: Dispatch North/ }).click();
 	const link = `${new URL(page.url()).origin}/calls/${first.call_id}`;
 	expect(await copied(page)).toEqual([link]);
