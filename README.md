@@ -30,11 +30,12 @@ npm run check          # svelte-check, no warnings
 npm run check:tokens   # every style value is an ArchiveUx token (R80)
 npm run build          # into web/build, which go build embeds
 npx playwright install --with-deps   # once: Chromium, Firefox and WebKit
-cd .. && sh scripts/ci/e2e-web.sh    # build, start the binary on a fresh database, run web/tests
+cd .. && sh scripts/ci/e2e-web.sh    # build, start the binary on a fresh database with the test fixture, run web/tests
 ```
 
-Until ArchiveUx has its frame and dock, the app uses a temporary one, kept in
-`web/src/lib/temporary-frame/` only.
+The frame (side menu, bottom bar, account menu) is ArchiveUx's `Frame`. The
+listening set, its share link and fireground links are in `web/src/lib/listening/`
+(`docs/adr/0008-the-listening-set-and-its-share-link.md`).
 
 ## Recorders
 
