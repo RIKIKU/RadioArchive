@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-24, by the owner)
 ---
 
 # 3. Systems, attachments and rejected calls

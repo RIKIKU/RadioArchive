@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-24, by the owner)
 ---
 
 # 5. Retention: the nightly job, orphan files and low disk
