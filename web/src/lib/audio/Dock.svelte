@@ -19,6 +19,11 @@
 	// its own Stop and Share, whether live listening is paused or never
 	// started. Several played in turn (Play all, play from here: ADR 0023)
 	// show which call of them is playing, and when it started.
+	//
+	// On a phone (ADR 0023, "On a phone") the dock stacks: the replay first,
+	// its name on one line beside its controls and the rest under both, then
+	// live listening, its status in a line above its controls. On a desktop
+	// the two sit side by side, as before (the wrapper isn't drawn there).
 	import { Icon, LiveBadge } from 'archiveux/components';
 	import type { Player, CallInfo } from './player.svelte.ts';
 	import { dockIcons } from './icons.ts';
@@ -38,6 +43,7 @@
 	);
 </script>
 
+<div class="stack" class:replaying={!!r}>
 {#if r}
 	<div class="replay" data-replay={r.callId}>
 		<div class="what" aria-live="polite">
@@ -134,8 +140,13 @@
 		</div>
 	</div>
 {/if}
+</div>
 
 <style>
+	/* Desktops: not drawn, so what's in it sits in the frame's dock row. */
+	.stack {
+		display: contents;
+	}
 	.replay {
 		display: flex;
 		flex: 1 1 100%;
@@ -277,6 +288,67 @@
 			overflow: hidden;
 			clip: rect(0, 0, 0, 0);
 			white-space: nowrap;
+		}
+		/* The replay above live listening, across the width. */
+		.stack {
+			display: flex;
+			flex: 1 1 auto;
+			flex-direction: column;
+			align-items: stretch;
+			gap: var(--space-xs);
+			min-width: 0;
+		}
+		/* The replay: its name on one line, beside its three controls; the
+		   rest under both, across the width, wrapping between its parts. */
+		.replay {
+			position: relative;
+			display: block;
+		}
+		.replay .np-name {
+			flex-wrap: nowrap;
+			min-height: var(--target);
+			padding-right: calc(3 * var(--target) + 3 * var(--space-xs));
+		}
+		.replay-mark,
+		.replay .led {
+			flex: none;
+		}
+		.replay .tg {
+			min-width: 0;
+		}
+		/* The group gives way first, shortened with an ellipsis; the name
+		   wraps rather than being cut. Both are read out whole. */
+		.replay .group {
+			flex: 0 1000 auto;
+			min-width: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		.replay .np-unit > span {
+			white-space: nowrap;
+		}
+		.replay .controls {
+			position: absolute;
+			top: 0;
+			right: 0;
+			flex: none;
+			justify-content: flex-end;
+		}
+		/* Live listening under a replay: its status and queue in one small
+		   line, then its controls. */
+		.replaying .player {
+			gap: var(--space-xs);
+		}
+		.replaying .now {
+			gap: 0 var(--space-sm);
+		}
+		.replaying .status {
+			flex: 0 1 auto;
+			font-size: var(--text-sm);
+		}
+		.replaying .queue {
+			flex-basis: auto;
 		}
 	}
 </style>

@@ -17,6 +17,12 @@
 	// it in time order, whatever order the list shows: newest first, that's
 	// up the list. They're fetched through the same route, with the same
 	// filters, a page at a time as the run goes.
+	//
+	// On a phone (ADR 0023, "On a phone"), a row is Play, the call and one
+	// More actions button: it opens the row's other actions under the call,
+	// in words, and stays open while they say what happened (Link copied).
+	// Escape closes it. On a desktop the button isn't there and the actions
+	// sit in the row, as before.
 	import type { Snippet } from 'svelte';
 	import { Icon } from 'archiveux/components';
 	import type { Player } from '#lib/audio/player.svelte.ts';
@@ -145,7 +151,20 @@
 
 	const itemOf = (c: RecentCall) => ({ info: callInfoOf(ix, c), url: c.recording!.url, when: startOf(c.started_at, timeZone) });
 
+	// The row whose More actions is open (phones), one at a time.
+	let opened: string | undefined = $state();
+	const uid = $props.id();
+	// Escape closes it, and focus inside it goes back to its button.
+	function escape(ev: KeyboardEvent) {
+		if (ev.key !== 'Escape' || opened === undefined) return;
+		const i = calls.findIndex((c) => c.id === opened);
+		opened = undefined;
+		const box = document.getElementById(`${uid}-actions-${i}`);
+		if (box?.contains(document.activeElement)) document.getElementById(`${uid}-more-${i}`)?.focus();
+	}
+
 	function playFromHere(c: RecentCall) {
+		opened = undefined;
 		if (!c.recording || !search) return;
 		const s = runSearchOf(search, c);
 		let cursor: string | undefined;
@@ -165,6 +184,8 @@
 	const playing = $derived(player.replay.call?.callId);
 </script>
 
+<svelte:window onkeydown={escape} />
+
 {#if phase === 'loading'}
 	<p class="status" role="status">Loading recent calls…</p>
 {:else if refusal && !onrefusal && !calls.length}
@@ -175,7 +196,7 @@
 
 {#if calls.length}
 	<ul class="calls" aria-label={label}>
-		{#each calls as c (c.id)}
+		{#each calls as c, i (c.id)}
 			{@const t = talkgroupOf(ix, c)}
 			{@const start = startOf(c.started_at, timeZone)}
 			<li class="row" data-call-id={c.id} data-playing={playing === c.id ? 'yes' : undefined} data-current={current === c.id ? 'yes' : undefined}>
@@ -204,15 +225,28 @@
 						<span class="units">{unitsText(c)}</span>
 					</p>
 				</div>
-				<div class="row-actions">
-					{#if c.recording}
-						<button type="button" class="secondary from-here" aria-label="Play from here: {nameOf(c)}, {start}" onclick={() => playFromHere(c)}
-							><Icon name="play" /><span>Play from here</span></button
+				{#if c.recording || actions}
+					<div class="row-actions">
+						<button
+							type="button"
+							class="secondary overflow"
+							id="{uid}-more-{i}"
+							aria-expanded={opened === c.id}
+							aria-controls="{uid}-actions-{i}"
+							aria-label="More actions: {nameOf(c)}, {start}"
+							onclick={() => (opened = opened === c.id ? undefined : c.id)}><Icon name="more" /></button
 						>
-						<a class="button secondary download" href={downloadURL(c)} download aria-label="Download: {nameOf(c)}, {start}"><span>Download</span></a>
-					{/if}
-					{@render actions?.(c)}
-				</div>
+						<div class="actions" id="{uid}-actions-{i}" data-open={opened === c.id ? 'yes' : undefined}>
+							{#if c.recording}
+								<button type="button" class="secondary from-here" aria-label="Play from here: {nameOf(c)}, {start}" onclick={() => playFromHere(c)}
+									><Icon name="play" /><span>Play from here</span></button
+								>
+								<a class="button secondary download" href={downloadURL(c)} download aria-label="Download: {nameOf(c)}, {start}"><span>Download</span></a>
+							{/if}
+							{@render actions?.(c)}
+						</div>
+					</div>
+				{/if}
 			</li>
 		{/each}
 	</ul>
@@ -308,6 +342,13 @@
 		flex-wrap: wrap;
 		gap: var(--space-xs);
 	}
+	/* Desktops: no More actions; the actions sit in the row. */
+	.overflow {
+		display: none;
+	}
+	.actions {
+		display: contents;
+	}
 	.more {
 		margin-top: var(--space-lg);
 	}
@@ -315,13 +356,38 @@
 		margin-top: var(--space-md);
 		color: var(--muted);
 	}
-	/* Phones: the actions go under the call. */
+	/* Phones: Play, the call beside it (never under it), and More actions,
+	   which opens the other actions under the call. */
 	@media (max-width: 47.99rem) {
 		.row {
 			flex-wrap: wrap;
 		}
+		.what {
+			flex-basis: 0;
+		}
 		.row-actions {
+			display: contents;
+		}
+		.overflow {
+			display: inline-flex;
+			flex: none;
+			width: var(--target);
+			padding: 0;
+		}
+		/* Open: pressed, as the dock's Hold shows it. */
+		.overflow[aria-expanded='true'] {
+			background: var(--accent-soft);
+			border-color: var(--accent);
+			color: var(--accent-soft-fg);
+		}
+		.actions {
+			display: none;
+		}
+		.actions[data-open] {
+			display: flex;
 			flex-basis: 100%;
+			flex-wrap: wrap;
+			gap: var(--space-xs);
 			padding-left: calc(var(--target) + var(--space-md));
 		}
 	}
