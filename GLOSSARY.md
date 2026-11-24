@@ -32,6 +32,10 @@ _Avoid_: Call file, upload
 A P25 trunked-radio group that calls are made on; the unit of what a listener chooses to hear.
 _Avoid_: Channel, frequency
 
+**Patch**:
+Talkgroups joined for a time so that one call is heard on all of them at once.
+_Avoid_: Link, merge, simulselect
+
 **Hidden talkgroup**:
 A talkgroup whose calls are recorded but never streamed or played to the public.
 _Avoid_: Private talkgroup, blocked talkgroup
