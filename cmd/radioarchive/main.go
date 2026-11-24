@@ -27,6 +27,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/RIKIKU/RadioArchive/internal/gate"
+	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/version"
@@ -106,7 +108,7 @@ func serve(log *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr:              listenAddr(),
-		Handler:           apiHandler(st, log, rs),
+		Handler:           apiHandler(st, log, rs, recordingsDir()),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errc := make(chan error, 1)
@@ -124,12 +126,15 @@ func serve(log *slog.Logger) error {
 	return srv.Shutdown(shutCtx)
 }
 
-// apiHandler is everything the API serves. The admin API (server.WithAdmin)
-// joins it once admin sign-in (Authentik, M4) exists. Until then only tests
-// serve it, with an authenticator that lives in their _test.go files, so no
-// build of this binary can serve it.
-func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders) http.Handler {
-	return server.New(st, log, server.WithRecorders(rs))
+// apiHandler is everything the API serves: the recorder client's endpoints
+// and the public API, which reads only through the hidden-talkgroup gate
+// (ADR 0004). The admin API (server.WithAdmin) joins it once admin sign-in
+// (Authentik, M4) exists. Until then only tests serve it, with an
+// authenticator that lives in their _test.go files, so no build of this
+// binary can serve it.
+func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, recordings string) *server.API {
+	return server.New(st, log, server.WithRecorders(rs),
+		server.WithPublic(public.New(gate.New(st, recordings, log), log)))
 }
 
 func recorderMain(args []string, out io.Writer) error {

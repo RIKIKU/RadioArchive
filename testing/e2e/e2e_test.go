@@ -22,7 +22,9 @@ import (
 	"time"
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
+	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/opus"
+	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/internal/recorderclient"
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
@@ -231,7 +233,7 @@ func (r *rig) serverUp(t *testing.T) {
 	}
 	go rs.Run(ctx)
 	<-rs.Listening()
-	admin, err := server.NewAdmin(r.st, r.log, testAdmin{})
+	admin, err := server.NewAdmin(r.st, r.log, testAdmin{}, r.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +249,8 @@ func (r *rig) serverUp(t *testing.T) {
 	}
 	r.addr = ln.Addr().String()
 	r.api = "http://" + r.addr
-	srv := &http.Server{Handler: server.New(r.st, r.log, server.WithRecorders(rs), server.WithAdmin(admin)),
+	srv := &http.Server{Handler: server.New(r.st, r.log, server.WithRecorders(rs), server.WithAdmin(admin),
+		server.WithPublic(public.New(gate.New(r.st, r.dir, r.log), r.log))),
 		// Live sockets are hijacked, so Close doesn't end them; cancelling
 		// their requests' context does.
 		BaseContext: func(net.Listener) context.Context { return ctx }}
@@ -642,5 +645,87 @@ func TestRetireDisconnectsClient(t *testing.T) {
 	waitFor(t, "the client to be disconnected", 3*time.Second, func() bool { return !r.client.LiveConnected() })
 	if cs := r.calls(t); len(cs) != 2 {
 		t.Errorf("%d calls after retiring, want 2", len(cs))
+	}
+}
+
+// TestA10HiddenEndToEnd is SPEC.md A10 through the real audio path: with
+// 1003 hidden and 3 recordings on it, the public API lists and plays only
+// the public call, 1003's calls answer as one never stored does, and the
+// admin API plays them (R34). internal/server's A10 harness covers every
+// public route; this checks the same with real Opus recordings.
+func TestA10HiddenEndToEnd(t *testing.T) {
+	r := start(t)
+	r.replay(t, "a10-hidden.json")
+	cs := r.waitRecordings(t, 4)
+	var pub stored
+	var hidden []string
+	for _, c := range cs {
+		switch c.talkgroup {
+		case 1001:
+			pub = c
+		case 1003:
+			hidden = append(hidden, c.id)
+		}
+	}
+	if pub.id == "" || len(hidden) != 3 {
+		t.Fatalf("stored %+v, want 1 call on 1001 and 3 on 1003", cs)
+	}
+	type answer struct {
+		code   int
+		header string
+		body   []byte
+	}
+	do := func(method, path, body string, h ...string) answer {
+		t.Helper()
+		var rd io.Reader
+		if body != "" {
+			rd = strings.NewReader(body)
+		}
+		req, _ := http.NewRequest(method, r.api+path, rd)
+		for i := 0; i+1 < len(h); i += 2 {
+			req.Header.Set(h[i], h[i+1])
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		resp.Header.Del("Date")
+		return answer{resp.StatusCode, fmt.Sprint(resp.Header), b}
+	}
+
+	ids, _ := json.Marshal(public.CallsRequest{IDs: append([]string{pub.id}, hidden...)})
+	a := do("QUERY", public.CallsPath, string(ids))
+	var list public.CallsResponse
+	if a.code != 200 || json.Unmarshal(a.body, &list) != nil || len(list.Calls) != 1 || list.Calls[0].ID != pub.id {
+		t.Fatalf("QUERY calls: %d %s", a.code, a.body)
+	}
+	for _, s := range []string{"1003", "Admin", "ADMIN"} {
+		if strings.Contains(strings.ReplaceAll(string(a.body), pub.id, ""), s) {
+			t.Errorf("the call list contains %q: %s", s, a.body)
+		}
+	}
+
+	want, err := os.ReadFile(filepath.Join(r.dir, filepath.FromSlash(*pub.path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a = do("GET", public.RecordingURL(pub.id), "", "Range", "bytes=0-")
+	if a.code != 206 || !bytes.Equal(a.body, want) || !strings.Contains(a.header, gate.CacheControl) ||
+		!bytes.Contains(a.body[:min(200, len(a.body))], []byte("OpusHead")) {
+		t.Errorf("public recording: %d %s (%d bytes, want %d)", a.code, a.header, len(a.body), len(want))
+	}
+
+	never := do("GET", public.RecordingURL("6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f"), "", "Range", "bytes=0-")
+	for _, id := range hidden {
+		if got := do("GET", public.RecordingURL(id), "", "Range", "bytes=0-"); got.code != never.code ||
+			got.header != never.header || !bytes.Equal(got.body, never.body) {
+			t.Errorf("hidden %s answers %+v, never stored %+v", id, got, never)
+		}
+		got := do("GET", server.AdminPath+"/calls/"+id+"/recording", "", "X-Test-Admin", "e2e")
+		if got.code != 200 || !bytes.HasPrefix(got.body, []byte("OggS")) {
+			t.Errorf("admin playback of %s: %d", id, got.code)
+		}
 	}
 }

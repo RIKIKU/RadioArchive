@@ -104,7 +104,7 @@ func decodeJSON[T any](t *testing.T, b []byte) T {
 }
 
 func TestAdminNeedsAuthenticator(t *testing.T) {
-	if _, err := server.NewAdmin(nil, slog.New(slog.DiscardHandler), nil); err == nil {
+	if _, err := server.NewAdmin(nil, slog.New(slog.DiscardHandler), nil, t.TempDir()); err == nil {
 		t.Error("NewAdmin without an authenticator succeeded")
 	}
 }
@@ -112,7 +112,8 @@ func TestAdminNeedsAuthenticator(t *testing.T) {
 func TestIntegrationAdminSignIn(t *testing.T) {
 	e := newEnv(t)
 	for _, p := range []string{"GET /systems", "POST /systems", "GET /attachments", "GET /rejections",
-		"PUT /systems/1/talkgroups/1001", "PUT /recorders/x/attachments/ex", "DELETE /systems/1"} {
+		"PUT /systems/1/talkgroups/1001", "PUT /recorders/x/attachments/ex", "DELETE /systems/1",
+		"GET /calls/00000000-0000-4000-8000-000000000000/recording"} {
 		method, path, _ := strings.Cut(p, " ")
 		code, b := e.adminReq(t, "", method, path, map[string]any{})
 		if code != 401 || !strings.Contains(string(b), `"admin_sign_in_required"`) {

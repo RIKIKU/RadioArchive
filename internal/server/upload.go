@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
+	"github.com/RIKIKU/RadioArchive/internal/recordings"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/db"
 )
@@ -247,7 +248,7 @@ func (rs *Recorders) store(ctx context.Context, rec store.Recorder, m cp.Recordi
 			return &uploadError{code: http.StatusConflict, resp: cp.UploadResponse{Error: "identity_conflict", SHA256: stored}}
 		}
 
-		rel := filepath.ToSlash(filepath.Join(id[:2], id+".opus"))
+		rel := recordings.Path(id)
 		final := filepath.Join(rs.cfg.RecordingsDir, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(final), 0o750); err != nil {
 			return err

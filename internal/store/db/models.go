@@ -124,6 +124,18 @@ type Call struct {
 	RecordingAt       pgtype.Timestamptz
 }
 
+type PublicCall struct {
+	ID                pgtype.UUID
+	SystemID          int64
+	Talkgroup         int32
+	PatchedTalkgroups []int32
+	StartedAt         pgtype.Timestamptz
+	EndedAt           pgtype.Timestamptz
+	RecordingPath     *string
+	RecordingSize     *int64
+	RecordingAt       pgtype.Timestamptz
+}
+
 type Recorder struct {
 	ID              int64
 	Name            string

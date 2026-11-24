@@ -33,6 +33,24 @@ The recorder client (`cmd/radioarchive-client`, image from
 `SERVER_URL` and `CLIENT_KEY` set. `scripts/ci/e2e-a1.sh` runs the fake
 recorder through the client image into the compose stack.
 
+## The public API and the hidden-talkgroup gate
+
+Everything a listener reaches without signing in reads through one gate
+(`internal/gate`), so no hidden or ignored talkgroup's ID, name or audio
+leaves the server, and its calls answer exactly as calls that never existed
+(`SPEC.md` P1, R30, R32; `docs/adr/0004-the-hidden-talkgroup-gate.md`):
+
+```sh
+# Call details for up to 500 call IDs; unavailable ones are left out.
+curl -X QUERY -H 'Content-Type: application/json' --data '{"ids":["<call ID>"]}' http://127.0.0.1:8080/api/v1/calls
+# A recording, with range requests.
+curl -H 'Range: bytes=0-999' http://127.0.0.1:8080/api/v1/calls/<call ID>/recording
+```
+
+A new public endpoint goes in `internal/public`, reads through the gate, and
+adds itself to the A10 harness (`internal/server/a10_test.go`), which fails
+until it does. `scripts/ci/e2e-a10.sh` checks the same through the images.
+
 ## Systems and attachments
 
 The server takes a call only when its recorder + `shortName` is attached to a
