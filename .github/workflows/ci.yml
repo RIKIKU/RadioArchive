@@ -70,8 +70,9 @@ jobs:
         run: go test -count=1 -v ./...
 
   # The browser app (issue #54): svelte-check, tokens only (R80), the build,
-  # and the browser tests in Chromium, Firefox and WebKit (A7) against the
-  # binary with the app in it and its database. As PagerArchive's: in
+  # and the browser tests in Chromium, Firefox and WebKit against the
+  # binary with the app in it and its database, then playback (A6, A7,
+  # issue #58) with the recorder client and the fake recorder. As PagerArchive's: in
   # Microsoft's Playwright image at the version web/package-lock.json locks
   # (by digest), so the browsers and their libraries are already there, with
   # the database as a service container.
@@ -105,6 +106,14 @@ jobs:
       # so go build's version stamp) refuses a folder someone else owns.
       - name: Let git read the checkout
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # The playback tests (issue #58) run the recorder client, which is cgo
+      # with libopus, built here from source (no Docker in this container),
+      # and Firefox plays Web Audio only to a sound server: PulseAudio,
+      # playing to nothing, which e2e-web.sh starts.
+      - name: The recorder client's build and a sound server
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev libopus-dev pkg-config pulseaudio
       - name: Install dependencies
         working-directory: web
         run: npm ci --no-fund --no-audit

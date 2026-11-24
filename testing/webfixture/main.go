@@ -8,7 +8,11 @@
 // fireground link or a group. The binary serves no admin API yet (ADR 0003),
 // so this writes the rows directly. Running it again changes nothing.
 //
-//	go run ./testing/webfixture <database URL>
+// Given a recorder's name (one `radioarchive recorder add` made), it also
+// attaches the recorder as the fixture's `Bench`: its `ex` is system EX, for
+// the browser tests that play the fake recorder's calls (issue #58).
+//
+//	go run ./testing/webfixture <database URL> [recorder name]
 package main
 
 import (
@@ -36,9 +40,14 @@ INSERT INTO talkgroup_groups (system_id, talkgroup_id, group_id)
 SELECT 1, t, id FROM groups, unnest(ARRAY[1001, 1003]) AS t WHERE name = 'North' ON CONFLICT DO NOTHING;
 `
 
+// attach is the recorder's attachment: its `ex` is system EX.
+const attach = `
+INSERT INTO attachments (recorder_id, short_name, system_id)
+SELECT id, 'ex', 1 FROM recorders WHERE name = $1 ON CONFLICT DO NOTHING`
+
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: webfixture <database URL>")
+	if len(os.Args) != 2 && len(os.Args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: webfixture <database URL> [recorder name]")
 		os.Exit(2)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -52,5 +61,19 @@ func main() {
 	if _, err := conn.Exec(ctx, fixture); err != nil {
 		fmt.Fprintln(os.Stderr, "webfixture:", err)
 		os.Exit(1)
+	}
+	if len(os.Args) == 3 {
+		tag, err := conn.Exec(ctx, attach, os.Args[2])
+		if err == nil && tag.RowsAffected() == 0 {
+			var n int
+			err = conn.QueryRow(ctx, `SELECT count(*) FROM attachments a JOIN recorders r ON r.id = a.recorder_id WHERE r.name = $1`, os.Args[2]).Scan(&n)
+			if err == nil && n == 0 {
+				err = fmt.Errorf("no recorder named %q", os.Args[2])
+			}
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "webfixture: attach:", err)
+			os.Exit(1)
+		}
 	}
 }

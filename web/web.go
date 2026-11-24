@@ -141,5 +141,7 @@ func WithLook(page []byte, look, theme string) []byte {
 }
 
 // csp allows only this origin. SvelteKit's static bootstrap script is
-// inline.
-const csp = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+// inline. 'wasm-unsafe-eval' lets the page compile WebAssembly, and nothing
+// else (no eval): the WASM Opus decoder for browsers without WebCodecs'
+// Opus, which is in the app's own script (R39, ADR 0011).
+const csp = "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"

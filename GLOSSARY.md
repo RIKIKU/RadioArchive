@@ -28,6 +28,10 @@ _Avoid_: Stream, real-time call
 The finished audio of a call, kept in the archive once the call ends.
 _Avoid_: Call file, upload
 
+**Delay budget**:
+How far a live call may trail the radio: from the recorder plugin's first PCM packet of a call to the browser's first decoded frame of it, p95 under 2 s.
+_Avoid_: Latency, lag
+
 **Retention period**:
 How long a call and its recording are kept, in days, before the nightly job deletes them; the same for every talkgroup, hidden ones included.
 _Avoid_: TTL, expiry, archive period

@@ -27,5 +27,8 @@
   },
   "overrides": {
     "playwright-core": "1.64.0"
+  },
+  "dependencies": {
+    "opus-decoder": "0.7.12"
   }
 }

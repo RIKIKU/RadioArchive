@@ -343,6 +343,55 @@ func TestReplayKeepsTiming(t *testing.T) {
 	}
 }
 
+// Each call's first audio datagram, and only that one, is marked FirstPCM,
+// and ReplayFunc reports each datagram as it's written: the start of the
+// delay budget (R38, A6).
+func TestFirstPCM(t *testing.T) {
+	plan := loadPlan(t)
+	heard := map[string]bool{}
+	for i, s := range plan {
+		m, err := rp.Decode(s.Datagram)
+		audio := err == nil && m.Header.Type == rp.TypeAudio
+		if audio && s.Call == "" {
+			t.Errorf("audio datagram %d names no call", i)
+		}
+		if want := audio && !heard[s.Call]; s.FirstPCM != want {
+			t.Errorf("datagram %d (call %q): FirstPCM %v, want %v", i, s.Call, s.FirstPCM, want)
+		}
+		if audio {
+			heard[s.Call] = true
+		}
+	}
+	if len(heard) == 0 {
+		t.Fatal("the scenario has no audio")
+	}
+
+	ln, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	conn, err := fakerecorder.Dial(ln.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	n := 0
+	start := time.Now()
+	err = fakerecorder.ReplayFunc(context.Background(), conn, plan, 0, func(s fakerecorder.Send, at time.Time) {
+		if at.Before(start) {
+			t.Errorf("datagram reported before the replay started")
+		}
+		n++
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(plan) {
+		t.Errorf("reported %d datagrams, want %d", n, len(plan))
+	}
+}
+
 // The committed fixture files are exactly what the generator writes.
 func TestFixturesReproducible(t *testing.T) {
 	for name, want := range fakerecorder.Fixtures() {

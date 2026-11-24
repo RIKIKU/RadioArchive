@@ -1,26 +1,41 @@
 #!/bin/sh
 # The browser tests (web/tests) against the binary, with the app built into
-# it, and its database holding the test fixture's setup (issues #54, #59).
+# it, and its database holding the test fixture's setup (issues #54, #59),
+# with the recorder Bench's client connected, for the playback tests that
+# play the fake recorder's calls (issue #58).
 #
 #   sh scripts/ci/e2e-web.sh [playwright arguments]
 #
-# Needs Go, Node with web/'s dependencies installed (npm ci), and
-# Playwright's browsers. The database is a fresh postgres:18 started here
-# with Docker, or, with no Docker (CI runs this in Playwright's image), an
-# empty database as its owner in RA_E2E_DATABASE_URL.
+# Needs Go, a C compiler and libopus (the recorder client is cgo), Node with
+# web/'s dependencies installed (npm ci), and Playwright's browsers. Firefox
+# plays Web Audio only to a sound server, so where `pulseaudio` is installed
+# and none runs, one is started (it plays to nothing). The database is a
+# fresh postgres:18 started here with Docker, or, with no Docker (CI runs
+# this in Playwright's image), an empty database as its owner in
+# RA_E2E_DATABASE_URL.
+#
+# The tests run twice: first all but the playback tests, in parallel, then
+# the playback tests (@live in their titles), one at a time, since they share
+# the one recorder.
 set -eu
 cd "$(dirname "$0")/../.."
 
 port=${RA_E2E_PORT:-18090}
+udp=${RA_E2E_UDP_PORT:-19890}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/radioarchive-web.XXXXXX")
 db=""
 pid=""
+client=""
+pulse=""
 
 cleanup() {
 	rc=$?
+	[ -z "$client" ] || kill "$client" 2>/dev/null || true
+	[ -z "$pulse" ] || pulseaudio --kill 2>/dev/null || true
 	[ -z "$pid" ] || kill "$pid" 2>/dev/null || true
 	[ -z "$db" ] || docker rm -f -v "$db" >/dev/null 2>&1 || true
 	if [ "$rc" -ne 0 ] && [ -f "$tmp/api.log" ]; then tail -n 50 "$tmp/api.log" >&2; fi
+	if [ "$rc" -ne 0 ] && [ -f "$tmp/client.log" ]; then tail -n 50 "$tmp/client.log" >&2; fi
 	rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -47,17 +62,40 @@ else
 	DATABASE_URL="postgres://postgres:test@127.0.0.1:$dbport/postgres?sslmode=disable"
 fi
 
+if command -v pulseaudio >/dev/null 2>&1 && ! pulseaudio --check 2>/dev/null; then
+	if pulseaudio --daemonize --exit-idle-time=-1 2>/dev/null; then
+		pulse=1
+	else
+		echo "e2e-web.sh: couldn't start pulseaudio; Firefox may play nothing" >&2
+	fi
+fi
+
 (cd web && npm run build)
 CGO_ENABLED=0 go build -trimpath -o "$tmp/radioarchive" ./cmd/radioarchive
-mkdir -p "$tmp/recordings"
+CGO_ENABLED=0 go build -trimpath -o "$tmp/fakerecorder" ./testing/fakerecorder/cmd/fakerecorder
+CGO_ENABLED=1 go build -trimpath -o "$tmp/radioarchive-client" ./cmd/radioarchive-client
+mkdir -p "$tmp/recordings" "$tmp/media" "$tmp/queue"
 DATABASE_URL=$DATABASE_URL LISTEN_ADDR="127.0.0.1:$port" RECORDINGS_DIR="$tmp/recordings" \
 	"$tmp/radioarchive" serve >"$tmp/api.log" 2>&1 &
 pid=$!
 # Node, not curl: Playwright's image may have no curl.
 wait_for 120 "the API" node -e "fetch(process.argv[1]).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))" \
 	"http://127.0.0.1:$port/healthz"
-# The test fixture's setup, once the API has migrated the database.
-go run ./testing/webfixture "$DATABASE_URL"
+# The recorder Bench and its key (R10), then the test fixture's setup with
+# Bench attached, once the API has migrated the database.
+key=$(DATABASE_URL=$DATABASE_URL "$tmp/radioarchive" recorder add Bench | grep -o 'rak_[A-Za-z0-9_-]*')
+test -n "$key"
+go run ./testing/webfixture "$DATABASE_URL" Bench
 
+# Bench's recorder client, beside the fake recorder's "trunk-recorder".
+SERVER_URL="http://127.0.0.1:$port" CLIENT_KEY="$key" UDP_ADDR="127.0.0.1:$udp" QUEUE_DIR="$tmp/queue" \
+	"$tmp/radioarchive-client" >"$tmp/client.log" 2>&1 &
+client=$!
+wait_for 60 "the recorder client's live connection" grep -q '"live connection open"' "$tmp/client.log"
+
+fixtures=$(pwd)/testing/fakerecorder/testdata/fixtures
 cd web
-RA_URL="http://127.0.0.1:$port" npx playwright test "$@"
+RA_URL="http://127.0.0.1:$port" npx playwright test --grep-invert @live --pass-with-no-tests "$@"
+RA_URL="http://127.0.0.1:$port" RA_FAKERECORDER="$tmp/fakerecorder" RA_FIXTURES="$fixtures" \
+	RA_UDP_ADDR="127.0.0.1:$udp" RA_MEDIA="$tmp/media" \
+	npx playwright test --grep @live --workers=1 --pass-with-no-tests "$@"
