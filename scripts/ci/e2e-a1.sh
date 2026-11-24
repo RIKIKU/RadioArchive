@@ -32,11 +32,11 @@ key=$(docker compose exec -T api radioarchive recorder add "$name" | grep -o 'ra
 test -n "$key"
 
 # trunk-recorder's media directory: the fake recorder writes the WAVs here,
-# and the client, running as nonroot, deletes them once acknowledged.
+# and the client deletes them once acknowledged, so it runs as their owner,
+# as it would beside trunk-recorder.
 mkdir -p "$media/app/media"
-chmod -R a+rwX "$media"
 
-docker run -d --name "$client" --network host \
+docker run -d --name "$client" --network host --user "$(id -u):$(id -g)" \
 	-e SERVER_URL="http://127.0.0.1:$api_port" -e CLIENT_KEY="$key" -e UDP_ADDR="127.0.0.1:$udp_port" \
 	-v "$media/app/media:/app/media" "$image" >/dev/null
 
@@ -51,7 +51,6 @@ done
 go run ./testing/fakerecorder/cmd/fakerecorder \
 	-scenario testing/fakerecorder/testdata/scenarios/a1-overlapping.json \
 	-addr "127.0.0.1:$udp_port" -recordings "$media"
-chmod -R a+rwX "$media"
 
 calls="FROM calls c JOIN recorders r ON r.id = c.recorder_id WHERE r.name = '$name'"
 i=0
