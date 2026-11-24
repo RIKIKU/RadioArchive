@@ -68,7 +68,7 @@ curl -H 'Range: bytes=0-999' http://127.0.0.1:8080/api/v1/calls/<call ID>/record
 ```
 
 The live feed is one WebSocket per listener, `/api/v1/live`: the listener
-sends `{"type": "set", "talkgroups": [1001, 1002]}` and gets the call events
+sends `{"type": "set", "talkgroups": [{"id": 1001}, {"id": 1002}]}` and gets the call events
 and Opus frames of those talkgroups' public calls, as they happen
 (`docs/adr/0007-the-live-feed-to-listeners.md`).
 

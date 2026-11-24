@@ -13,7 +13,7 @@ Each listener opens one WebSocket, `GET /api/v1/live`, with no sign-in, and send
 | Part | Choice |
 |---|---|
 | **Route** | `GET /api/v1/live`, a WebSocket, no sign-in, in `internal/public`, reading only through `internal/gate` (ADR 0004). No compression |
-| **Listener → server** | Text JSON. `{"type": "set", "talkgroups": [...], "last_event_id": N}`. Unknown types are ignored |
+| **Listener → server** | Text JSON. `{"type": "set", "talkgroups": [{"id": 1001}, {"system": 2, "id": 1001}], "last_event_id": N}`. Unknown types are ignored |
 | **Server → listener, text** | `welcome`, `listening`, `call_start`, `transmission`, `call_end`, `call_withdrawn`, `call_delayed`, `replay`, `notice` |
 | **Server → listener, binary** | One Opus frame: a 24-byte header (kind, call ID, frame number) then the packet as the recorder client sent it |
 | **Event IDs** | Integers, rising: the server's start time in microseconds, plus one per event. Below 2^53, so a JavaScript number holds one exactly |
@@ -26,11 +26,11 @@ Each listener opens one WebSocket, `GET /api/v1/live`, with no sign-in, and send
 ## The listening set (section 13)
 
 ```json
-{"type": "set", "talkgroups": [1001, 1002, {"system": 2, "id": 1001}], "last_event_id": 1764000000123456}
+{"type": "set", "talkgroups": [{"id": 1001}, {"id": 1002}, {"system": 2, "id": 1001}], "last_event_id": 1764000000123456}
 ```
 
-- `talkgroups` is the whole set, the saved set plus any added for the session (R47): the server keeps no union of its own. A message replaces the last. At most 5,000 entries.
-- A number is that talkgroup ID in any system. With one system, which is every deployment the frontend sees without a `system` in the catalogue (R15, ADR 0006), that's simply the talkgroup. An object `{"system": S, "id": T}` names one system's talkgroup, for a deployment with several; the catalogue gives each talkgroup's `system` then.
+- `talkgroups` is the whole set, the saved set plus any added for the session (R47): the server keeps no union of its own. A message replaces the last. At most 5,000 entries. It's what the browser's `sendListeningSet` (`web/src/lib/live/listening-set.ts`, ADR 0008) already builds.
+- `{"id": T}` is that talkgroup ID in any system. With one system, which is every deployment whose catalogue gives no `system` (R15, ADR 0006), that's simply the talkgroup. `{"system": S, "id": T}` names one system's talkgroup, for a deployment with several; the catalogue gives each talkgroup's `system` then. A bare number `T` is taken as `{"id": T}`, for a client that has no more to say.
 - `last_event_id` is read only in the first `set` of a socket. Later ones change the set and nothing else.
 - The server answers every `set` with `{"type": "listening"}` once it has taken it, after any replay, so a client knows that what follows is by the new set.
 - A listener sends `set` after the welcome; until then it gets nothing. Sending `{"type": "set", "talkgroups": []}` is valid and hears nothing.
@@ -134,6 +134,6 @@ The A10 harness probes the live route with listeners (`a10_live_test.go`), not H
 
 - `server.LiveSink` gets the call's start, transmissions and end besides its frames, each after the row is written; `gate.Live` is the sink in the binary.
 - `gate.New` takes options; `gate.WithClock` is the clock for delays and the replay window.
-- The frontend (#59) sends the `set` message above, keeps the highest event ID, resends `set` with it after a reconnect, and ignores message types it doesn't know.
+- The player (#58) opens the socket, sends what `sendListeningSet` is handed as the `set` message above, keeps the highest event ID, resends `set` with it after a reconnect, and ignores message types it doesn't know.
 - Limits on listener sockets (R71) and the feed notices are M5's and a later slice's; they attach to this route and the `notice` type.
 - The live delay metric (R38, R90) can be measured from `live_first_pcm_at` to the frame's send; not built here.

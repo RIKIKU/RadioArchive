@@ -312,7 +312,7 @@ func TestIntegrationLiveA5(t *testing.T) {
 	e := newEnv(t)
 	rec := e.liveRecorder(t)
 	a := e.listen(t, []any{1001}, nil)
-	b := e.listen(t, []any{1002}, nil)
+	b := e.listen(t, []any{map[string]any{"id": 1002}}, nil) // as the browser sends it
 	now := time.Now().UnixMilli()
 
 	x, xid := rec.start(1001, nil, 5001, now)
@@ -746,7 +746,7 @@ func TestIntegrationLiveBadMessages(t *testing.T) {
 		{"binary", websocket.MessageBinary, "x", websocket.StatusUnsupportedData},
 		{"not JSON", websocket.MessageText, "{", websocket.StatusInvalidFramePayloadData},
 		{"a set of strings", websocket.MessageText, `{"type":"set","talkgroups":["1001"]}`, websocket.StatusPolicyViolation},
-		{"an entry without a system", websocket.MessageText, `{"type":"set","talkgroups":[{"id":1001}]}`, websocket.StatusPolicyViolation},
+		{"an entry without an ID", websocket.MessageText, `{"type":"set","talkgroups":[{"system":1}]}`, websocket.StatusPolicyViolation},
 		{"an entry with more", websocket.MessageText, `{"type":"set","talkgroups":[{"system":1,"id":1001,"x":1}]}`, websocket.StatusPolicyViolation},
 		{"too many", websocket.MessageText, `{"type":"set","talkgroups":[` + strings.Repeat("1,", public.MaxListeningSet) + `1]}`, websocket.StatusPolicyViolation},
 	} {

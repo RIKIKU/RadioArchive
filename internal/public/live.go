@@ -41,10 +41,12 @@ const TypeSet = "set"
 
 // SetMessage is the listener's listening set (ADR 0007):
 //
-//	{"type": "set", "talkgroups": [1001, {"system": 2, "id": 1001}], "last_event_id": 1764000000123456}
+//	{"type": "set", "talkgroups": [{"id": 1001}, {"system": 2, "id": 1001}], "last_event_id": 1764000000123456}
 //
-// A number is that talkgroup ID in any system (with one system, simply that
-// talkgroup); an object names one system's. last_event_id is read only in
+// {"id": T}, or the bare number T, is that talkgroup ID in any system (with
+// one system, simply that talkgroup); {"system": S, "id": T} names one
+// system's, as the catalogue does when there are several (R15). The
+// browser sends objects (web/src/lib/live/listening-set.ts). last_event_id is read only in
 // the first set: the events after it, from the last 5 minutes, are sent
 // first (R37).
 type SetMessage struct {
@@ -76,8 +78,12 @@ func ParseSet(m SetMessage) (gate.ListeningSet, error) {
 		var e setEntry
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(&e); err != nil || e.System == nil || e.ID == nil {
-			return gate.ListeningSet{}, errors.New(`each talkgroup is an ID or {"system": ID, "id": ID}`)
+		if err := dec.Decode(&e); err != nil || e.ID == nil {
+			return gate.ListeningSet{}, errors.New(`each talkgroup is an ID, {"id": ID} or {"system": ID, "id": ID}`)
+		}
+		if e.System == nil {
+			set.Any = append(set.Any, *e.ID)
+			continue
 		}
 		set.InSystem[*e.System] = append(set.InSystem[*e.System], *e.ID)
 	}
