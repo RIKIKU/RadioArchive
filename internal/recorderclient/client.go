@@ -21,6 +21,7 @@ import (
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	rp "github.com/RIKIKU/RadioArchive/internal/recorderproto"
+	"github.com/RIKIKU/RadioArchive/internal/version"
 )
 
 // rcvBuf is the UDP receive buffer asked for (ADR 0002).
@@ -35,11 +36,22 @@ type Config struct {
 	ClientKey string
 	// UDPAddr is where the plugin sends, a loopback address (default
 	// 127.0.0.1:9850).
-	UDPAddr    string
-	NewEncoder NewEncoder
-	Log        *slog.Logger
-	Metrics    *Metrics     // optional
-	HTTPClient *http.Client // optional
+	UDPAddr string
+	// QueueDir holds the queue of unsent recordings (R5). It must survive
+	// a restart of the client.
+	QueueDir string
+	// QueueMaxAge drops a queued recording older than this (default 24 h).
+	QueueMaxAge time.Duration
+	NewEncoder  NewEncoder
+	Log         *slog.Logger
+	Metrics     *Metrics     // optional
+	HTTPClient  *http.Client // optional
+	// Version is the client version sent to the server (default
+	// version.Version). Tests set it.
+	Version string
+	// Now is the clock (default time.Now). Tests move it on to age the
+	// queue.
+	Now func() time.Time
 }
 
 // Client is a running recorder client.
@@ -48,7 +60,7 @@ type Client struct {
 	conn *net.UDPConn
 	eng  *engine
 	live *liveConn
-	up   *memUploader
+	up   *uploader
 }
 
 // New checks cfg and binds the UDP socket.
@@ -71,12 +83,26 @@ func New(cfg Config) (*Client, error) {
 	if cfg.UDPAddr == "" {
 		cfg.UDPAddr = "127.0.0.1:9850"
 	}
+	if cfg.QueueMaxAge <= 0 {
+		cfg.QueueMaxAge = QueueMaxAge
+	}
+	if cfg.Version == "" {
+		cfg.Version = version.Version
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
 	base, err := url.Parse(strings.TrimRight(cfg.ServerURL, "/"))
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
 		return nil, fmt.Errorf("server URL %q must be http:// or https://", cfg.ServerURL)
 	}
 	ws := *base
 	ws.Scheme = map[string]string{"http": "ws", "https": "wss"}[base.Scheme]
+
+	q, err := openQueue(cfg.QueueDir, cfg.Log, cfg.Metrics, cfg.Now)
+	if err != nil {
+		return nil, err
+	}
 
 	ua, err := net.ResolveUDPAddr("udp", cfg.UDPAddr)
 	if err != nil {
@@ -96,11 +122,16 @@ func New(cfg Config) (*Client, error) {
 		"receive_buffer", receiveBuffer(conn), "asked", rcvBuf)
 
 	c := &Client{cfg: cfg, conn: conn}
-	c.live = newLiveConn(ws.String()+cp.LivePath, cfg.ClientKey, cfg.Log, cfg.Metrics)
-	c.up = newMemUploader(base.String()+cp.RecordingsPath, cfg.ClientKey, cfg.HTTPClient, cfg.Log, cfg.Metrics, cfg.NewEncoder)
-	c.eng = newEngine(cfg.Log, cfg.Metrics, c.live, c.up, cfg.NewEncoder, time.Now)
+	c.live = newLiveConn(ws.String()+cp.LivePath, cfg.ClientKey, cfg.Version, cfg.Log, cfg.Metrics)
+	c.up = newUploader(q, base.String()+cp.RecordingsPath, cfg.ClientKey, cfg.Version, cfg.HTTPClient, cfg.Log,
+		cfg.Metrics, cfg.NewEncoder, cfg.Now, cfg.QueueMaxAge)
+	c.eng = newEngine(cfg.Log, cfg.Metrics, c.live, c.up, cfg.NewEncoder, cfg.Now)
+	c.eng.version = cfg.Version
 	return c, nil
 }
+
+// Queue is the queue of unsent recordings (R5).
+func (c *Client) Queue() cp.QueueState { return c.up.Queue() }
 
 // UDPAddr is the bound UDP address.
 func (c *Client) UDPAddr() net.Addr { return c.conn.LocalAddr() }
@@ -162,6 +193,7 @@ func (c *Client) Run(ctx context.Context) error {
 			c.live.SendText(c.eng.heartbeat())
 		case <-c.live.connected:
 			c.eng.reconnected()
+			c.up.Kick() // the server is back: send the queue now, oldest first
 		}
 	}
 }

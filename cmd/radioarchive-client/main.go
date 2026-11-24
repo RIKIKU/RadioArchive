@@ -9,12 +9,17 @@
 //	CLIENT_KEY       this recorder's key from `radioarchive recorder add`, or
 //	CLIENT_KEY_FILE  a file holding it (for a Docker secret)
 //	UDP_ADDR         where the plugin sends (default 127.0.0.1:9850)
+//	QUEUE_DIR        the queue of unsent recordings, which must survive a
+//	                 restart (default /var/lib/radioarchive-client/queue)
+//	QUEUE_MAX_AGE    drop a queued recording older than this, as a Go
+//	                 duration (default 24h)
 //	METRICS_ADDR     serve /metrics here (default off)
 package main
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -73,14 +78,26 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	queueDir := os.Getenv("QUEUE_DIR")
+	if queueDir == "" {
+		queueDir = "/var/lib/radioarchive-client/queue"
+	}
+	maxAge := recorderclient.QueueMaxAge
+	if s := os.Getenv("QUEUE_MAX_AGE"); s != "" {
+		if maxAge, err = time.ParseDuration(s); err != nil || maxAge <= 0 {
+			return fmt.Errorf("QUEUE_MAX_AGE %q must be a positive duration such as 24h", s)
+		}
+	}
 	m := recorderclient.NewMetrics()
 	c, err := recorderclient.New(recorderclient.Config{
-		ServerURL:  os.Getenv("SERVER_URL"),
-		ClientKey:  key,
-		UDPAddr:    os.Getenv("UDP_ADDR"),
-		NewEncoder: newEncoder,
-		Log:        log,
-		Metrics:    m,
+		ServerURL:   os.Getenv("SERVER_URL"),
+		ClientKey:   key,
+		UDPAddr:     os.Getenv("UDP_ADDR"),
+		QueueDir:    queueDir,
+		QueueMaxAge: maxAge,
+		NewEncoder:  newEncoder,
+		Log:         log,
+		Metrics:     m,
 	})
 	if err != nil {
 		return err

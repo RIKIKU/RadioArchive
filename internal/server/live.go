@@ -97,7 +97,9 @@ func (rs *Recorders) serveLive(w http.ResponseWriter, r *http.Request) {
 		s.revoke()
 		return
 	}
-	s.log.Info("recorder connected", "client_version", r.Header.Get(cp.HeaderClientVersion))
+	cv := r.Header.Get(cp.HeaderClientVersion)
+	s.log.Info("recorder connected", "client_version", clip(cv))
+	rs.recordClient(ctx, rec, cv)
 
 	welcome, _ := json.Marshal(cp.Welcome{Type: cp.TypeWelcome, ServerVersion: rs.cfg.ServerVersion, Protocol: cp.Protocol})
 	if err := conn.Write(ctx, websocket.MessageText, welcome); err != nil {

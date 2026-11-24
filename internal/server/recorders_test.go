@@ -72,6 +72,12 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	return newEnvAt(t, "0.1.0-test")
+}
+
+// newEnvAt runs a server at serverVersion.
+func newEnvAt(t *testing.T, serverVersion string) *env {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	st, err := store.Open(ctx, storetest.URL(t))
 	if err != nil {
@@ -79,7 +85,7 @@ func newEnv(t *testing.T) *env {
 	}
 	e := &env{st: st, dir: t.TempDir(), sink: &sink{}}
 	e.rs, err = server.NewRecorders(st, slog.New(slog.DiscardHandler), server.RecordersConfig{
-		RecordingsDir: e.dir, Live: e.sink, ServerVersion: "0.1.0-test"})
+		RecordingsDir: e.dir, Live: e.sink, ServerVersion: serverVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +154,7 @@ func (e *env) open(t *testing.T, key string) *websocket.Conn {
 		t.Fatal(err)
 	}
 	var w cp.Welcome
-	if json.Unmarshal(b, &w) != nil || w.Type != "welcome" || w.Protocol != 1 || w.ServerVersion != "0.1.0-test" {
+	if json.Unmarshal(b, &w) != nil || w.Type != "welcome" || w.Protocol != 1 || w.ServerVersion == "" {
 		t.Fatalf("welcome = %s", b)
 	}
 	return c
@@ -284,6 +290,93 @@ func TestIntegrationLiveRefusals(t *testing.T) {
 	}
 }
 
+// TestIntegrationA29 is SPEC.md A29: a server at 1.4 refuses a 1.2 client,
+// naming both versions, and counts it; a 1.3 client connects and is
+// recorded as out of date; a 1.4 client is current. An upload from a 1.2
+// client is refused the same way.
+func TestIntegrationA29(t *testing.T) {
+	e := newEnvAt(t, "1.4.0")
+	name, key := e.recorder(t)
+	withVersion := func(v string) http.Header { h := hdr(key); h.Set(cp.HeaderClientVersion, v); return h }
+
+	_, resp, err := e.dial(t, withVersion("1.2.0"))
+	if err == nil || resp == nil {
+		t.Fatal("a 1.2 client connected")
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var er cp.ErrorResponse
+	if resp.StatusCode != 426 || json.Unmarshal(body, &er) != nil || er.Error != "client_too_old" ||
+		er.ClientVersion != "1.2.0" || er.ServerVersion != "1.4.0" {
+		t.Errorf("1.2 client: %d %s, want 426 client_too_old naming 1.2.0 and 1.4.0", resp.StatusCode, body)
+	}
+	if n := e.rs.Stat.ClientsTooOld.Load(); n != 1 {
+		t.Errorf("too-old count = %d, want 1", n)
+	}
+
+	clientRow := func() (v *string, out bool) {
+		if err := e.st.Pool.QueryRow(context.Background(),
+			`SELECT client_version, client_out_of_date FROM recorders WHERE name = $1`, name).Scan(&v, &out); err != nil {
+			t.Fatal(err)
+		}
+		return v, out
+	}
+	if v, _ := clientRow(); v != nil {
+		t.Errorf("a refused client's version was recorded: %s", *v)
+	}
+
+	c, _, err := e.dial(t, withVersion("1.3.0"))
+	if err != nil {
+		t.Fatalf("a 1.3 client was refused: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, _, err := c.Read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if v, out := clientRow(); v == nil || *v != "1.3.0" || !out {
+		t.Errorf("1.3 client recorded as %v, out of date %v; want 1.3.0, true", v, out)
+	}
+	if n := e.rs.Stat.ClientsOutOfDate.Load(); n != 1 {
+		t.Errorf("out-of-date count = %d, want 1", n)
+	}
+	c.CloseNow()
+
+	c, _, err = e.dial(t, withVersion("1.4.2"))
+	if err != nil {
+		t.Fatalf("a 1.4 client was refused: %v", err)
+	}
+	if _, _, err := c.Read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if v, out := clientRow(); v == nil || *v != "1.4.2" || out {
+		t.Errorf("1.4 client recorded as %v, out of date %v; want 1.4.2, false", v, out)
+	}
+	c.CloseNow()
+
+	// Uploads are checked the same way (ADR 0002).
+	audio := oggBytes(1)
+	req := uploadRequest(t, e.srv.URL, withVersion("1.2.0"), recording(ident, audio), audio)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 426 || !strings.Contains(string(body), `"client_too_old"`) {
+		t.Errorf("upload from 1.2: %d %s", resp.StatusCode, body)
+	}
+	if n := e.rs.Stat.ClientsTooOld.Load(); n != 2 {
+		t.Errorf("too-old count = %d, want 2", n)
+	}
+}
+
+func TestNewRecordersNeedsAVersion(t *testing.T) {
+	if _, err := server.NewRecorders(nil, slog.New(slog.DiscardHandler), server.RecordersConfig{
+		RecordingsDir: t.TempDir(), ServerVersion: "dev"}); err == nil {
+		t.Error("a server version that isn't MAJOR.MINOR.PATCH was accepted")
+	}
+}
+
 func TestIntegrationLiveCall(t *testing.T) {
 	e := newEnv(t)
 	name, key := e.recorder(t)
@@ -349,6 +442,18 @@ func TestIntegrationLiveMalformed(t *testing.T) {
 // upload posts a recording as the client does.
 func (e *env) upload(t *testing.T, key string, meta cp.RecordingMetadata, audio []byte) (int, cp.UploadResponse) {
 	t.Helper()
+	resp, err := http.DefaultClient.Do(uploadRequest(t, e.srv.URL, hdr(key), meta, audio))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var ur cp.UploadResponse
+	_ = json.NewDecoder(resp.Body).Decode(&ur)
+	return resp.StatusCode, ur
+}
+
+func uploadRequest(t *testing.T, base string, hd http.Header, meta cp.RecordingMetadata, audio []byte) *http.Request {
+	t.Helper()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	h := textproto.MIMEHeader{}
@@ -362,17 +467,10 @@ func (e *env) upload(t *testing.T, key string, meta cp.RecordingMetadata, audio 
 	p, _ = mw.CreatePart(h)
 	_, _ = p.Write(audio)
 	_ = mw.Close()
-	req, _ := http.NewRequest(http.MethodPost, e.srv.URL+cp.RecordingsPath, &body)
-	req.Header = hdr(key)
+	req, _ := http.NewRequest(http.MethodPost, base+cp.RecordingsPath, &body)
+	req.Header = hd
 	req.Header.Set("Content-Type", mw.FormDataContentType())
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var ur cp.UploadResponse
-	_ = json.NewDecoder(resp.Body).Decode(&ur)
-	return resp.StatusCode, ur
+	return req
 }
 
 func recording(id cp.CallID, audio []byte) cp.RecordingMetadata {

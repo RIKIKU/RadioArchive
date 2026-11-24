@@ -298,3 +298,13 @@ SET unit = EXCLUDED.unit, duration_ms = EXCLUDED.duration_ms;
 -- name: CallEffectiveState :one
 SELECT call_state(system_id, talkgroup, patched_talkgroups)::talkgroup_state AS state
 FROM calls WHERE id = sqlc.arg(id);
+
+-- Recorder client versions (R6).
+
+-- name: SetRecorderClient :exec
+-- Records the client version a recorder connected with.
+UPDATE recorders
+SET client_version = sqlc.arg(client_version),
+    client_out_of_date = sqlc.arg(client_out_of_date),
+    client_seen_at = now()
+WHERE id = sqlc.arg(id);
