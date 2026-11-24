@@ -84,7 +84,7 @@ test('@live A8: Skip moves to the next call, Jump to live empties the queue, Pau
 
 	// Pause.
 	sending = sendCalls([
-		{ unit: 5231, atMs: 200, pcm: seconds(6) },
+		{ unit: 5231, atMs: 200, pcm: seconds(10) },
 		{ unit: 5232, atMs: 1500, pcm: [tone] }
 	]);
 	const paused = await firstOf(page, 5231, 'live');
@@ -95,11 +95,12 @@ test('@live A8: Skip moves to the next call, Jump to live empties the queue, Pau
 	await sending;
 	await page.waitForTimeout(1_000);
 	expect((await heard(page)).played.some((p) => p.call_id === paused.call_id)).toBe(false);
-	// Resume carries on where it paused, behind the radio now, then through the queue.
+	// Resume carries on where it paused, behind the radio now (by more than
+	// ArchiveUx's LIVE_WITHIN, 5 s, for a while), then through the queue.
 	await dock(page).getByRole('button', { name: 'Resume' }).click();
 	await expect(badge(page)).toHaveText(/^Behind by \d+ s$/);
 	const whole = await playedFrom(page, 5231, 'live');
-	expect(whole.played.frames, 'all 6 s of the paused call').toBeGreaterThanOrEqual(250);
+	expect(whole.played.frames, 'all 10 s of the paused call').toBeGreaterThanOrEqual(450);
 	const next = await playedFrom(page, 5232, 'recording');
 	expect((await heard(page)).order.slice(-2)).toEqual([paused.call_id, next.first.call_id]);
 });
