@@ -57,7 +57,7 @@
 					{:else}
 						<LiveBadge behind={player.position.behind} />
 					{/if}
-					<span class="meta elapsed"><span class="visually-hidden">Duration so far </span>{clock(player.position.elapsed)}</span>
+					<span class="meta elapsed"><span class="visually-hidden">{'Duration so far '}</span>{clock(player.position.elapsed)}</span>
 				</div>
 			{:else}
 				<p class="status" aria-live="polite">
