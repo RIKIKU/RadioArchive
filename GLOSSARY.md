@@ -92,6 +92,10 @@ _Avoid_: Permalink, call URL
 What a call link opens: the call's talkgroup, start, duration and units, with Play, Download and Share, or live listening while the call is in progress.
 _Avoid_: Call details, call page
 
+**Conversation link**:
+A link to a conversation, shared from the basket, carrying its name, note and calls, which opens them as call cards in order with Play all; calls that aren't available are left out without a word.
+_Avoid_: Shared basket, playlist link
+
 **Listening set**:
 The talkgroups a listener keeps on to hear live calls from; saved per listener, and added to for a session by a fireground link.
 _Avoid_: Selection, favourites, scan list

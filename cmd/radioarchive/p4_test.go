@@ -115,6 +115,9 @@ func TestIntegrationP4NothingKept(t *testing.T) {
 		// availability check (the call list, above), its zips and the call
 		// link keep nothing either.
 		{"GET", "/basket", ""},
+		// A shared conversation's page (R66, ADR 0020): its list is in the
+		// fragment, so all the server sees is the path.
+		{"GET", "/conversation", ""},
 		{"GET", "/api/v1/recent-calls", ""},
 		{"GET", public.ZipURL(public.ZipRequest{Calls: []string{"6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f"},
 			Conversations: []public.ZipConversation{{Name: "Structure fire", Note: "A note", Calls: []string{"0f8e2c1a-6b3d-4e5f-9a7b-1c2d3e4f5a6b"}}}}), ""},

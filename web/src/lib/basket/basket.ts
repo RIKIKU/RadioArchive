@@ -318,10 +318,82 @@ export function pack(l: ZipList, part = 0, parts = 0): Uint8Array {
 	return Uint8Array.from(out);
 }
 
-function base64url(b: Uint8Array): string {
+/** base64url, without padding. */
+export function base64url(b: Uint8Array): string {
 	let s = '';
 	for (const x of b) s += String.fromCharCode(x);
 	return btoa(s).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+}
+
+/**
+ * A packed list read back, with its part and parts: a shared conversation's
+ * link (ADR 0020) is one. Undefined unless s is exactly what pack writes
+ * for some list (as the server reads a zip URL, ADR 0015): one list, one
+ * string. It reads what anyone may have typed, so every length is bounded
+ * before it's used.
+ */
+export function unpack(s: string): { list: ZipList; part: number; parts: number } | undefined {
+	if (!/^[A-Za-z0-9_-]+$/.test(s) || s.length % 4 === 1) return undefined;
+	let raw: string;
+	try {
+		raw = atob(s.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - (s.length % 4)) % 4));
+	} catch {
+		return undefined;
+	}
+	const b = Uint8Array.from(raw, (c) => c.charCodeAt(0));
+	let at = 0;
+	const varint = (max: number): number | undefined => {
+		let v = 0;
+		for (let shift = 1; at < b.length && shift < 2 ** 35; shift *= 128) {
+			const x = b[at++];
+			v += (x & 0x7f) * shift;
+			if (!(x & 0x80)) return v <= max ? v : undefined;
+		}
+		return undefined;
+	};
+	const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+	const string = (max: number): string | undefined => {
+		const n = varint(max);
+		if (n === undefined || at + n > b.length) return undefined;
+		try {
+			return text.decode(b.subarray(at, (at += n)));
+		} catch {
+			return undefined;
+		}
+	};
+	if (b[at++] !== 1) return undefined;
+	const part = varint(MAX_ZIP_PARTS);
+	const parts = varint(MAX_ZIP_PARTS);
+	const n = varint(MAX_ZIP_CALLS);
+	if (part === undefined || parts === undefined || n === undefined || at + 16 * n > b.length) return undefined;
+	const ids: string[] = [];
+	for (let i = 0; i < n; i++) {
+		const hex = Array.from(b.subarray(at, (at += 16)), (x) => x.toString(16).padStart(2, '0')).join('');
+		ids.push(`${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`);
+	}
+	const m = varint(MAX_ZIP_CALLS);
+	if (m === undefined) return undefined;
+	const conversations: ZipList['conversations'] = [];
+	const inConv = new Set<string>();
+	for (let i = 0; i < m; i++) {
+		const name = string(MAX_NAME);
+		const note = string(MAX_NOTE);
+		const k = varint(n);
+		if (name === undefined || note === undefined || !k) return undefined;
+		const calls: string[] = [];
+		for (let j = 0; j < k; j++) {
+			const ix = varint(n - 1);
+			if (ix === undefined) return undefined;
+			calls.push(ids[ix]);
+			inConv.add(ids[ix]);
+		}
+		conversations.push({ name, note, calls });
+	}
+	if (at !== b.length) return undefined;
+	const list: ZipList = { calls: ids.filter((id) => !inConv.has(id)), conversations };
+	// Anything pack wouldn't write (a call twice, out of order, a longer
+	// varint than needed, stray bits in the last character) is refused.
+	return base64url(pack(list, part, parts)) === s ? { list, part, parts } : undefined;
 }
 
 /** A list's zip URL, for one part of parts (0 and 0: the whole). */

@@ -214,6 +214,18 @@ $want"
 	done
 done
 
+# A shared conversation (R66, ADR 0020): its list is in the link's
+# fragment, which curl, like a browser, never sends. So /conversation is
+# the app's own page, as / is, and so is anything naming 1003's calls in a
+# query or a path below it.
+shell=$(answer GET /)
+for id in $hidden; do
+	for p in /conversation "/conversation?c=$id" "/conversation/$id" "/conversation#$id"; do
+		got=$(answer GET "$p")
+		test "$got" = "$shell" || fail "$p isn't the app's own page"
+	done
+done
+
 # The catalogue and search (R77) list the public talkgroups and nothing of
 # 1003, uncached (R74).
 cat=$(answer GET /api/v1/catalogue)
