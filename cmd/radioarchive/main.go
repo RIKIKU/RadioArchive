@@ -52,6 +52,7 @@ import (
 	"time"
 	_ "time/tzdata" // TZ's zone wherever the binary runs (ADR 0016)
 
+	"github.com/RIKIKU/RadioArchive/internal/account"
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/internal/retention"
@@ -172,10 +173,12 @@ func serve(log *slog.Logger) error {
 	if !sc.on() {
 		log.Warn("listener sign-in is off: AUTHENTIK_URL isn't set. Listening works as ever; nobody can save to an account")
 	}
-	handler, err := apiHandler(st, log, rs, g, sc)
+	handler, acc, err := apiHandler(st, log, rs, g, sc)
 	if err != nil {
 		return err
 	}
+	// Expired listener sessions are deleted hourly (ADR 0022).
+	go acc.Run(ctx)
 	srv := &http.Server{
 		Addr:              listenAddr(),
 		Handler:           handler,
@@ -205,15 +208,17 @@ func serve(log *slog.Logger) error {
 // binary can serve it.
 //
 // Listeners' sign-in (internal/account, ADR 0009) only saves their
-// preferences, in RadioArchive's database (ADR 0021): it serves no admin
-// route and authenticates no admin.
-func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate, sc signInConfig) (*server.API, error) {
+// preferences, in RadioArchive's database (ADR 0021), where its sessions
+// are kept too (ADR 0022): it serves no admin route and authenticates no
+// admin. The account is returned for serve to run its hourly sweep of
+// expired sessions.
+func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate, sc signInConfig) (*server.API, *account.Service, error) {
 	acc, err := sc.service(g, st, log)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return server.New(st, log, server.WithRecorders(rs), server.WithPublic(public.New(g, log, public.WithLocation(deploymentZone()))),
-		server.WithAccount(acc), server.WithApp(web.New())), nil
+		server.WithAccount(acc), server.WithApp(web.New())), acc, nil
 }
 
 // deploymentZone is TZ's zone, loaded by its name so the public API can tell

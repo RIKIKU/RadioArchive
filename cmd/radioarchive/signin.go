@@ -14,6 +14,7 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/authentik"
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/oidcclient"
+	"github.com/RIKIKU/RadioArchive/internal/store"
 )
 
 // signInConfig is listeners' sign-in as the environment sets it (ADR 0009).
@@ -95,9 +96,9 @@ func secret(getenv func(string) string, name string) (string, error) {
 	return v, nil
 }
 
-// service is the account the settings describe, saving signed-in listeners'
-// profiles in profiles (the store, ADR 0021).
-func (c signInConfig) service(g *gate.Gate, profiles account.Profiles, log *slog.Logger) (*account.Service, error) {
+// service is the account the settings describe, keeping signed-in
+// listeners' sessions and profiles in the store (ADR 0022, ADR 0021).
+func (c signInConfig) service(g *gate.Gate, st *store.Store, log *slog.Logger) (*account.Service, error) {
 	if !c.on() {
 		return account.New(account.Config{Log: log})
 	}
@@ -111,7 +112,8 @@ func (c signInConfig) service(g *gate.Gate, profiles account.Profiles, log *slog
 			RedirectURL:  c.appURL.JoinPath("auth", "callback").String(),
 			HTTP:         hc,
 		},
-		Profiles:  profiles,
+		Sessions:  st,
+		Profiles:  st,
 		Catalogue: g,
 		Secret:    []byte(c.clientSecret),
 		Log:       log,

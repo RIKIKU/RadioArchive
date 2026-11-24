@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -76,7 +77,7 @@ func p4Server(t *testing.T, ctx context.Context, authentikURL string) (*store.St
 	if err != nil {
 		t.Fatal(err)
 	}
-	if api, err = apiHandler(st, log, rs, g, sc); err != nil {
+	if api, _, err = apiHandler(st, log, rs, g, sc); err != nil {
 		t.Fatal(err)
 	}
 	return st, logs, srv
@@ -161,11 +162,13 @@ func TestIntegrationP4NothingKept(t *testing.T) {
 }
 
 // TestIntegrationP4SignedInProfile is the other side of P4 (R110, ADR
-// 0021): a signed-in listener's saved settings are exactly one row of
+// 0021, ADR 0022): signing in adds exactly one row, the session's in
+// listener_sessions, holding nothing of the listener's address; a
+// signed-in listener's saved settings are exactly one row of
 // listener_profiles, keyed by the account and holding nothing of the
-// listener's address; saving again changes that row and adds none; Clear
-// saved settings deletes it, leaving the database as it was. Anonymous
-// saves alongside keep nothing.
+// address either; saving again changes that row and adds none; Clear saved
+// settings deletes it; signing out deletes the session's row, leaving the
+// database as it was. Anonymous saves alongside keep nothing.
 func TestIntegrationP4SignedInProfile(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -186,12 +189,33 @@ func TestIntegrationP4SignedInProfile(t *testing.T) {
 	if resp := p4Do(t, browser, srv.URL, "GET", "/auth/callback?code="+code+"&state="+state, ""); resp.Header.Get("Location") != "/" {
 		t.Fatalf("callback went to %q", resp.Header.Get("Location"))
 	}
-	// Signing in, and reading an account with nothing saved, keep nothing.
+	// Signing in, and reading an account with nothing saved, keep the
+	// session's row and nothing else.
 	if resp := p4Do(t, browser, srv.URL, "GET", "/api/v1/account", ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("account = %d", resp.StatusCode)
 	}
-	if after := rows(t, st); after.String() != before.String() {
-		t.Fatalf("signing in changed the database:\nbefore %s\nafter  %s", before, after)
+	signedIn := rows(t, st)
+	for tb, v := range signedIn {
+		if tb != "listener_sessions" && v != before[tb] {
+			t.Errorf("signing in changed %s: %s to %s", tb, before[tb], v)
+		}
+	}
+	if !strings.HasPrefix(signedIn["listener_sessions"], "1:") {
+		t.Fatalf("signed in: listener_sessions %s, want one row", signedIn["listener_sessions"])
+	}
+	var sessionRow string
+	if err := st.Pool.QueryRow(ctx, `SELECT s::text FROM listener_sessions s`).Scan(&sessionRow); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range jar.Cookies(mustParse(t, srv.URL)) {
+		if strings.Contains(sessionRow, c.Value) {
+			t.Errorf("the session's row holds the cookie %s's value, not only its hash", c.Name)
+		}
+	}
+	for _, s := range []string{listenerIP, forwardedIP} {
+		if strings.Contains(sessionRow, s) {
+			t.Errorf("the session's row holds the listener's address %s", s)
+		}
 	}
 
 	for i, body := range []string{profile, strings.Replace(profile, `"look":"console"`, `"look":"harbour"`, 1)} {
@@ -204,8 +228,8 @@ func TestIntegrationP4SignedInProfile(t *testing.T) {
 		}
 		after := rows(t, st)
 		for tb, v := range after {
-			if tb != "listener_profiles" && v != before[tb] {
-				t.Errorf("save %d changed %s: %s to %s", i, tb, before[tb], v)
+			if tb != "listener_profiles" && v != signedIn[tb] {
+				t.Errorf("save %d changed %s: %s to %s", i, tb, signedIn[tb], v)
 			}
 		}
 		if !strings.HasPrefix(after["listener_profiles"], "1:") {
@@ -228,10 +252,25 @@ func TestIntegrationP4SignedInProfile(t *testing.T) {
 	if resp := p4Do(t, browser, srv.URL, "DELETE", "/api/v1/account/profile", ""); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("clear = %d", resp.StatusCode)
 	}
+	if after := rows(t, st); after.String() != signedIn.String() {
+		t.Errorf("after Clear saved settings the database isn't as it was signed in:\nbefore %s\nafter  %s", signedIn, after)
+	}
+	if resp := p4Do(t, browser, srv.URL, "POST", "/auth/signout", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("sign-out = %d", resp.StatusCode)
+	}
 	if after := rows(t, st); after.String() != before.String() {
-		t.Errorf("after Clear saved settings the database isn't as it was:\nbefore %s\nafter  %s", before, after)
+		t.Errorf("after signing out the database isn't as it was:\nbefore %s\nafter  %s", before, after)
 	}
 	p4NoAddresses(t, logs)
+}
+
+func mustParse(t *testing.T, s string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }
 
 // noRedirects is a client that follows no redirect, keeping no cookie.
