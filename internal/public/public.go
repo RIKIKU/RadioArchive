@@ -168,6 +168,11 @@ type Call struct {
 	InProgress        bool           `json:"in_progress"`
 	Transmissions     []Transmission `json:"transmissions"`
 	Recording         *Recording     `json:"recording"`
+	// DeletesAt is when retention will delete the call (R64, R88; ADR
+	// 0018): the nightly run after its start plus the period in force, so
+	// the browser can count down to it without knowing the setting. Low
+	// disk may delete it sooner.
+	DeletesAt *string `json:"deletes_at"`
 }
 
 // CallsRequest is the body of a call list request.
@@ -202,14 +207,22 @@ func (a *API) calls(w http.ResponseWriter, r *http.Request) {
 		a.failed(w, r, err)
 		return
 	}
+	// Asked even when no call is available, so an answer takes as long
+	// whatever the calls named.
+	del, err := a.g.Deletion(r.Context())
+	if err != nil {
+		a.failed(w, r, err)
+		return
+	}
 	out := CallsResponse{Calls: make([]Call, 0, len(cs))}
 	for _, c := range cs {
-		out.Calls = append(out.Calls, callOf(c))
+		out.Calls = append(out.Calls, callOf(c, del))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-func callOf(c gate.Call) Call {
+// callOf is a call's details, with when retention will delete it (del).
+func callOf(c gate.Call, del gate.Deletion) Call {
 	out := Call{
 		ID:                c.ID,
 		System:            System(c.System),
@@ -229,6 +242,10 @@ func callOf(c gate.Call) Call {
 	}
 	if c.RecordingSize != nil {
 		out.Recording = &Recording{URL: RecordingURL(c.ID), Type: "audio/ogg", Size: *c.RecordingSize}
+	}
+	if t := del(c.StartedAt); t != nil {
+		s := t.Format(timeFormat)
+		out.DeletesAt = &s
 	}
 	return out
 }

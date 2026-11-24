@@ -60,6 +60,8 @@ type Gate struct {
 
 	now func() time.Time
 
+	retention Retention // when retention deletes a call; nil: not known
+
 	catMu sync.Mutex
 	cat   *Catalogue // the last built, at its generation
 
@@ -74,6 +76,21 @@ type Option func(*Gate)
 // is (R37). Tests control it.
 func WithClock(now func() time.Time) Option {
 	return func(g *Gate) { g.now = now }
+}
+
+// Retention is when the nightly retention job deletes calls (ADR 0005):
+// the period in force, and the run that deletes a call with a period. The
+// retention job (internal/retention) is one.
+type Retention interface {
+	Days(ctx context.Context) (int, error)
+	DeletesAt(days int, started time.Time) time.Time
+}
+
+// WithRetention gives the gate the retention job, so the call details say
+// when each call will be deleted (R64; ADR 0018). Without it they say
+// nothing (null).
+func WithRetention(r Retention) Option {
+	return func(g *Gate) { g.retention = r }
 }
 
 // WithSearchTimeout sets how long a search of recent calls may take, all
@@ -283,6 +300,32 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// Deletion is when retention will delete a public call that started at
+// started (R64, R88; ADR 0018): the nightly run after its start plus the
+// period in force. nil: the gate doesn't know.
+type Deletion func(started time.Time) *time.Time
+
+// Deletion reads the retention period in force, once for a whole answer.
+// It says the same of every call that started at the same moment, so it
+// tells nothing of a call's talkgroup or state, and a surface gives it only
+// for the calls the gate gave.
+func (g *Gate) Deletion(ctx context.Context) (Deletion, error) {
+	if g.retention == nil {
+		return func(time.Time) *time.Time { return nil }, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	days, err := g.retention.Days(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("retention period: %s", store.SafeError(err))
+	}
+	r := g.retention
+	return func(started time.Time) *time.Time {
+		t := r.DeletesAt(days, started).UTC()
+		return &t
+	}, nil
 }
 
 // Recording is a public call's open recording.

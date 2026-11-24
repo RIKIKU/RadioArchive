@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -400,6 +401,99 @@ func TestProfile(t *testing.T) {
 		if resp := w.put(t, bad); resp.StatusCode/100 != 4 {
 			t.Errorf("PUT %.60s = %d, want refused", bad, resp.StatusCode)
 		}
+	}
+}
+
+// The download basket goes in the profile with the set (R64, R110; ADR
+// 0018): as the browser sends it, kept when a page from before M3 sends
+// none, cleared with the rest, and refused when it isn't one or is larger
+// than a profile holds.
+func TestProfileBasket(t *testing.T) {
+	w := newWorld(t)
+	w.signIn(t, "/")
+	const a, b = "0f8e2c1a-6b3d-4e5f-9a7b-1c2d3e4f5a6b", "6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f"
+	basket := fmt.Sprintf(`{"calls":[{"id":%q,"added":1764000000000},{"id":%q,"added":1764000001000}],`+
+		`"conversations":[{"id":"c1","name":"Structure fire","note":"Two trucks","calls":[{"id":%q,"added":1764000002000}],"last":1764000003000}],"last":1764000004000}`, a, b, b)
+	if resp := w.put(t, `{"v":1,"talkgroups":[{"id":1001}],"alerts":false,"basket":`+basket+`}`); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("PUT = %d", resp.StatusCode)
+	}
+	st := w.state(t)
+	if st.Profile == nil || st.Profile.Basket == nil || len(st.Profile.Basket.Calls) != 2 ||
+		len(st.Profile.Basket.Conversations) != 1 || st.Profile.Basket.Conversations[0].Name != "Structure fire" ||
+		st.Profile.Basket.Conversations[0].Calls[0].ID != b || *st.Profile.Basket.Last != 1764000004000 {
+		t.Fatalf("read back: %+v", st.Profile)
+	}
+	// A page from before M3 sends no basket: the account keeps its own.
+	if resp := w.put(t, `{"v":1,"talkgroups":[{"id":1002}],"alerts":false}`); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("PUT = %d", resp.StatusCode)
+	}
+	if got := string(w.dir.attrs[subject]); !strings.Contains(got, `"Structure fire"`) || !strings.Contains(got, `"id":1002`) {
+		t.Errorf("saved %s: want 1002 and the basket kept", got)
+	}
+	// An empty basket is the browser's to send.
+	if resp := w.put(t, `{"v":1,"talkgroups":[],"alerts":false,"basket":{"calls":[],"conversations":[]}}`); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("PUT = %d", resp.StatusCode)
+	}
+	if got := string(w.dir.attrs[subject]); strings.Contains(got, a) {
+		t.Errorf("saved %s: want the basket emptied", got)
+	}
+
+	calls := func(n int) string {
+		var s []string
+		for i := range n {
+			s = append(s, fmt.Sprintf(`{"id":"00000000-0000-4000-8000-%012d","added":1}`, i))
+		}
+		return strings.Join(s, ",")
+	}
+	conv := func(id, name, calls string) string {
+		return fmt.Sprintf(`{"id":%q,"name":%q,"calls":[%s]}`, id, name, calls)
+	}
+	one := fmt.Sprintf(`{"id":%q,"added":1}`, a)
+	convs := func(n int) string {
+		var s []string
+		for i := range n {
+			s = append(s, conv(fmt.Sprintf("c%d", i), "Fire", one))
+		}
+		return strings.Join(s, ",")
+	}
+	for name, bk := range map[string]string{
+		"not a call ID":                   `{"calls":[{"id":"1003","added":1}],"conversations":[]}`,
+		"an ID in capitals":               `{"calls":[{"id":"0F8E2C1A-6B3D-4E5F-9A7B-1C2D3E4F5A6B","added":1}],"conversations":[]}`,
+		"a call twice":                    `{"calls":[` + one + `,` + one + `],"conversations":[]}`,
+		"an unknown field":                `{"calls":[],"conversations":[],"talkgroups":[1003]}`,
+		"a conversation's call not in it": `{"calls":[` + one + `],"conversations":[` + conv("c1", "Fire", fmt.Sprintf(`{"id":%q,"added":1}`, b)) + `]}`,
+		"a conversation unnamed":          `{"calls":[` + one + `],"conversations":[` + conv("c1", " ", one) + `]}`,
+		"a conversation twice":            `{"calls":[` + one + `],"conversations":[` + conv("c1", "A", one) + `,` + conv("c1", "B", one) + `]}`,
+		"a name too long":                 `{"calls":[` + one + `],"conversations":[` + conv("c1", strings.Repeat("x", 201), one) + `]}`,
+		"an ID of odd characters":         `{"calls":[` + one + `],"conversations":[` + conv("c 1", "A", one) + `]}`,
+		"too many calls":                  `{"calls":[` + calls(MaxBasketCalls+1) + `],"conversations":[]}`,
+		"too many conversations":          `{"calls":[` + one + `],"conversations":[` + convs(MaxConversations+1) + `]}`,
+	} {
+		if resp := w.put(t, `{"v":1,"talkgroups":[],"alerts":false,"basket":`+bk+`}`); resp.StatusCode/100 != 4 {
+			t.Errorf("%s: PUT = %d, want refused", name, resp.StatusCode)
+		}
+	}
+	// The largest basket allowed, with the largest set, fits.
+	var big []string
+	for i := range MaxConversations {
+		var in []string
+		for j := range MaxConversationPlaces / MaxConversations {
+			in = append(in, fmt.Sprintf(`{"id":"00000000-0000-4000-8000-%012d","added":1764000000000}`, (i*40+j)%MaxBasketCalls))
+		}
+		big = append(big, fmt.Sprintf(`{"id":"conversation-%02d","name":%q,"note":%q,"calls":[%s],"last":1764000000000}`,
+			i, strings.Repeat("n", 200), strings.Repeat("\"", 2000), strings.Join(in, ",")))
+	}
+	var set []string
+	for i := range maxEntries {
+		set = append(set, fmt.Sprintf(`{"system":12345,"id":%d,"priority":true}`, 100000+i))
+	}
+	full := fmt.Sprintf(`{"v":1,"talkgroups":[%s],"look":"console","theme":"dark","alerts":true,"basket":{"calls":[%s],"conversations":[%s],"last":1764000000000}}`,
+		strings.Join(set, ","), strings.ReplaceAll(calls(MaxBasketCalls), `"added":1`, `"added":1764000000000`), strings.Join(big, ","))
+	if len(full) > maxBody {
+		t.Fatalf("the largest profile is %d bytes, over the %d a PUT takes", len(full), maxBody)
+	}
+	if resp := w.put(t, full); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("the largest profile (%d bytes): PUT = %d", len(full), resp.StatusCode)
 	}
 }
 

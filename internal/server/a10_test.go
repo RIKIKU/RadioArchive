@@ -264,6 +264,14 @@ func callListProbes(method string) []a10Probe {
 		{"between public calls", func(f *a10World, id string) *http.Request {
 			return f.req(method, public.CallsPath, fmt.Sprintf(`{"ids":[%q,%q,%q]}`, f.public[0], id, f.public[1]))
 		}},
+		// The basket's availability check (R64, R67; ADR 0018): the
+		// basket's calls in its order, a call never stored among them.
+		// Each public call's details carry when retention will delete it,
+		// which must be the same whatever else the basket holds.
+		{"a basket's check", func(f *a10World, id string) *http.Request {
+			return f.req(method, public.CallsPath, fmt.Sprintf(`{"ids":[%q,%q,%q,%q]}`,
+				f.public[1], id, f.unavailable["never stored"], f.public[0]))
+		}},
 	}
 }
 

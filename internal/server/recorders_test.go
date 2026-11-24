@@ -134,7 +134,14 @@ func newEnvAt(t *testing.T, serverVersion string) *env {
 	}
 	e := &env{st: st, dir: t.TempDir(), sink: &sink{}, clock: &testClock{}, disk: &testDisk{}}
 	log := slog.New(slog.DiscardHandler)
-	e.gate = gate.New(st, e.dir, log, gate.WithClock(e.clock.now))
+	e.job, err = retention.New(retention.Config{Store: st, Dir: e.dir, Log: log, Now: e.clock.now,
+		FreeSpace: e.disk.space, Location: time.UTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The gate says when retention deletes each call (ADR 0018), as the
+	// binary's does.
+	e.gate = gate.New(st, e.dir, log, gate.WithClock(e.clock.now), gate.WithRetention(e.job))
 	e.live = e.gate.Live()
 	go e.live.Run(ctx)
 	e.rs, err = server.NewRecorders(st, log, server.RecordersConfig{
@@ -150,11 +157,6 @@ func newEnvAt(t *testing.T, serverVersion string) *env {
 		t.Fatal("key listener never started")
 	}
 	admin, err := server.NewAdmin(st, log, testAdmin{}, e.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e.job, err = retention.New(retention.Config{Store: st, Dir: e.dir, Log: log, Now: e.clock.now,
-		FreeSpace: e.disk.space, Location: time.UTC})
 	if err != nil {
 		t.Fatal(err)
 	}

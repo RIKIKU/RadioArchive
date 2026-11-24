@@ -33,6 +33,10 @@
 #
 # The call link's A16 test (issue #80) starts, ends and deletes a call of
 # its own with the fixture's command, so it's @live as well.
+#
+# The basket's A19 test (issue #81) dates a call of its own and runs the
+# nightly retention job, and another hides 1001 for a while, with the
+# fixture's command: @live too.
 set -eu
 cd "$(dirname "$0")/../.."
 

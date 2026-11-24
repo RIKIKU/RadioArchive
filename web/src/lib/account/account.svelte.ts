@@ -12,7 +12,10 @@
 //   the page opens, and every change to the set, the marks, the playback
 //   settings or the look is saved to the account too.
 // - Hold and talkgroups added for the session are never saved.
+// - The download basket goes with the set (ADR 0018): saved, adopted,
+//   offered and cleared with it, never merged.
 import type { ListeningState } from '../listening/state.svelte.ts';
+import type { BasketState } from '../basket/state.svelte.ts';
 import type { Entry } from '../listening/set.ts';
 import type { Look, Theme } from '../look.ts';
 import { firstStep, profileOf, type AccountState, type Profile } from './profile.ts';
@@ -39,6 +42,7 @@ function link(id: string | null) {
 /** What the account gets from the page around it. */
 export interface Settings {
 	listening: ListeningState;
+	basket: BasketState;
 	look(): Look;
 	theme(): Theme;
 	alerts(): boolean;
@@ -77,10 +81,11 @@ export class Account {
 	constructor(s: Settings) {
 		this.#s = s;
 		s.listening.onsetchange = () => this.changed();
+		s.basket.onchange = () => this.changed();
 	}
 
 	#browser(): Profile {
-		return profileOf(this.#s.listening.saved, this.#s.look(), this.#s.theme(), this.#s.alerts());
+		return profileOf(this.#s.listening.saved, this.#s.look(), this.#s.theme(), this.#s.alerts(), this.#s.basket.basket);
 	}
 
 	/** Reads the account, and matches the browser with it (R41). */
@@ -122,6 +127,9 @@ export class Account {
 		this.#quiet = true;
 		try {
 			this.#s.listening.replace(p.talkgroups as Entry[]);
+			// A profile from before the basket joined it keeps this
+			// browser's, which is saved to it at the next change.
+			if (p.basket) this.#s.basket.replace(p.basket);
 			this.#s.apply(p);
 		} finally {
 			this.#quiet = false;

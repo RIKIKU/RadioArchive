@@ -311,6 +311,16 @@ export class Player {
 		this.replay.play(info, recording);
 	}
 
+	/**
+	 * Replays calls in order, one after another: a basket conversation's
+	 * Play all (R64; ADR 0018). Live listening pauses as for one call.
+	 */
+	replayAll(name: string, calls: { info: CallInfo; url: string }[]) {
+		if (!calls.length) return;
+		if (this.phase !== 'stopped' && !this.paused) void this.pause();
+		this.replay.playAll(name, calls);
+	}
+
 	/** Plays a finished call again, from its recording (R20), after the one playing. */
 	playAgain(info: CallInfo) {
 		if (this.phase !== 'listening') return;

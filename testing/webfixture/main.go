@@ -35,6 +35,17 @@
 // `call-delete` deletes its row and file, as retention does. Like the
 // talkgroup changes, they go when the binary serves the admin API (M4).
 //
+//	go run ./testing/webfixture <database URL> call-dated <recorder name> <recordings dir> <talkgroup> <unit> <age>
+//	go run ./testing/webfixture <database URL> retention <days>
+//	go run ./testing/webfixture <database URL> nightly <recordings dir> <ahead>
+//
+// A19's browser test (issue #81) dates a basket item and lets retention
+// delete it: `call-dated` stores an ended call, with its recording, that
+// started age ago (a Go duration, 696h for 29 days), and prints its ID;
+// `retention` sets the period, as an admin would; `nightly` does the
+// nightly retention run with the job's clock ahead of now by ahead (48h is
+// that call's 31st day) and prints how many calls it deleted (retention.go).
+//
 // The Recent calls page's tests (issue #79) need an archive to search:
 // `calls` stores made-up calls as Bench's, by the hour before now, with
 // recordings (silent Ogg/Opus files) on the volume (calls.go). Each run
@@ -122,20 +133,56 @@ func main() {
 	one := len(os.Args) == 7 && os.Args[2] == "call"
 	a16 := (len(os.Args) == 6 && os.Args[2] == "call-start") ||
 		(len(os.Args) == 5 && (os.Args[2] == "call-end" || os.Args[2] == "call-delete"))
-	if len(os.Args) != 2 && len(os.Args) != 3 && !talkgroup && !calls && !one && !a16 {
+	a19 := (len(os.Args) == 8 && os.Args[2] == "call-dated") || (len(os.Args) == 4 && os.Args[2] == "retention") ||
+		(len(os.Args) == 5 && os.Args[2] == "nightly")
+	if len(os.Args) != 2 && len(os.Args) != 3 && !talkgroup && !calls && !one && !a16 && !a19 {
 		fmt.Fprintln(os.Stderr, "usage: webfixture <database URL> [recorder name]\n       webfixture <database URL> talkgroup <ID> state|delay <value>\n"+
 			"       webfixture <database URL> calls <recorder name> <recordings dir>\n       webfixture <database URL> call <recorder name> <recordings dir> <talkgroup> <unit>\n"+
-			"       webfixture <database URL> call-start <recorder name> <talkgroup> <unit>\n       webfixture <database URL> call-end|call-delete <call ID> <recordings dir>")
+			"       webfixture <database URL> call-start <recorder name> <talkgroup> <unit>\n       webfixture <database URL> call-end|call-delete <call ID> <recordings dir>\n"+
+			"       webfixture <database URL> call-dated <recorder name> <recordings dir> <talkgroup> <unit> <age>\n"+
+			"       webfixture <database URL> retention <days>\n       webfixture <database URL> nightly <recordings dir> <ahead>")
 		os.Exit(2)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if a19 && os.Args[2] != "call-dated" {
+		var err error
+		if os.Args[2] == "retention" {
+			err = setRetention(ctx, os.Args[1], os.Args[3])
+		} else {
+			ahead, perr := time.ParseDuration(os.Args[4])
+			if perr != nil {
+				fmt.Fprintln(os.Stderr, "webfixture: nightly: the clock's lead is a duration, like 48h")
+				os.Exit(2)
+			}
+			err = runNightly(ctx, os.Args[1], os.Args[3], ahead)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "webfixture: %s: %v\n", os.Args[2], err)
+			os.Exit(1)
+		}
+		return
+	}
 	conn, err := pgx.Connect(ctx, os.Args[1])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "webfixture: connect:", err)
 		os.Exit(1)
 	}
 	defer conn.Close(context.Background())
+	if a19 {
+		tg, err1 := strconv.ParseInt(os.Args[5], 10, 32)
+		unit, err2 := strconv.ParseInt(os.Args[6], 10, 64)
+		age, err3 := time.ParseDuration(os.Args[7])
+		if err1 != nil || err2 != nil || err3 != nil {
+			fmt.Fprintln(os.Stderr, "webfixture: call-dated: the talkgroup and the unit are numbers, the age a duration, like 696h")
+			os.Exit(2)
+		}
+		if err := storeDated(ctx, conn, os.Args[3], os.Args[4], int32(tg), unit, age); err != nil {
+			fmt.Fprintln(os.Stderr, "webfixture: call-dated:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if a16 {
 		var err error
 		switch os.Args[2] {
