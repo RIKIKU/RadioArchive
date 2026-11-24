@@ -160,3 +160,58 @@ func storeOne(ctx context.Context, conn *pgx.Conn, recorder, dir string, talkgro
 	fmt.Println(id, now.UnixMilli())
 	return nil
 }
+
+// A16's call (issue #80): a call link's card while the call is in
+// progress, once it has ended, and once retention has deleted it.
+
+// startCall stores a call on talkgroup from unit, in progress since 5 s
+// ago, with no recording, and prints its ID.
+func startCall(ctx context.Context, conn *pgx.Conn, recorder string, talkgroup int32, unit int64) error {
+	now := time.Now().Truncate(time.Millisecond)
+	c := fixtureCall{talkgroup: talkgroup, start: now.Add(-5 * time.Second), units: []int64{unit}, inProgress: true}
+	id, err := storeCall(ctx, conn, recorder, "", 1_000_000+now.UnixMilli()%1_000_000, c)
+	if err != nil {
+		return err
+	}
+	fmt.Println(id)
+	return nil
+}
+
+// endCall ends a call in progress now and stores its recording, as the
+// recorder client's upload would.
+func endCall(ctx context.Context, conn *pgx.Conn, id, dir string) error {
+	var started time.Time
+	if err := conn.QueryRow(ctx, `SELECT started_at FROM calls WHERE id = $1::uuid AND ended_at IS NULL`, id).Scan(&started); err != nil {
+		return fmt.Errorf("no call %s in progress: %w", id, err)
+	}
+	ended := time.Now().Truncate(time.Millisecond)
+	audio, err := silence(ended.Sub(started), uint32(ended.UnixMilli()))
+	if err != nil {
+		return err
+	}
+	rel := recordings.Path(id)
+	path := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, audio, 0o644); err != nil {
+		return err
+	}
+	sum := sha256.Sum256(audio)
+	_, err = conn.Exec(ctx, `UPDATE calls SET ended_at = $2, recording_path = $3, recording_size = $4, recording_sha256 = $5, recording_at = $2 WHERE id = $1::uuid`,
+		id, ended, rel, len(audio), sum[:])
+	return err
+}
+
+// deleteCall deletes a call as retention does (R88): its row, then its
+// recording's file.
+func deleteCall(ctx context.Context, conn *pgx.Conn, id, dir string) error {
+	var rel *string
+	if err := conn.QueryRow(ctx, `DELETE FROM calls WHERE id = $1::uuid RETURNING recording_path`, id).Scan(&rel); err != nil {
+		return fmt.Errorf("no call %s: %w", id, err)
+	}
+	if rel == nil {
+		return nil
+	}
+	return os.Remove(filepath.Join(dir, filepath.FromSlash(*rel)))
+}

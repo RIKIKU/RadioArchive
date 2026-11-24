@@ -80,6 +80,14 @@ _Avoid_: Fireground talkgroup, ops channel
 A link shown with a page that names a fireground channel, which opens the radio and adds that channel's talkgroup to the listener's listening set for the session.
 _Avoid_: Listen link, radio link
 
+**Call link**:
+A link to one call, shared from recent calls or now playing, which opens the radio at that call's call card; a link to a call that isn't available looks the same whatever the reason.
+_Avoid_: Permalink, call URL
+
+**Call card**:
+What a call link opens: the call's talkgroup, start, duration and units, with Play, Download and Share, or live listening while the call is in progress.
+_Avoid_: Call details, call page
+
 **Listening set**:
 The talkgroups a listener keeps on to hear live calls from; saved per listener, and added to for a session by a fireground link.
 _Avoid_: Selection, favourites, scan list

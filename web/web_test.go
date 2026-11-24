@@ -92,3 +92,51 @@ func TestNotBuilt(t *testing.T) {
 		t.Errorf("unbuilt: %d %q", res.StatusCode, body)
 	}
 }
+
+// A call link's page (ADR 0017): the app's page with the preview's tags,
+// escaped, in the asker's look, never cached; a zero preview is the app's
+// own page, byte for byte.
+func TestPageWithPreview(t *testing.T) {
+	a := Serve(fstest.MapFS{"index.html": {Data: []byte(page)}})
+	serve := func(status int, p Preview, cookies ...*http.Cookie) (*http.Response, string) {
+		r := httptest.NewRequest(http.MethodGet, "/calls/x", nil)
+		for _, c := range cookies {
+			r.AddCookie(c)
+		}
+		w := httptest.NewRecorder()
+		a.Page(w, r, status, p)
+		b, _ := io.ReadAll(w.Result().Body)
+		return w.Result(), string(b)
+	}
+	res, body := serve(200, Preview{Title: `Dispatch <North> & "co"`, Description: "Wed 25 Nov 2026, 14:03:22 AEDT"},
+		&http.Cookie{Name: LookCookie, Value: "console"})
+	if res.StatusCode != 200 || res.Header.Get("Cache-Control") != "no-store" || res.Header.Get("Vary") != "Cookie" ||
+		res.Header.Get("Content-Type") != "text/html; charset=utf-8" || res.Header.Get("Content-Security-Policy") == "" {
+		t.Errorf("headers: %d %v", res.StatusCode, res.Header)
+	}
+	for _, want := range []string{
+		`<html data-look="console" lang="en-AU">`,
+		`<meta property="og:title" content="Dispatch &lt;North&gt; &amp; &#34;co&#34;" />`,
+		`<meta property="og:description" content="Wed 25 Nov 2026, 14:03:22 AEDT" />`,
+		`<meta name="twitter:card" content="summary" /></head>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page lacks %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "<North>") {
+		t.Errorf("the title isn't escaped: %s", body)
+	}
+	res, body = serve(404, Preview{})
+	if res.StatusCode != 404 || body != page {
+		t.Errorf("no preview: %d %q, want the page as built", res.StatusCode, body)
+	}
+	if res, body := get(t, serveMux(Serve(fstest.MapFS{})), "/"); res.StatusCode != 503 || !strings.Contains(body, "npm run build") {
+		t.Errorf("unbuilt shell: %d %q", res.StatusCode, body)
+	}
+	w := httptest.NewRecorder()
+	Serve(fstest.MapFS{}).Page(w, httptest.NewRequest(http.MethodGet, "/calls/x", nil), 200, Preview{Title: "x"})
+	if w.Code != 503 {
+		t.Errorf("unbuilt page: %d", w.Code)
+	}
+}

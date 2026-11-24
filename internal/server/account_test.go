@@ -22,14 +22,24 @@ func TestIntegrationSignedInSameAnswers(t *testing.T) {
 	f := newA10World(t)
 	n := 0
 	for _, route := range f.e.api.Routes() {
-		if route.Kind != server.PublicRoute {
+		if route.Kind != server.PublicRoute && route.Kind != server.PageRoute {
 			continue
 		}
 		for _, p := range a10Probes[route.Pattern] {
 			for _, id := range []string{f.public[0], f.deleted, f.unavailable["hidden 1003 #1"]} {
 				out := do(t, p.req(f, id))
 				r := p.req(f, id)
-				r.Header.Set("Cookie", "ra_session=a-listeners-session; look=console; theme=dark")
+				if route.Kind == server.PageRoute {
+					// A page is written in the asker's look (ADR 0017), so
+					// signing in adds the session to the probe's own cookies.
+					cookie := "ra_session=a-listeners-session"
+					if c := r.Header.Get("Cookie"); c != "" {
+						cookie = c + "; " + cookie
+					}
+					r.Header.Set("Cookie", cookie)
+				} else {
+					r.Header.Set("Cookie", "ra_session=a-listeners-session; look=console; theme=dark")
+				}
 				r.Header.Set("Authorization", "Bearer a-listeners-token")
 				in := do(t, r)
 				if out.status != in.status || !bytes.Equal(out.body, in.body) || out.String() != in.String() {

@@ -30,6 +30,9 @@
 # fixture's command stores before the tests start; those that change a
 # talkgroup, or store a call of their own (on RA_RECORDINGS), are @live
 # too, so they run one at a time. The API runs in TZ=Australia/Melbourne.
+#
+# The call link's A16 test (issue #80) starts, ends and deletes a call of
+# its own with the fixture's command, so it's @live as well.
 set -eu
 cd "$(dirname "$0")/../.."
 

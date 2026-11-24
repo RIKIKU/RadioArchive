@@ -47,6 +47,7 @@ type API struct {
 	g      *gate.Gate
 	log    *slog.Logger
 	routes []Route
+	pages  []Page
 	cat    catalogueBody
 	loc    *time.Location
 }
@@ -80,6 +81,7 @@ func New(g *gate.Gate, log *slog.Logger, opts ...Option) *API {
 	a.handle("GET "+RecentCallsPath, a.recentCalls)
 	a.handle("QUERY "+RecentCallsPath, a.recentCallsBody)
 	a.handle("POST "+RecentCallsPath, a.recentCallsBody)
+	a.pages = append(a.pages, Page{Pattern: "GET " + CallLinkPath, Preview: a.callPreview})
 	return a
 }
 

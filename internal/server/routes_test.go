@@ -43,6 +43,14 @@ func TestRouteTableRefusesMisplacedRoutes(t *testing.T) {
 		{AppRoute, "GET /auth/signin", false},
 		{AppRoute, "GET /auth", false},
 		{AdminRoute, "GET /api/v1/account", false},
+		// A public page (ADR 0017): outside the API, and never the app's
+		// catch-all.
+		{PageRoute, "GET /calls/{call}", true},
+		{PageRoute, "GET /", false},
+		{PageRoute, "GET /api/v1/calls/{call}", false},
+		{PageRoute, "GET /healthz", false},
+		{PageRoute, "GET /auth/signin", false},
+		{PageRoute, "GET " + AdminPath + "/systems", false},
 	} {
 		func() {
 			defer func() {

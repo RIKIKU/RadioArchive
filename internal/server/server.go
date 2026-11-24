@@ -40,8 +40,13 @@ type RouteKind int
 // or credentials, so signing in can't change its answer (P3, ADR 0009). An
 // account route can only come from internal/account. An app route can only
 // come from the web package, the browser app's static files, which carry no
-// deployment data, and lives outside APIPath and the sign-in hops. New
-// refuses any other route.
+// deployment data, and lives outside APIPath and the sign-in hops. A page
+// route is a public page outside the API whose preview depends on what its
+// path names, a call link (ADR 0017): it lives where app routes do, can
+// only come from internal/public's pages, reads through the gate, and its
+// handler sees no cookie or credential either; the server writes the app's
+// page around what it says, in the asker's look. New refuses any other
+// route.
 const (
 	HealthRoute RouteKind = iota
 	RecorderRoute
@@ -49,10 +54,11 @@ const (
 	PublicRoute
 	AppRoute
 	AccountRoute
+	PageRoute
 )
 
 func (k RouteKind) String() string {
-	return [...]string{"health", "recorder", "admin", "public", "app", "account"}[k]
+	return [...]string{"health", "recorder", "admin", "public", "app", "account", "page"}[k]
 }
 
 // Route is one route the API serves.
@@ -71,6 +77,7 @@ type API struct {
 	mux    *http.ServeMux
 	app    *http.ServeMux
 	routes []Route
+	shell  *web.App // writes the public API's pages (WithApp)
 }
 
 // Option adds to the API's handler.
@@ -123,11 +130,13 @@ func (a *API) handle(kind RouteKind, pattern string, h http.Handler) {
 		fits = under(path, account.AuthPath) || path == account.AccountPath || under(path, account.AccountPath)
 	case AppRoute:
 		fits = strings.HasPrefix(path, "/") && !apiPath(path)
+	case PageRoute:
+		fits = strings.HasPrefix(path, "/") && path != "/" && !apiPath(path)
 	}
 	if !fits {
 		panic(fmt.Sprintf("route %q isn't a %s route", pattern, kind))
 	}
-	if kind == AppRoute {
+	if kind == AppRoute || kind == PageRoute {
 		a.app.Handle(pattern, h)
 	} else {
 		a.mux.Handle(pattern, h)
@@ -151,7 +160,40 @@ func WithPublic(p *public.API) Option {
 		for _, r := range p.Routes() {
 			a.handle(PublicRoute, r.Pattern, anonymous(r.Handler))
 		}
+		for _, pg := range p.Pages() {
+			a.handle(PageRoute, pg.Pattern, a.page(pg))
+		}
 	}
+}
+
+// page serves one of the public API's pages (ADR 0017): the app's page,
+// with what pg says link previews may show of what its path names. pg sees
+// the request without cookies or credentials, as a public route does; only
+// the look and theme the page is written in come from the asker's cookies,
+// through the app, which carries no deployment data. Nothing public there,
+// for whatever reason, is the app's own page, 404.
+func (a *API) page(pg public.Page) http.Handler {
+	anon := func(r *http.Request) *http.Request {
+		r = r.Clone(r.Context())
+		r.Header.Del("Cookie")
+		r.Header.Del("Authorization")
+		return r
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.shell == nil {
+			http.NotFound(w, r)
+			return
+		}
+		p, ok, err := pg.Preview(anon(r))
+		switch {
+		case err != nil:
+			a.shell.Page(w, r, http.StatusInternalServerError, web.Preview{})
+		case !ok:
+			a.shell.Page(w, r, http.StatusNotFound, web.Preview{})
+		default:
+			a.shell.Page(w, r, http.StatusOK, web.Preview{Title: p.Title, Description: p.Description})
+		}
+	})
 }
 
 // anonymous hands h the request without its cookies or credentials, so a
@@ -181,6 +223,7 @@ func WithAccount(acc *account.Service) Option {
 // its one page for every other path outside the API.
 func WithApp(app *web.App) Option {
 	return func(a *API) {
+		a.shell = app
 		for _, r := range app.Routes() {
 			a.handle(AppRoute, r.Pattern, r.Handler)
 		}

@@ -65,14 +65,33 @@ var a10Probes = map[string][]a10Probe{
 	"GET " + public.ZipPath:       zipProbes("GET"),
 	"QUERY " + public.ZipListPath: zipProbes("QUERY"),
 	"POST " + public.ZipListPath:  zipProbes("POST"),
-	// The app shell (web): its one page, sent for any path outside the API,
-	// a call's among them, and in the listener's saved look; its files; and
-	// robots.txt. None of it may depend on the call a path names.
+	// A call's link (R61, R74; ADR 0017): the app's page with the call's
+	// preview, a page route's, from the public API through the gate. An
+	// unavailable call's is the app's own page, 404, whatever the reason.
+	"GET " + public.CallLinkPath: {
+		{"the call's link", func(f *a10World, id string) *http.Request { return f.req("GET", public.CallLinkURL(id), "") }},
+		{"in a saved look", func(f *a10World, id string) *http.Request {
+			r := f.req("GET", public.CallLinkURL(id), "")
+			r.Header.Set("Cookie", "look=console; theme=dark")
+			return r
+		}},
+		{"with a query", func(f *a10World, id string) *http.Request {
+			return f.req("GET", public.CallLinkURL(id)+"?t="+url.QueryEscape(id), "")
+		}},
+		{"in capitals", func(f *a10World, id string) *http.Request {
+			return f.req("GET", public.CallLinkURL(strings.ToUpper(id)), "")
+		}},
+		{"HEAD", func(f *a10World, id string) *http.Request { return f.req("HEAD", public.CallLinkURL(id), "") }},
+	},
+	// The app shell (web): its one page, sent for any other path outside
+	// the API, one naming a call among them, and in the listener's saved
+	// look; its files; and robots.txt. None of it may depend on the call a
+	// path names.
 	"GET /": {
 		{"the Listen page", func(f *a10World, id string) *http.Request { return f.req("GET", "/", "") }},
-		{"a call's path", func(f *a10World, id string) *http.Request { return f.req("GET", "/calls/"+id, "") }},
-		{"a call's path, in a saved look", func(f *a10World, id string) *http.Request {
-			r := f.req("GET", "/calls/"+id+"?t="+id, "")
+		{"a path below a call's link", func(f *a10World, id string) *http.Request { return f.req("GET", "/calls/"+id+"/more", "") }},
+		{"a path naming a call, in a saved look", func(f *a10World, id string) *http.Request {
+			r := f.req("GET", "/recent?call="+id+"&t="+id, "")
 			r.Header.Set("Cookie", "look=console; theme=dark")
 			return r
 		}},
@@ -493,11 +512,11 @@ func (f *a10World) leaks(a answer) []string {
 func TestIntegrationA10(t *testing.T) {
 	f := newA10World(t)
 
-	// Every public route and app route the server mounts is in the harness,
+	// Every public, page and app route the server mounts is in the harness,
 	// and every route in the harness is mounted.
 	var mounted, probed []string
 	for _, r := range f.e.api.Routes() {
-		if r.Kind == server.PublicRoute || r.Kind == server.AppRoute {
+		if r.Kind == server.PublicRoute || r.Kind == server.AppRoute || r.Kind == server.PageRoute {
 			mounted = append(mounted, r.Pattern)
 		}
 	}
@@ -511,7 +530,7 @@ func TestIntegrationA10(t *testing.T) {
 	slices.Sort(mounted)
 	slices.Sort(probed)
 	if len(mounted) == 0 || !slices.Equal(mounted, probed) {
-		t.Fatalf("public and app routes %q, A10 probes %q: every public and app route needs probes", mounted, probed)
+		t.Fatalf("public, page and app routes %q, A10 probes %q: every one needs probes", mounted, probed)
 	}
 
 	for _, route := range probed {

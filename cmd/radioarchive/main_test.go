@@ -125,6 +125,22 @@ func TestIntegrationNoAdminAPI(t *testing.T) {
 		t.Errorf("the binary's public routes are %q, want the public API's %q", got, want)
 	}
 
+	// Its pages (ADR 0017) are the public API's, and no others.
+	got, want = nil, nil
+	for _, r := range api.Routes() {
+		if r.Kind == server.PageRoute {
+			got = append(got, r.Pattern)
+		}
+	}
+	for _, p := range public.New(nil, nil).Pages() {
+		want = append(want, p.Pattern)
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if len(want) == 0 || !slices.Equal(got, want) {
+		t.Errorf("the binary's pages are %q, want the public API's %q", got, want)
+	}
+
 	// And the browser app's routes, which the harness probes too.
 	got, want = nil, nil
 	for _, r := range api.Routes() {

@@ -179,21 +179,32 @@ $never"
 	test "$got" = "$gone" || fail "hidden $id's details differ from a call never stored"
 done
 
-# The app shell built into the binary: a hidden call's path answers exactly
-# as a call's never stored, in any look, and names none of 1003's calls.
-# (The page is static: the comparison, not a search for "1003", is the
-# check, as its asset names are hashes.)
+# Call links (R61, R74; ADR 0017), the app's page built into the binary: the
+# public call's names its talkgroup and its start in the API's TZ, with no
+# recording URL; a hidden call's answers exactly as a call's never stored,
+# 404, the app's own page, in any look, and names none of 1003's calls.
+# (The page is otherwise static: the comparison, not a search for "1003",
+# is the check, as its asset names are hashes.)
+link=$(answer GET "/calls/$pub")
+echo "$link" | grep -q '^HTTP/1.1 200' || fail "the public call's link: $link"
+echo "$link" | grep -q '<meta property="og:title" content="Dispatch North" />' || fail "the public call's preview: $link"
+echo "$link" | grep -q '<meta property="og:description" content="[A-Z][a-z][a-z] [0-9]* [A-Z][a-z][a-z] 20[0-9][0-9], [0-9:]* [A-Z+0-9-]*" />' ||
+	fail "the public call's preview time: $link"
+if echo "$link" | grep -E -q '/api/|recording|\.opus|og:audio'; then fail "the public call's preview holds a recording: $link"; fi
 never=$(answer GET /calls/6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f)
-echo "$never" | grep -q '^HTTP/1.1 200' || fail "the app shell: $never"
+echo "$never" | grep -q '^HTTP/1.1 404' || fail "a call never stored's link: $never"
 echo "$never" | grep -q '_app/immutable' || fail "the binary has no app built in: $never"
-for id in $hidden; do
+if echo "$never" | grep -q 'og:title'; then fail "a call never stored's link has a preview: $never"; fi
+test "$(curl -sS "$api/calls/6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f")" = "$(curl -sS "$api/")" ||
+	fail "a call never stored's link isn't the app's own page"
+for id in $hidden 1003 not-a-call; do
 	for cookie in '' 'look=console; theme=dark'; do
 		got=$(answer GET "/calls/$id" -H "Cookie: $cookie")
 		want=$(answer GET /calls/6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f -H "Cookie: $cookie")
-		test "$got" = "$want" || fail "the app shell for hidden $id differs from a call never stored:
+		test "$got" = "$want" || fail "the link of $id differs from a call never stored's:
 $got
 $want"
-		if echo "$got" | grep -q "$id"; then fail "the app shell names hidden call $id"; fi
+		if [ ${#id} -eq 36 ] && echo "$got" | grep -q "$id"; then fail "the link names hidden call $id"; fi
 	done
 done
 

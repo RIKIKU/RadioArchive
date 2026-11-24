@@ -25,6 +25,15 @@
 //	go run ./testing/webfixture <database URL> talkgroup <ID> delay <minutes>
 //	go run ./testing/webfixture <database URL> talkgroup <ID> alert|led <name|null>
 //	go run ./testing/webfixture <database URL> calls <recorder name> <recordings dir>
+//	go run ./testing/webfixture <database URL> call-start <recorder name> <talkgroup> <unit>
+//	go run ./testing/webfixture <database URL> call-end <call ID> <recordings dir>
+//	go run ./testing/webfixture <database URL> call-delete <call ID> <recordings dir>
+//
+// A16's browser test (issue #80) follows one call's link through its life:
+// `call-start` stores a call in progress (and prints its ID), `call-end`
+// ends it with its recording, as the recorder client's upload would, and
+// `call-delete` deletes its row and file, as retention does. Like the
+// talkgroup changes, they go when the binary serves the admin API (M4).
 //
 // The Recent calls page's tests (issue #79) need an archive to search:
 // `calls` stores made-up calls as Bench's, by the hour before now, with
@@ -111,9 +120,12 @@ func main() {
 	talkgroup := len(os.Args) == 6 && os.Args[2] == "talkgroup"
 	calls := len(os.Args) == 5 && os.Args[2] == "calls"
 	one := len(os.Args) == 7 && os.Args[2] == "call"
-	if len(os.Args) != 2 && len(os.Args) != 3 && !talkgroup && !calls && !one {
+	a16 := (len(os.Args) == 6 && os.Args[2] == "call-start") ||
+		(len(os.Args) == 5 && (os.Args[2] == "call-end" || os.Args[2] == "call-delete"))
+	if len(os.Args) != 2 && len(os.Args) != 3 && !talkgroup && !calls && !one && !a16 {
 		fmt.Fprintln(os.Stderr, "usage: webfixture <database URL> [recorder name]\n       webfixture <database URL> talkgroup <ID> state|delay <value>\n"+
-			"       webfixture <database URL> calls <recorder name> <recordings dir>\n       webfixture <database URL> call <recorder name> <recordings dir> <talkgroup> <unit>")
+			"       webfixture <database URL> calls <recorder name> <recordings dir>\n       webfixture <database URL> call <recorder name> <recordings dir> <talkgroup> <unit>\n"+
+			"       webfixture <database URL> call-start <recorder name> <talkgroup> <unit>\n       webfixture <database URL> call-end|call-delete <call ID> <recordings dir>")
 		os.Exit(2)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -124,6 +136,28 @@ func main() {
 		os.Exit(1)
 	}
 	defer conn.Close(context.Background())
+	if a16 {
+		var err error
+		switch os.Args[2] {
+		case "call-start":
+			tg, err1 := strconv.ParseInt(os.Args[4], 10, 32)
+			unit, err2 := strconv.ParseInt(os.Args[5], 10, 64)
+			if err1 != nil || err2 != nil {
+				fmt.Fprintln(os.Stderr, "webfixture: call-start: the talkgroup and the unit are numbers")
+				os.Exit(2)
+			}
+			err = startCall(ctx, conn, os.Args[3], int32(tg), unit)
+		case "call-end":
+			err = endCall(ctx, conn, os.Args[3], os.Args[4])
+		case "call-delete":
+			err = deleteCall(ctx, conn, os.Args[3], os.Args[4])
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "webfixture: %s: %v\n", os.Args[2], err)
+			os.Exit(1)
+		}
+		return
+	}
 	if calls {
 		if err := storeCalls(ctx, conn, os.Args[3], os.Args[4], time.Now()); err != nil {
 			fmt.Fprintln(os.Stderr, "webfixture: calls:", err)
