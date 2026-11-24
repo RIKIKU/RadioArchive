@@ -14,14 +14,14 @@
 
 ALTER TABLE tags
     ADD COLUMN alert text CHECK (alert IN ('none', 'beep', 'chime', 'pip', 'tone')),
-    ADD COLUMN led_colour text CHECK (led_colour IN ('none', 'red', 'orange', 'amber', 'green',
-                                                      'teal', 'blue', 'purple', 'pink')),
+    ADD COLUMN led_colour text CHECK (led_colour IN ('none', 'red', 'orange', 'yellow', 'green',
+                                                      'cyan', 'blue', 'purple', 'pink')),
     ADD COLUMN sort_order integer NOT NULL DEFAULT 0;
 
 ALTER TABLE systems
     ADD COLUMN alert text CHECK (alert IN ('none', 'beep', 'chime', 'pip', 'tone')),
-    ADD COLUMN led_colour text CHECK (led_colour IN ('none', 'red', 'orange', 'amber', 'green',
-                                                      'teal', 'blue', 'purple', 'pink')),
+    ADD COLUMN led_colour text CHECK (led_colour IN ('none', 'red', 'orange', 'yellow', 'green',
+                                                      'cyan', 'blue', 'purple', 'pink')),
     ADD COLUMN sort_order integer NOT NULL DEFAULT 0;
 
 -- R22: whose or where a talkgroup is. A talkgroup is in any number of them.
@@ -29,8 +29,8 @@ CREATE TABLE groups (
     id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name       text NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 100),
     alert      text CHECK (alert IN ('none', 'beep', 'chime', 'pip', 'tone')),
-    led_colour text CHECK (led_colour IN ('none', 'red', 'orange', 'amber', 'green',
-                                          'teal', 'blue', 'purple', 'pink')),
+    led_colour text CHECK (led_colour IN ('none', 'red', 'orange', 'yellow', 'green',
+                                          'cyan', 'blue', 'purple', 'pink')),
     sort_order integer NOT NULL DEFAULT 0
 );
 
@@ -50,8 +50,8 @@ CREATE INDEX talkgroup_groups_group ON talkgroup_groups (group_id);
 ALTER TABLE talkgroups
     ADD COLUMN delay_minutes integer NOT NULL DEFAULT 0 CHECK (delay_minutes BETWEEN 0 AND 1440),
     ADD COLUMN alert text CHECK (alert IN ('none', 'beep', 'chime', 'pip', 'tone')),
-    ADD COLUMN led_colour text CHECK (led_colour IN ('none', 'red', 'orange', 'amber', 'green',
-                                                      'teal', 'blue', 'purple', 'pink')),
+    ADD COLUMN led_colour text CHECK (led_colour IN ('none', 'red', 'orange', 'yellow', 'green',
+                                                      'cyan', 'blue', 'purple', 'pink')),
     ADD COLUMN sort_order integer NOT NULL DEFAULT 0,
     ADD COLUMN fireground_channel integer CHECK (fireground_channel >= 0);
 

@@ -13,7 +13,7 @@ A talkgroup with no alert or LED colour of its own takes its **tag's**, then its
 | Part | Choice |
 |---|---|
 | **New fields** (migration 00007) | Talkgroups: `delay_minutes` (0-1,440), `alert`, `led_colour`, `sort_order`, `fireground_channel`. Tags and systems: `alert`, `led_colour`, `sort_order`. A `groups` table (name, alert, LED colour, sort order) and `talkgroup_groups` |
-| **LED colours** | `red`, `orange`, `amber`, `green`, `teal`, `blue`, `purple`, `pink`, or `none`. Names only; ArchiveUx defines what they look like |
+| **LED colours** | `red`, `orange`, `yellow`, `green`, `cyan`, `blue`, `purple`, `pink`, or `none`. Names only; the same names as ArchiveUx 0.3.0's LED tokens (`--led-<name>`), which define what they look like |
 | **Alerts** | `beep`, `chime`, `pip`, `tone`, or `none`. Names only; the frontend ships the sounds |
 | **Unset (null)** | Taken from the tag, then the groups in order, then the system. `none` means no alert or no colour, and isn't taken from anywhere |
 | **Sort order** | A whole number, default 0, ties broken by ID or name. A talkgroup's orders it within its system; a tag's, group's and system's order them among tags, groups and systems. Not inherited |
