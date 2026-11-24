@@ -76,8 +76,18 @@ jobs:
   # Microsoft's Playwright image at the version web/package-lock.json locks
   # (by digest), so the browsers and their libraries are already there, with
   # the database as a service container.
+  #
+  # One job per browser (Playwright's --project), side by side: each builds
+  # the app and the binaries (about a minute) and has its own database and
+  # recorder, so one browser's one-at-a-time @live tests don't wait on
+  # another's. fail-fast is off: one browser's failure doesn't cancel the
+  # others. By hand, e2e-web.sh with no --project runs all three.
   web:
-    name: Browser app and browser tests (Chromium, Firefox, WebKit)
+    name: Browser tests (${{ matrix.browser }})
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     container:
@@ -129,12 +139,12 @@ jobs:
       - name: Build, then the browser tests against the binary
         id: e2e
         timeout-minutes: 40
-        run: sh scripts/ci/e2e-web.sh
+        run: sh scripts/ci/e2e-web.sh --project=${{ matrix.browser }}
       - name: Upload the Playwright report
         if: failure() || cancelled()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: playwright-report-${{ github.run_id }}-${{ github.run_attempt }}
+          name: playwright-report-${{ matrix.browser }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             web/playwright-report/
             web/test-results/

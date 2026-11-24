@@ -6,6 +6,9 @@
 #
 #   sh scripts/ci/e2e-web.sh [playwright arguments]
 #
+# With no arguments the tests run in all three browsers; CI runs one
+# browser per job, with --project=chromium, firefox or webkit.
+#
 # Needs Go, a C compiler and libopus (the recorder client is cgo), Node with
 # web/'s dependencies installed (npm ci), and Playwright's browsers. Firefox
 # plays Web Audio only to a sound server, so where `pulseaudio` is installed
