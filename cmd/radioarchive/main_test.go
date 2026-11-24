@@ -16,19 +16,24 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/version"
 )
 
-// TestRetentionSettings: RECORDINGS_MIN_FREE and NIGHTLY_AT are checked
-// at start.
+// TestRetentionSettings: RECORDINGS_MIN_FREE, RECORDINGS_EARLY_DELETE_FLOOR
+// and NIGHTLY_AT are checked at start.
 func TestRetentionSettings(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
-	for _, c := range []struct{ minFree, at, want string }{
-		{"0", "", "RECORDINGS_MIN_FREE"},
-		{"100%", "", "RECORDINGS_MIN_FREE"},
-		{"5%", "25:00", "NIGHTLY_AT"},
+	for _, c := range []struct{ minFree, floor, at, want string }{
+		{"0", "", "", "RECORDINGS_MIN_FREE"},
+		{"100%", "", "", "RECORDINGS_MIN_FREE"},
+		{"5%", "24", "", "RECORDINGS_EARLY_DELETE_FLOOR"},
+		{"5%", "0s", "", "RECORDINGS_EARLY_DELETE_FLOOR"},
+		{"5%", "-1h", "", "RECORDINGS_EARLY_DELETE_FLOOR"},
+		{"5%", "24h", "25:00", "NIGHTLY_AT"},
 	} {
 		t.Setenv("RECORDINGS_MIN_FREE", c.minFree)
+		t.Setenv("RECORDINGS_EARLY_DELETE_FLOOR", c.floor)
 		t.Setenv("NIGHTLY_AT", c.at)
 		if _, err := retentionJob(nil, log); err == nil || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("RECORDINGS_MIN_FREE=%q NIGHTLY_AT=%q: %v, want an error naming %s", c.minFree, c.at, err, c.want)
+			t.Errorf("RECORDINGS_MIN_FREE=%q RECORDINGS_EARLY_DELETE_FLOOR=%q NIGHTLY_AT=%q: %v, want an error naming %s",
+				c.minFree, c.floor, c.at, err, c.want)
 		}
 	}
 }

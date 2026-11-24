@@ -19,8 +19,9 @@ One package, `internal/retention`, deletes what's past the retention period. A g
 | **One server** | `pg_try_advisory_lock` on a session held for the run. The run checks again, holding it, that it's still due. The `jobs` row (`nightly`, `low_disk`) records what each run was for, what it did and whether it failed |
 | **Order** | Rows first, in batches of 1,000, each committed; then the batch's files. A file that can't be removed has no row, so the orphan sweep removes it later |
 | **Orphan files** | `<id[:2]>/<id>.opus` with no row naming it, last written more than 24 h before the run. Files in `.incoming` the same. Nothing else on the volume is touched |
-| **Low disk** | Free below `RECORDINGS_MIN_FREE` (default 5 %): delete the oldest call, hidden ones alike, and its file, measure again, until it isn't below or no call is left. Logged and counted as "retention shortened", recorded as a `low_disk` run |
-| **Warning** | `GET /api/v1/admin/retention` gives the volume's free space and `state`: `ok`, `warning` below 15 %, `low` below the minimum, with a message for the last two |
+| **Low disk** | Free below `RECORDINGS_MIN_FREE` (default 5 %): delete the oldest call, hidden ones alike, and its file, measure again, until it isn't below or no call older than the floor is left. Logged and counted as "retention shortened", recorded as a `low_disk` run |
+| **Floor** | Never a call that started within `RECORDINGS_EARLY_DELETE_FLOOR` (a Go duration, default `24h`) of the check, by `started_at` (R88, owner, 2026-11-24). Still below the minimum with only those left: stop, log an error, count `Full` and raise "recordings volume full", until the free space is back at the minimum |
+| **Warning** | `GET /api/v1/admin/retention` gives the volume's free space and `state`: `ok`, `warning` below 15 %, `low` below the minimum, `full` below it with only calls within the floor left, with a message for the last three |
 | **Tests** | `retention.Config` takes the clock (`Now`) and the free-space measure (`FreeSpace`). Tests call `RunNightly` and `CheckDisk`; the binary only runs `Run`, on its schedule |
 
 ## Why rows before files
@@ -42,7 +43,11 @@ An upload (ADR 0002) writes its file in `.incoming`, renames it to `<id[:2]>/<id
 
 R88 says the oldest recordings go "until it's above". The check deletes one call at a time and measures again, so it deletes no more than it must. It deletes the oldest call whether or not it has a recording: one without has no file to free, but it's older than anything kept, so it's past retention as shortened. The log line gives the free space before and after and when the oldest call kept started, which is the retention in force.
 
-The check runs every minute, not only at night, because a disk fills by day. It can't tell recordings from whatever else is on the volume: if something else fills it, recordings go until none is left, and the server then logs an error each check. That's the spec's rule; the sizing formula in R88's docs, the 15 % warning and the alert (R91) are there so it doesn't come to it.
+The check runs every minute, not only at night, because a disk fills by day. It can't tell recordings from whatever else is on the volume: if something else fills it, recordings go until only the floor's are left. That's the spec's rule; the sizing formula in R88's docs, the 15 % warning and the alert (R91) are there so it doesn't come to it.
+
+### The floor
+
+The owner set a floor (R88, 2026-11-24): low disk never deletes a call that started in the last 24 hours (`RECORDINGS_EARLY_DELETE_FLOOR`), so a volume filled by something else can't take the day's calls, which are the ones most likely wanted. The check's `DELETE` only takes the oldest call that started before now less the floor, by the job's clock. With none left and the volume still below the minimum, it stops and raises "recordings volume full": logged as an error and counted (`Full`) once when raised, not each minute, shown to admins as the `full` state, and alerted (R91). The state is the server's, in memory, set by the check; it clears, with a log line, at the first check that finds the free space back at the minimum, and admins stop seeing `full` as soon as it is, even before that check. A check while full tries again, so calls that have aged past the floor since go.
 
 `statfs` is Linux's; elsewhere (where the server doesn't run, ADR 0001) the check logs once that it can't measure and does nothing.
 
@@ -53,6 +58,7 @@ The issue asks for a controllable clock and a test-only trigger, fenced like the
 ## Consequences
 
 - Retention is the period from a call's start to the nightly run after it ends, so a call is kept up to a day past it: the 30th day's calls go at the 31st night's run. A30 checks 29 and 31 days.
-- Counters (`Expired`, `Orphans`, `Shortened`) are in memory until `/metrics` exists (R90); the alert on "retention shortened" (R91) will read `Shortened`, and the `low_disk` row says when it last happened.
+- Counters (`Expired`, `Orphans`, `Shortened`, `Full`) are in memory until `/metrics` exists (R90); the alert on "retention shortened" (R91) will read `Shortened`, the one on "recordings volume full" `Full` and the `full` state, and the `low_disk` row says when retention was last shortened.
+- With several API servers, only the one whose check stopped at the floor shows `full`; the others show `low` until their own check, within a minute, finds the same, and each counts it.
 - The Settings page (R84) is M4's, on this API.
 - The compose-based checks set retention to 3,650 days, because the fixture's calls are dated November 2025.

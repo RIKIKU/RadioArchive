@@ -86,6 +86,18 @@ func TestDiskState(t *testing.T) {
 			t.Errorf("%d of 1000 free: %+v, %v; want %s", c.free, d, err, c.state)
 		}
 	}
+	// Full shows only while below the minimum.
+	j.full = true
+	for _, c := range []struct {
+		free  uint64
+		state DiskState
+	}{{49, DiskFull}, {50, DiskWarning}, {150, DiskOK}} {
+		space = Space{Free: c.free, Total: 1000}
+		if d, err := j.Disk(); err != nil || d.State != c.state {
+			t.Errorf("%d of 1000 free, full raised: %+v, %v; want %s", c.free, d, err, c.state)
+		}
+	}
+	j.full = false
 	if (Space{}).FreeFraction() != 0 {
 		t.Error("an empty volume isn't 0 free")
 	}

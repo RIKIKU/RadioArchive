@@ -456,6 +456,91 @@ func TestIntegrationA30LowDisk(t *testing.T) {
 	e.wantKept(t, "at the end", ids[3:]...)
 }
 
+// TestIntegrationLowDiskFloor: low disk never deletes a call from the last
+// 24 hours. With the free space stuck below the minimum, the calls older
+// than the floor go, oldest first, those within it stay, and "recordings
+// volume full" is raised and counted, once, until the space recovers (R88).
+func TestIntegrationLowDiskFloor(t *testing.T) {
+	e := newEnv(t)
+	_, key := e.recorder(t)
+	e.era(t)
+	ctx := context.Background()
+
+	// Every other test's calls are from 2025 on: within the floor of the
+	// era's clock, so out of reach too.
+	old := []string{
+		e.storeAt(t, key, 1, 1001, eraNow.Add(-10*day)),
+		e.storeAt(t, key, 2, 1003, eraNow.Add(-3*day)),
+		e.storeAt(t, key, 3, 1001, eraNow.Add(-25*time.Hour)),
+	}
+	recent := []string{
+		e.storeAt(t, key, 4, 1001, eraNow.Add(-23*time.Hour)),
+		e.storeAt(t, key, 5, 1003, eraNow.Add(-time.Hour)),
+	}
+
+	var measured atomic.Int64
+	stuck := func() (retention.Space, error) {
+		if measured.Add(1) > 100 {
+			return retention.Space{}, errors.New("measured too often")
+		}
+		return retention.Space{Free: 20, Total: 1000}, nil
+	}
+	e.disk.set(stuck)
+
+	res, err := e.job.CheckDisk(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Calls != 3 || res.Recordings != 3 || !res.Full || res.OldestKept == nil ||
+		!res.OldestKept.Equal(eraNow.Add(-23*time.Hour)) {
+		t.Errorf("the check: %+v, want the 3 older than the floor deleted and full", res)
+	}
+	e.wantGone(t, "older than the floor", old...)
+	e.wantKept(t, "within the floor", recent...)
+	if got := e.job.Stat.Shortened.Load(); got != 3 {
+		t.Errorf("retention shortened counted %d recordings, want 3", got)
+	}
+	if got := e.job.Stat.Full.Load(); got != 1 {
+		t.Errorf("volume full raised %d times, want 1", got)
+	}
+	st := e.retentionState(t)
+	if st.Disk == nil || st.Disk.State != "full" || !strings.Contains(st.Disk.Message, "recordings volume full") ||
+		!strings.Contains(st.Disk.Message, "24 hours") {
+		t.Errorf("disk while full: %+v", st.Disk)
+	}
+
+	// Still stuck: nothing more goes, and it isn't raised again.
+	if res, err := e.job.CheckDisk(ctx); err != nil || res.Calls != 0 || !res.Full {
+		t.Errorf("a second check: %+v, %v; want nothing deleted, still full", res, err)
+	}
+	e.wantKept(t, "after a second check", recent...)
+	if got := e.job.Stat.Full.Load(); got != 1 {
+		t.Errorf("volume full raised %d times after a second check, want 1", got)
+	}
+
+	// The space recovers: the state clears.
+	e.disk.set(func() (retention.Space, error) { return retention.Space{Free: 60, Total: 1000}, nil })
+	if res, err := e.job.CheckDisk(ctx); err != nil || res.Calls != 0 || res.Full {
+		t.Errorf("a check at 6 %%: %+v, %v; want nothing deleted", res, err)
+	}
+	if st := e.retentionState(t); st.Disk == nil || st.Disk.State != "warning" {
+		t.Errorf("disk after recovering: %+v, want a warning", st.Disk)
+	}
+
+	// Low again: it's raised again, and the calls within the floor stay.
+	e.disk.set(stuck)
+	if st := e.retentionState(t); st.Disk == nil || st.Disk.State != "low" {
+		t.Errorf("disk low again, before a check: %+v, want low", st.Disk)
+	}
+	if res, err := e.job.CheckDisk(ctx); err != nil || res.Calls != 0 || !res.Full {
+		t.Errorf("a check low again: %+v, %v; want nothing deleted, full", res, err)
+	}
+	if got := e.job.Stat.Full.Load(); got != 2 {
+		t.Errorf("volume full raised %d times, want 2", got)
+	}
+	e.wantKept(t, "at the end", recent...)
+}
+
 // TestIntegrationRetentionSetting: the period is a setting changed through
 // the admin API. Lengthening it just saves it; shortening it needs
 // confirming, and the answer says how many recordings will go, hidden ones
