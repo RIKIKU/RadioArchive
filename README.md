@@ -76,6 +76,12 @@ curl -X QUERY -H 'Content-Type: application/json' --data '{"ids":["<call ID>"]}'
 curl -H 'Range: bytes=0-999' http://127.0.0.1:8080/api/v1/calls/<call ID>/recording
 # The same file to save, named for the call in the deployment's TZ.
 curl -OJ http://127.0.0.1:8080/api/v1/calls/<call ID>/download
+# Up to 500 calls, loose and in conversations, as one zip, the same bytes
+# every time (docs/adr/0015-zips-their-url-packing-parts-and-resuming.md).
+# The browser's GET packs the list into the URL, so a download resumes.
+curl -OJ -X POST -H 'Content-Type: application/json' \
+  --data '{"calls":["<call ID>"],"conversations":[{"name":"Structure fire","note":"","calls":["<call ID>"]}]}' \
+  http://127.0.0.1:8080/api/v1/zip
 ```
 
 The live feed is one WebSocket per listener, `/api/v1/live`: the listener

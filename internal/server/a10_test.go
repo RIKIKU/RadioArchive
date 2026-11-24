@@ -52,6 +52,12 @@ var a10Probes = map[string][]a10Probe{
 		}},
 		{"HEAD", func(f *a10World, id string) *http.Request { return f.req("HEAD", public.DownloadURL(id), "") }},
 	},
+	// Zips (R65, ADR 0015): the list packed in a GET URL, or in a QUERY or
+	// POST body. A call left out leaves no trace: the zip of a list naming
+	// it is the zip of the list without it.
+	"GET " + public.ZipPath:       zipProbes("GET"),
+	"QUERY " + public.ZipListPath: zipProbes("QUERY"),
+	"POST " + public.ZipListPath:  zipProbes("POST"),
 	// The app shell (web): its one page, sent for any path outside the API,
 	// a call's among them, and in the listener's saved look; its files; and
 	// robots.txt. None of it may depend on the call a path names.
@@ -141,6 +147,39 @@ func callListProbes(method string) []a10Probe {
 			return f.req(method, public.CallsPath, fmt.Sprintf(`{"ids":[%q,%q,%q]}`, f.public[0], id, f.public[1]))
 		}},
 	}
+}
+
+func zipProbes(method string) []a10Probe {
+	probes := []a10Probe{
+		{"alone", func(f *a10World, id string) *http.Request {
+			return f.zipReq(method, public.ZipRequest{Calls: []string{id}})
+		}},
+		{"between public calls", func(f *a10World, id string) *http.Request {
+			return f.zipReq(method, public.ZipRequest{Calls: []string{f.public[0], id, f.public[1]}})
+		}},
+		{"in a conversation", func(f *a10World, id string) *http.Request {
+			return f.zipReq(method, public.ZipRequest{Calls: []string{f.public[1]},
+				Conversations: []public.ZipConversation{{Name: "Structure fire", Note: "A note", Calls: []string{id, f.public[0]}}}})
+		}},
+		// The only loose call, beside a conversation: left out, it leaves
+		// the zip one conversation's, named for it.
+		{"loose beside a conversation", func(f *a10World, id string) *http.Request {
+			return f.zipReq(method, public.ZipRequest{Calls: []string{id},
+				Conversations: []public.ZipConversation{{Name: "Structure fire", Calls: f.public}}})
+		}},
+	}
+	if method == "GET" {
+		probes = append(probes,
+			a10Probe{"a range", func(f *a10World, id string) *http.Request {
+				r := f.zipReq(method, public.ZipRequest{Calls: []string{id}})
+				r.Header.Set("Range", "bytes=100-")
+				return r
+			}},
+			a10Probe{"HEAD", func(f *a10World, id string) *http.Request {
+				return f.zipReq("HEAD", public.ZipRequest{Calls: []string{id}})
+			}})
+	}
+	return probes
 }
 
 type a10Probe struct {

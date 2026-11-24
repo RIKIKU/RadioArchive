@@ -110,6 +110,51 @@ grep -iq '^content-disposition: attachment; filename="[0-9]\{4\}-[0-9][0-9]-[0-9
 docker compose cp "api:/var/lib/radioarchive/recordings/$(psql "SELECT c.recording_path $calls AND c.talkgroup = 1001")" "$media/stored.opus" >/dev/null
 test "$(sha256sum <"$media/b")" = "$(sha256sum <"$media/stored.opus")" || fail "the download isn't the stored file"
 
+# Zips (R65, ADR 0015): by GET (the list packed in the URL), QUERY and
+# POST, a list of the public call and 1003's calls gives the public call's
+# zip alone, byte for byte and header for header, and nothing of 1003.
+# zipurl ID...: the GET path of a zip of these loose calls (fewer than 128).
+zipurl() {
+	hex=$(printf '010000%02x' "$#"; for id in "$@"; do printf '%s' "$id" | tr -d -; done; printf '00')
+	printf '/api/v1/zip/%s' "$(printf '%s' "$hex" | xxd -r -p | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+}
+# zipanswer NAME METHOD PATH [curl args]: the answer's headers (but Date)
+# in $media/NAME.h and its body in $media/NAME.b.
+zipanswer() {
+	n=$1 method=$2 path=$3
+	shift 3
+	curl -sS -X "$method" -D "$media/$n.raw" -o "$media/$n.b" "$@" "$api$path"
+	grep -iv '^date:' "$media/$n.raw" | tr -d '\r' >"$media/$n.h"
+}
+hiddenids=$(printf ',"%s"' $hidden)
+for method in GET QUERY POST; do
+	if [ "$method" = GET ]; then
+		zipanswer zpub GET "$(zipurl "$pub")"
+		zipanswer zmix GET "$(zipurl "$pub" $hidden)"
+	else
+		zipanswer zpub "$method" /api/v1/zip -H 'Content-Type: application/json' --data "{\"calls\":[\"$pub\"]}"
+		zipanswer zmix "$method" /api/v1/zip -H 'Content-Type: application/json' --data "{\"calls\":[\"$pub\"$hiddenids]}"
+	fi
+	grep -q '^HTTP/1.1 200' "$media/zpub.h" || fail "$method zip of the public call: $(cat "$media/zpub.h")"
+	grep -iq '^content-type: application/zip' "$media/zpub.h" || fail "$method zip's type: $(cat "$media/zpub.h")"
+	test "$(head -c 2 "$media/zpub.b")" = PK || fail "$method zip isn't a zip"
+	cmp -s "$media/zpub.h" "$media/zmix.h" || fail "$method zip with 1003's calls has other headers:
+$(cat "$media/zmix.h")
+than the public call's:
+$(cat "$media/zpub.h")"
+	cmp -s "$media/zpub.b" "$media/zmix.b" || fail "$method zip with 1003's calls isn't the public call's zip"
+	if sed "s/$pub//g" "$media/zmix.b" | grep -a -E -q '1003|Admin|ADMIN'; then fail "$method zip leaks 1003"; fi
+	for id in $hidden; do
+		if grep -a -q "$id" "$media/zmix.b"; then fail "$method zip names hidden call $id"; fi
+	done
+done
+# Resumed: a range of the GET zip is the rest of the whole.
+zipanswer zall GET "$(zipurl "$pub" $hidden)"
+etag=$(grep -i '^etag:' "$media/zall.h" | cut -d' ' -f2-)
+zipanswer zrest GET "$(zipurl "$pub" $hidden)" -H 'Range: bytes=100-' -H "If-Range: $etag"
+grep -q '^HTTP/1.1 206' "$media/zrest.h" || fail "the zip's range: $(cat "$media/zrest.h")"
+tail -c +101 "$media/zall.b" | cmp -s - "$media/zrest.b" || fail "the zip's range isn't the rest of it"
+
 # Each of 1003's calls answers exactly as a call that was never stored.
 never=$(answer GET /api/v1/calls/6f1d2c3b-4a59-4e8f-9d7c-0b1a2c3d4e5f/recording -H 'Range: bytes=0-')
 echo "$never" | grep -q '^HTTP/1.1 404' || fail "a call never stored: $never"
