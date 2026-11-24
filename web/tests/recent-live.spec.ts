@@ -25,6 +25,40 @@ function storeCall(talkgroup: number, unit: number): Promise<{ id: string; ended
 	);
 }
 
+/**
+ * A phone's dock during a replay (#108): the replay above live listening,
+ * each set of controls in one row of whole targets, the replay's details in
+ * at most two lines, and the dock no more than a third of the screen.
+ */
+async function compactDock(page: Page, what: string) {
+	// The look's --target, in pixels (ArchiveUx: 44 px on touch screens).
+	const target = await page.evaluate(() => {
+		const probe = document.body.appendChild(document.createElement('div'));
+		probe.style.width = 'var(--target)';
+		const w = probe.getBoundingClientRect().width;
+		probe.remove();
+		return w;
+	});
+	expect(target).toBeGreaterThan(0);
+	const sameRow = async (controls: ReturnType<typeof dock>, n: string) => {
+		const boxes = await controls.getByRole('button').evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => ({ top: r.top, width: r.width, height: r.height })));
+		expect(boxes.length, n).toBeGreaterThan(0);
+		for (const b of boxes) {
+			expect(b.top, `${n} in one row, ${what}`).toBe(boxes[0].top);
+			expect(Math.min(b.width, b.height), `${n} whole targets, ${what}`).toBeGreaterThanOrEqual(target - 0.5);
+		}
+	};
+	const replay = dock(page).locator('.replay');
+	await sameRow(dock(page).getByRole('group', { name: 'Replay controls' }), 'the replay controls');
+	await sameRow(dock(page).getByRole('group', { name: 'Player controls' }), 'the player controls');
+	const [details, line] = await Promise.all([replay.locator('.np-unit').boundingBox(), replay.locator('.np-unit .elapsed').boundingBox()]);
+	expect(details!.height, `the replay's details in at most two lines, ${what}`).toBeLessThan(2.5 * line!.height);
+	const player = await dock(page).locator('.player').boundingBox();
+	expect(player!.y, `live listening under the replay, ${what}`).toBeGreaterThanOrEqual((await replay.boundingBox())!.y + (await replay.boundingBox())!.height);
+	const [docked, screen] = [(await dock(page).boundingBox())!, page.viewportSize()!];
+	expect(docked.height, `the dock is at most a third of the screen, ${what}`).toBeLessThanOrEqual(screen.height / 3);
+}
+
 /** The Recent calls page, reached from the menu, so the player keeps playing. */
 async function toRecent(page: Page) {
 	await page.getByRole('navigation').getByRole('link', { name: 'Recent calls' }).first().click();
@@ -176,6 +210,7 @@ test('@live R46: play from here plays the call, then the later ones oldest first
 				const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
 				expect(results.violations, `run playing, ${look} ${theme}, ${width} px`).toEqual([]);
 				expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width} px scrolls sideways`).toBeLessThanOrEqual(width);
+				if (width === 375) await compactDock(page, `${look} ${theme}`);
 				if (shots) {
 					await page.mouse.move(0, 0);
 					await page.locator(`[data-call-id="${b}"]`).scrollIntoViewIfNeeded();

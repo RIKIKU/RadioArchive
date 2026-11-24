@@ -201,6 +201,66 @@ test('no page shows 1003, "Admin" or its label, whatever the filters', async ({ 
 	expect(await page.locator('main').innerHTML()).toBe(hidden);
 });
 
+test('phones: a row is Play, the call and More actions on one line; More actions opens the other four under it; desktops show them in the row (#108)', async ({ page }) => {
+	await withSet(page);
+	await page.setViewportSize({ width: 375, height: 812 });
+	await page.goto('/recent');
+	await expect(rows(page)).toHaveCount(50);
+	const [first, second] = [rows(page).nth(0), rows(page).nth(1)];
+	const named = (row: typeof first) => ({
+		play: row.getByRole('button', { name: /^Play: Dispatch North/ }),
+		more: row.getByRole('button', { name: /^More actions: Dispatch North, / }),
+		fromHere: row.getByRole('button', { name: /^Play from here: Dispatch North/ }),
+		download: row.getByRole('link', { name: /^Download: Dispatch North/ }),
+		share: row.getByRole('button', { name: /^Share: Dispatch North/ }),
+		add: row.getByRole('button', { name: /^Add to basket: Dispatch North/ })
+	});
+	const a = named(first);
+	const b = named(second);
+	const four = (x: typeof a) => [x.fromHere, x.download, x.share, x.add];
+
+	// Closed: Play and More actions only, on the call's line, each a whole target.
+	await expect(a.more).toHaveAttribute('aria-expanded', 'false');
+	for (const x of four(a)) await expect(x).toBeHidden();
+	const box = async (l: typeof first) => (await l.boundingBox())!;
+	const [play, what, more] = [await box(a.play), await box(first.locator('.what')), await box(a.more)];
+	for (const [n, x] of [['Play', play], ['More actions', more]] as const) {
+		expect(x.width, `${n} is a whole target`).toBeGreaterThanOrEqual(44);
+		expect(x.height, `${n} is a whole target`).toBeGreaterThanOrEqual(44);
+		expect(x.y, `${n} is on the call's line`).toBeLessThan(what.y + what.height);
+		expect(x.y + x.height, `${n} is on the call's line`).toBeGreaterThan(what.y);
+	}
+	expect(what.x).toBeGreaterThan(play.x + play.width);
+	expect(more.x).toBeGreaterThanOrEqual(what.x + what.width);
+
+	// Open: the four, in order, under the call; it stays open while one says what it did.
+	await a.more.click();
+	await expect(a.more).toHaveAttribute('aria-expanded', 'true');
+	for (const x of four(a)) await expect(x).toBeVisible();
+	expect((await box(a.fromHere)).y).toBeGreaterThanOrEqual(what.y + what.height);
+	await expect(first.locator('.actions > *')).toHaveCount(4);
+	await a.add.click();
+	await expect(first.getByRole('status').filter({ hasText: 'Added to the basket' })).toBeVisible();
+	await expect(a.share).toBeVisible();
+	// One open at a time.
+	await b.more.click();
+	await expect(b.more).toHaveAttribute('aria-expanded', 'true');
+	await expect(a.more).toHaveAttribute('aria-expanded', 'false');
+	await expect(a.share).toBeHidden();
+	// Escape closes it, and focus inside it goes back to its button.
+	await b.share.focus();
+	await page.keyboard.press('Escape');
+	await expect(b.more).toHaveAttribute('aria-expanded', 'false');
+	await expect(b.more).toBeFocused();
+	await expect(b.share).toBeHidden();
+
+	// Desktops: no More actions, the four in the row.
+	await page.setViewportSize({ width: 1280, height: 900 });
+	await expect(a.more).toBeHidden();
+	for (const x of four(a)) await expect(x).toBeVisible();
+	await expect(a.add).toHaveAttribute('aria-pressed', 'true');
+});
+
 test("A17, browser half: Download on a row saves the stored file under R63's name", async ({ page }) => {
 	await withSet(page);
 	await page.goto('/recent?unit=2099');
@@ -264,6 +324,11 @@ test('axe: the list, the filters open, an error and an empty list, in both looks
 	};
 	await page.goto('/recent');
 	await check('list', () => expect(rows(page)).toHaveCount(50));
+	// A phone's More actions open on the first row with a recording (on a desktop the row is as before).
+	const recorded = rows(page).filter({ has: page.locator('.from-here') }).first();
+	await recorded.getByRole('button', { name: /^More actions: / }).click();
+	await check('actions-open', () => expect(recorded.getByRole('button', { name: /^Play from here: / })).toBeVisible());
+	await page.keyboard.press('Escape');
 	await openFilters(page);
 	await page.getByRole('radio', { name: 'These talkgroups' }).check();
 	await page.getByRole('combobox', { name: 'Add a talkgroup' }).fill('d');

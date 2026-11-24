@@ -21,6 +21,7 @@ Each row of the recent calls list has **Play from here**. It replays that call, 
 | **Stop replay** | Ends the run, and live listening resumes as if it had run out. Resume, Jump to live and Start listening end it too, as before |
 | **A call that can't be played** | Ends the run with ADR 0016's message ("This call isn't available any more."); live listening resumes. A page that can't be fetched ends the run after the calls already fetched, with "Couldn't load the calls after that one." |
 | **One replay, Play all** | Live listening resumes by itself after them too, on the same rule (ADR 0016 amended) |
+| **On a phone** (#108) | A row is Play, the call and **More actions**, which opens Play from here, Download, Share and Add to basket under the call. During a replay the dock stacks: the replay above live listening, each with its controls in one row. Desktops are unchanged |
 
 ## Oldest first, whatever the list shows
 
@@ -42,6 +43,12 @@ It resumes only what the replay paused. A listener who pressed Pause before repl
 
 Stop replay could have left live listening paused, as a way to stop everything. It doesn't: the owner wants live listening to carry on after a replay, and Stop replay is how a listener says they've heard enough of the archive. A listener who wants silence has Pause and Stop listening in the dock, beside it.
 
+## On a phone
+
+Play from here made four buttons with words on every row. At 375 px they wrapped onto three lines under the call, and a screen held about two calls (#108). On a phone a row now shows Play, the call and one **More actions** button (ArchiveUx's `more` icon, the name read out with the call's, as the dock's icon buttons are). It opens the row's other actions under the call, in words, as a disclosure (`aria-expanded`, `aria-controls`): the pattern of the side menu's group toggles and the account menu, which close on Escape and keep to `--target`. It isn't a floating menu, so it never sits under the dock, and Share's "Link copied" and its copy-by-hand field have room. It stays open while they say what they did, and only one row's is open at a time. Play stays outside it, because pressing the call is the row's main action. Play from here goes inside: a fourth icon beside Play would look like a second Play. ArchiveUx 0.4.1 has no general menu or disclosure component, so the list has its own, built from ArchiveUx's tokens and its pressed look.
+
+During a replay the dock had the replay and live listening side by side. The replay's details wrapped over six lines in a narrow column, and the dock took half the screen. On a phone the dock now stacks them. The replay's badge, name and group sit beside its three controls, each moving to the next line whole when there's no room, and its details go under both, across the width, wrapping only between their parts ("From here: call 2 of 3", the start time). A group longer than the line is shortened with an ellipsis, and is still read out whole. Live listening's status and queue share one small line above its row of controls. On a desktop the wrapper isn't drawn (`display: contents`), so the dock is as it was.
+
 ## The hidden-talkgroup gate
 
 The run fetches only what the list could: ADR 0013's public route, with the list's own filters, and each call's recording from the route's answer. It never names a call ID of its own, so it can't reach anything the list couldn't, and a talkgroup hidden mid-run is simply missing from the next page (R74).
@@ -54,6 +61,8 @@ The run fetches only what the list could: ADR 0013's public route, with the list
 | Play from here in a newest-first list plays the call, then the later ones oldest first, through pages of the route (the test's pages are one call long), with the same filters; the dock shows "call 2 of 3" and the start time; live calls queue meanwhile and play by themselves when the run is over | `web/tests/recent-live.spec.ts` (`@live`), Chromium, Firefox and WebKit |
 | One replay: live listening resumes by itself when it ends and on Stop replay; paused by the listener first, it stays paused | `recent-live.spec.ts` (`@live`) |
 | axe in both looks and themes at 375 and 1,280 px with a run playing in the dock; the list with its new button | `recent-live.spec.ts`, `recent.spec.ts` |
+| Phones: a row's Play and More actions on the call's line, the four under it once opened, one open at a time, Escape; desktops show the four in the row; axe with one open | `recent.spec.ts` |
+| Phones: during a run, each set of controls in one row of whole targets, the replay's details in at most two lines, the dock at most a third of the screen | `recent-live.spec.ts` (`@live`) |
 
 ## Consequences
 
