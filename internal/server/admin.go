@@ -40,13 +40,15 @@ type AdminAuthenticator interface {
 }
 
 // Admin serves the admin API's systems, attachments, talkgroups, rejected
-// calls and recordings (R11, R12, R17, R18, R21, R22, R34).
+// calls and recordings (R11, R12, R17, R18, R21, R22, R34), and, given
+// the recorder endpoints, the recorders' state and signals (R14).
 type Admin struct {
 	st   *store.Store
 	log  *slog.Logger
 	auth AdminAuthenticator
 	dir  string
 	ret  *retention.Job
+	rs   *Recorders
 }
 
 // WithRetention serves the retention setting and the recordings volume's
@@ -98,6 +100,11 @@ func WithAdmin(a *Admin) Option {
 		if a.ret != nil {
 			api.handle(AdminRoute, "GET "+AdminPath+"/retention", a.serve(a.getRetention))
 			api.handle(AdminRoute, "PUT "+AdminPath+"/retention", a.serve(a.putRetention))
+		}
+		if a.rs != nil {
+			api.handle(AdminRoute, "GET "+AdminPath+"/recorders", a.serve(a.listRecorders))
+			api.handle(AdminRoute, "GET "+AdminPath+"/recorders/{recorder}", a.serve(a.getRecorder))
+			api.handle(AdminRoute, "PATCH "+AdminPath+"/recorders/{recorder}", a.serve(a.patchRecorder))
 		}
 	}
 }

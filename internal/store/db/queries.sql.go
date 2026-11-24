@@ -1000,6 +1000,61 @@ func (q *Queries) ListGroups(ctx context.Context) ([]Group, error) {
 	return items, nil
 }
 
+const listRecorderSignals = `-- name: ListRecorderSignals :many
+
+SELECT r.id, r.name, r.client_version, r.client_out_of_date, r.client_seen_at,
+       r.last_call_at, r.quiet_after_minutes,
+       coalesce((SELECT array_agg(a.short_name ORDER BY a.short_name)
+                 FROM attachments a WHERE a.recorder_id = r.id), '{}')::text[] AS attached
+FROM recorders r
+WHERE r.retired_at IS NULL
+ORDER BY r.name
+`
+
+type ListRecorderSignalsRow struct {
+	ID                int64
+	Name              string
+	ClientVersion     *string
+	ClientOutOfDate   bool
+	ClientSeenAt      pgtype.Timestamptz
+	LastCallAt        pgtype.Timestamptz
+	QuietAfterMinutes *int32
+	Attached          []string
+}
+
+// Recorder signals (R14; ADR 0010).
+// Every active recorder, with what its signals need from the database: the
+// shortNames attached to a system, for the decode rate, and its last call
+// and quiet threshold.
+func (q *Queries) ListRecorderSignals(ctx context.Context) ([]ListRecorderSignalsRow, error) {
+	rows, err := q.db.Query(ctx, listRecorderSignals)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecorderSignalsRow
+	for rows.Next() {
+		var i ListRecorderSignalsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.ClientVersion,
+			&i.ClientOutOfDate,
+			&i.ClientSeenAt,
+			&i.LastCallAt,
+			&i.QuietAfterMinutes,
+			&i.Attached,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecorders = `-- name: ListRecorders :many
 SELECT id, name, created_at, key_rotated_at, retired_at
 FROM recorders
@@ -1639,6 +1694,27 @@ func (q *Queries) SetRecorderKey(ctx context.Context, arg SetRecorderKeyParams) 
 	return id, err
 }
 
+const setRecorderQuiet = `-- name: SetRecorderQuiet :one
+UPDATE recorders
+SET quiet_after_minutes = $1
+WHERE name = $2 AND retired_at IS NULL
+RETURNING id
+`
+
+type SetRecorderQuietParams struct {
+	QuietAfterMinutes *int32
+	Name              string
+}
+
+// Sets an active recorder's quiet threshold, in minutes; NULL is off. No
+// row: unknown or retired.
+func (q *Queries) SetRecorderQuiet(ctx context.Context, arg SetRecorderQuietParams) (int64, error) {
+	row := q.db.QueryRow(ctx, setRecorderQuiet, arg.QuietAfterMinutes, arg.Name)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const setSetting = `-- name: SetSetting :exec
 INSERT INTO settings (key, value) VALUES ($1, $2)
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
@@ -1759,6 +1835,25 @@ func (q *Queries) TalkgroupRejections(ctx context.Context, systemID *int64) ([]T
 		return nil, err
 	}
 	return items, nil
+}
+
+const touchRecorderCall = `-- name: TouchRecorderCall :exec
+UPDATE recorders
+SET last_call_at = greatest(last_call_at, $1::timestamptz)
+WHERE id = $2
+`
+
+type TouchRecorderCallParams struct {
+	At pgtype.Timestamptz
+	ID int64
+}
+
+// Records that a recorder delivered a call heard at the given time. It never
+// moves back: a recording uploaded late, from the client's queue, is an old
+// call.
+func (q *Queries) TouchRecorderCall(ctx context.Context, arg TouchRecorderCallParams) error {
+	_, err := q.db.Exec(ctx, touchRecorderCall, arg.At, arg.ID)
+	return err
 }
 
 const unattachedRejections = `-- name: UnattachedRejections :many

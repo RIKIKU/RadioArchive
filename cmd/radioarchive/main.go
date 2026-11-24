@@ -17,6 +17,9 @@
 //	RECORDINGS_EARLY_DELETE_FLOOR  calls that started within this are never
 //	                deleted early, as a Go duration (default 24h)
 //	NIGHTLY_AT      local time of the nightly retention run, HH:MM (default 03:00, in TZ)
+//	RECORDER_NOTICE_AFTER  how long a recorder is disconnected or deaf before
+//	                listeners see "Some talkgroups aren't being received
+//	                right now", as a Go duration (default 2m)
 package main
 
 import (
@@ -83,6 +86,19 @@ func recordingsDir() string {
 	return "/var/lib/radioarchive/recordings"
 }
 
+// recorderNoticeAfter is RECORDER_NOTICE_AFTER (R15).
+func recorderNoticeAfter() (time.Duration, error) {
+	v := os.Getenv("RECORDER_NOTICE_AFTER")
+	if v == "" {
+		return server.DefaultNoticeAfter, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("RECORDER_NOTICE_AFTER: %q isn't a duration above 0, like 2m", v)
+	}
+	return d, nil
+}
+
 func openStore(ctx context.Context) (*store.Store, error) {
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
@@ -97,6 +113,10 @@ func serve(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	noticeAfter, err := recorderNoticeAfter()
+	if err != nil {
+		return err
+	}
 	st, err := openStore(ctx)
 	if err != nil {
 		return err
@@ -112,6 +132,9 @@ func serve(log *slog.Logger) error {
 		RecordingsDir: recordingsDir(),
 		Live:          g.Live(),
 		ServerVersion: version.Version,
+		// The recorder notice goes out on the live feed (R15).
+		Notice:      g.Live(),
+		NoticeAfter: noticeAfter,
 	})
 	if err != nil {
 		return err

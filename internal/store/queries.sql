@@ -392,6 +392,36 @@ SET client_version = sqlc.arg(client_version),
     client_seen_at = now()
 WHERE id = sqlc.arg(id);
 
+-- Recorder signals (R14; ADR 0010).
+
+-- name: ListRecorderSignals :many
+-- Every active recorder, with what its signals need from the database: the
+-- shortNames attached to a system, for the decode rate, and its last call
+-- and quiet threshold.
+SELECT r.id, r.name, r.client_version, r.client_out_of_date, r.client_seen_at,
+       r.last_call_at, r.quiet_after_minutes,
+       coalesce((SELECT array_agg(a.short_name ORDER BY a.short_name)
+                 FROM attachments a WHERE a.recorder_id = r.id), '{}')::text[] AS attached
+FROM recorders r
+WHERE r.retired_at IS NULL
+ORDER BY r.name;
+
+-- name: TouchRecorderCall :exec
+-- Records that a recorder delivered a call heard at the given time. It never
+-- moves back: a recording uploaded late, from the client's queue, is an old
+-- call.
+UPDATE recorders
+SET last_call_at = greatest(last_call_at, sqlc.arg(at)::timestamptz)
+WHERE id = sqlc.arg(id);
+
+-- name: SetRecorderQuiet :one
+-- Sets an active recorder's quiet threshold, in minutes; NULL is off. No
+-- row: unknown or retired.
+UPDATE recorders
+SET quiet_after_minutes = sqlc.narg(quiet_after_minutes)
+WHERE name = sqlc.arg(name) AND retired_at IS NULL
+RETURNING id;
+
 -- The gate (R30, R32; ADR 0004). Public queries read calls only through the
 -- public_calls view (migration 00005), whose one condition is call_state's,
 -- and only internal/gate calls them.

@@ -173,15 +173,17 @@ type PublicTalkgroup struct {
 }
 
 type Recorder struct {
-	ID              int64
-	Name            string
-	KeyHash         []byte
-	CreatedAt       pgtype.Timestamptz
-	KeyRotatedAt    pgtype.Timestamptz
-	RetiredAt       pgtype.Timestamptz
-	ClientVersion   *string
-	ClientOutOfDate bool
-	ClientSeenAt    pgtype.Timestamptz
+	ID                int64
+	Name              string
+	KeyHash           []byte
+	CreatedAt         pgtype.Timestamptz
+	KeyRotatedAt      pgtype.Timestamptz
+	RetiredAt         pgtype.Timestamptz
+	ClientVersion     *string
+	ClientOutOfDate   bool
+	ClientSeenAt      pgtype.Timestamptz
+	LastCallAt        pgtype.Timestamptz
+	QuietAfterMinutes *int32
 }
 
 type RejectedCall struct {

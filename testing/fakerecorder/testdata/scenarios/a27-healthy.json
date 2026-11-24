@@ -1,0 +1,17 @@
+{
+  "boot_id": 2700,
+  "epoch_ms": 1764000000000,
+  "calls": {},
+  "events": [
+    {"at_ms": 0, "type": "heartbeat", "systems": [{"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 38.5}]},
+    {"at_ms": 3000, "type": "heartbeat", "systems": [{"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 38.5}]},
+    {"at_ms": 6000, "type": "heartbeat", "systems": [{"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 38.5}]},
+    {"at_ms": 9000, "type": "heartbeat", "systems": [{"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 38.5}]},
+    {"at_ms": 12000, "type": "heartbeat", "systems": [{"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 38.5}]},
+    {"at_ms": 15000, "type": "heartbeat", "systems": [{"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 38.5}]},
+    {"at_ms": 18000, "type": "heartbeat", "systems": [{"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 38.5}]},
+    {"at_ms": 21000, "type": "heartbeat", "systems": [{"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 38.5}]},
+    {"at_ms": 24000, "type": "heartbeat", "systems": [{"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 38.5}]},
+    {"at_ms": 27000, "type": "heartbeat", "systems": [{"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 38.5}]}
+  ]
+}

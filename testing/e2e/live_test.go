@@ -27,6 +27,7 @@ type heard struct {
 	events []string            // "type call-ID"
 	frames map[string]int      // by call ID
 	first  map[string]struct{} // talkgroup names in call_starts
+	notice [][]byte            // feed notices, as sent
 }
 
 // listen opens a listener with set and records what it hears.
@@ -75,6 +76,9 @@ func (r *rig) listen(t *testing.T, set ...int) *heard {
 				}
 				if m.Type == gate.TypeCallStart {
 					h.first[m.Talkgroup.Name] = struct{}{}
+				}
+				if m.Type == gate.TypeNotice {
+					h.notice = append(h.notice, b)
 				}
 			}
 			h.mu.Unlock()
