@@ -151,9 +151,9 @@ jobs:
   # runs: the API applies its migrations and /healthz answers, and A1 and
   # A10 run end to end through the real images.
   image:
-    name: Image (A38), compose stack and A1 end to end
+    name: Image (A38), compose stack, A1, A10 and sign-in (A33) end to end
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
@@ -168,7 +168,11 @@ jobs:
             *) echo "FAIL: the image isn't on distroless static" >&2; exit 1 ;;
           esac
       - name: Build the image and start the stack
-        run: docker compose up --build --detach --wait --wait-timeout 120
+        # Authentik is in the stack (ADR 0009), with made-up secrets made
+        # for this run; its first start takes a minute or two.
+        run: |
+          sh scripts/dev-env.sh > .env
+          docker compose up --build --detach --wait --wait-timeout 420
       - name: The image's binary is static and cgo-free
         run: |
           id=$(docker create radioarchive:dev)
@@ -215,6 +219,23 @@ jobs:
           sh scripts/ci/e2e-a1.sh radioarchive-client:ci
       - name: A10 end to end (the binary's public API shows nothing of hidden 1003)
         run: sh scripts/ci/e2e-a10.sh radioarchive-client:ci
+      - name: Listener sign-in end to end (A33, with Authentik and Mailpit)
+        # In Playwright's image at the version web/package-lock.json locks,
+        # on the runner's network, against the stack started above.
+        timeout-minutes: 20
+        env:
+          RA_PLAYWRIGHT_IMAGE: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
+        run: sh scripts/ci/e2e-signin.sh
+      - name: Upload the sign-in Playwright report
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signin-playwright-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            web/playwright-report/
+            web/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Logs
         if: always()
         run: docker compose logs

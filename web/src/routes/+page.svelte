@@ -17,7 +17,7 @@
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
 	import Picker from '#lib/listening/Picker.svelte';
-	import { ListeningState } from '#lib/listening/state.svelte.ts';
+	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import {
 		SHARE_PARAM,
 		decodeSet,
@@ -34,7 +34,8 @@
 	} from '#lib/listening/set.ts';
 	import { sendListeningSet } from '#lib/live/listening-set.ts';
 
-	const listening = new ListeningState();
+	// Shared with the account, which saves the set to it when signed in.
+	const listening = listeningState();
 
 	let ix: Index | undefined = $state();
 	let loading: 'loading' | 'failed' | 'done' = $state('loading');

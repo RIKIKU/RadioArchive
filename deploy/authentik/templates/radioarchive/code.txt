@@ -1,0 +1,7 @@
+Your RadioArchive code
+
+Enter this code to confirm your email address:
+
+{{ token }}
+
+The code is valid for {{ expires|timeuntil }}. If you didn't ask for it, you can ignore this email.

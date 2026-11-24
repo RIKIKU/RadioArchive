@@ -1,0 +1,607 @@
+# RadioArchive standalone: Authentik's sign-in, enrolment and password reset
+# (SPEC.md R103, ADR 0009).
+#
+# Only a standalone deployment loads this file. In the combined deployment
+# (R103, R105) the radio uses PagerArchive's Authentik, its sign-in and its
+# brand, and there is no open enrolment, so only radioarchive.yaml is loaded
+# there.
+#
+# Applied automatically when mounted under /blueprints in the Authentik
+# containers. Reads these environment variables (set in compose.yaml):
+#   RA_APP_URL           the radio's public URL, e.g. https://radio.example.org
+# and, as each sign-in runs (not when the blueprint is applied, which a
+# changed setting alone doesn't redo):
+#   RA_LISTENER_SIGNUP   true (the default) or false: whether listeners may
+#                        enrol themselves by emailed code (R103). Anything
+#                        else is read as false.
+#
+# Enrolment ("Sign up", while RA_LISTENER_SIGNUP is true): email, name and
+# password -> user created inactive -> one-time code emailed to that address
+# -> user activated -> signed in -> back to the radio, which signs in. An
+# address sends at most 5 codes an hour. Sign-in: email and password.
+# Password reset: emailed code. An account only saves a listener's
+# preferences (R110, R111): it never unlocks anything.
+version: 1
+metadata:
+  name: RadioArchive standalone
+  labels:
+    blueprints.goauthentik.io/description: Sign-in, enrolment by emailed code and password reset for a standalone RadioArchive
+context:
+  app_url: !Env [RA_APP_URL, "http://localhost:8080"]
+entries:
+  # ---------------------------------------------------------------- prompts
+  - model: authentik_stages_prompt.prompt
+    id: field-email
+    identifiers:
+      name: radioarchive-field-email
+    attrs:
+      field_key: email
+      label: Email address
+      type: email
+      required: true
+      placeholder: Email address
+      placeholder_expression: false
+      order: 0
+  - model: authentik_stages_prompt.prompt
+    id: field-name
+    identifiers:
+      name: radioarchive-field-name
+    attrs:
+      field_key: name
+      label: Your name
+      type: text
+      required: true
+      placeholder: Name
+      placeholder_expression: false
+      initial_value: |
+        try:
+            return user.name
+        except:
+            return ''
+      initial_value_expression: true
+      order: 5
+  - model: authentik_stages_prompt.prompt
+    id: field-password
+    identifiers:
+      name: radioarchive-field-password
+    attrs:
+      field_key: password
+      label: Password
+      type: password
+      required: true
+      placeholder: Password
+      placeholder_expression: false
+      order: 10
+  - model: authentik_stages_prompt.prompt
+    id: field-password-repeat
+    identifiers:
+      name: radioarchive-field-password-repeat
+    attrs:
+      field_key: password_repeat
+      label: Password (again)
+      type: password
+      required: true
+      placeholder: Password (again)
+      placeholder_expression: false
+      order: 11
+
+  - model: authentik_policies_password.passwordpolicy
+    id: password-policy
+    identifiers:
+      name: radioarchive-password-policy
+    attrs:
+      password_field: password
+      check_static_rules: true
+      length_min: 10
+      amount_digits: 0
+      amount_uppercase: 0
+      amount_lowercase: 0
+      amount_symbols: 0
+      check_have_i_been_pwned: false # no third-party calls
+      check_zxcvbn: true
+      zxcvbn_score_threshold: 2
+      error_message: Choose a longer or less guessable password (at least 10 characters).
+
+  # -------------------------------------------------------------- enrolment
+  - model: authentik_flows.flow
+    id: signup
+    identifiers:
+      slug: radioarchive-signup
+    attrs:
+      name: RadioArchive sign-up
+      title: Sign up to RadioArchive
+      designation: enrollment
+      authentication: require_unauthenticated
+  # Off (RA_LISTENER_SIGNUP=false): the flow is refused, even at its own
+  # address, and the sign-in page offers no "Sign up" (below). Read from the
+  # environment each time, so recreating the containers with a new value is
+  # enough.
+  - model: authentik_policies_expression.expressionpolicy
+    id: signup-on
+    identifiers:
+      name: radioarchive-signup-on
+    attrs:
+      expression: |
+        import os
+        return os.environ.get("RA_LISTENER_SIGNUP", "true").strip().lower() == "true"
+  - model: authentik_policies_expression.expressionpolicy
+    id: signup-off
+    identifiers:
+      name: radioarchive-signup-off
+    attrs:
+      expression: |
+        import os
+        return os.environ.get("RA_LISTENER_SIGNUP", "true").strip().lower() != "true"
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf signup
+      policy: !KeyOf signup-on
+      order: 0
+
+  # The address must not be an account's already. An unfinished sign-up
+  # (inactive, never signed in) doesn't count: signing up again carries on
+  # with that user ("resume" below).
+  - model: authentik_policies_expression.expressionpolicy
+    id: signup-address
+    identifiers:
+      name: radioarchive-signup-address
+    attrs:
+      expression: |
+        from authentik.core.models import User
+
+        email = (request.context.get("prompt_data") or {}).get("email", "").strip()
+        if not email or "@" not in email:
+            ak_message("Enter an email address.")
+            return False
+        taken = User.objects.filter(email__iexact=email).exclude(
+            is_active=False, last_login__isnull=True, path="users/radioarchive").exists()
+        taken = taken or User.objects.filter(username__iexact=email).exclude(
+            is_active=False, last_login__isnull=True, path="users/radioarchive").exists()
+        if taken:
+            ak_message("That address has an account already. Sign in, or reset its password from the sign-in page.")
+            return False
+        return True
+  - model: authentik_stages_prompt.promptstage
+    id: signup-details
+    identifiers:
+      name: radioarchive-signup-details
+    attrs:
+      fields:
+        - !KeyOf field-email
+        - !KeyOf field-name
+        - !KeyOf field-password
+        - !KeyOf field-password-repeat
+      validation_policies:
+        - !KeyOf signup-address
+        - !KeyOf password-policy
+
+  # The username is the address, in lower case. A user an earlier sign-up
+  # with the same address made and never finished is carried on with: it is
+  # given this run's name and password, and asked for a new code.
+  - model: authentik_policies_expression.expressionpolicy
+    id: signup-resume
+    identifiers:
+      name: radioarchive-signup-resume
+    attrs:
+      expression: |
+        from authentik.core.models import User
+        from authentik.flows.planner import PLAN_CONTEXT_PENDING_USER
+        from authentik.stages.authenticator_email.models import EmailDevice
+
+        plan = request.context["flow_plan"]
+        data = plan.context.get("prompt_data") or {}
+        email = data.get("email", "").strip()
+        data["email"] = email
+        data["username"] = email.lower()
+        plan.context["prompt_data"] = data
+        user = User.objects.filter(username=email.lower(), is_active=False, last_login__isnull=True,
+                                   path="users/radioarchive").first()
+        if user is not None:
+            # The email stage allows one device per user.
+            EmailDevice.objects.filter(user=user).delete()
+            plan.context[PLAN_CONTEXT_PENDING_USER] = user
+        return True
+  - model: authentik_stages_user_write.userwritestage
+    id: signup-create
+    identifiers:
+      name: radioarchive-signup-create
+    attrs:
+      user_creation_mode: create_when_required
+      create_users_as_inactive: true # active only after the emailed code
+      user_type: internal
+      user_path_template: users/radioarchive
+
+  # At most 5 code emails an hour to one address, across runs and restarts,
+  # so the form can't be used to flood someone's inbox. Each sent one is an
+  # event naming a hash of the address, never the address.
+  - model: authentik_policies_expression.expressionpolicy
+    id: signup-code-emails
+    identifiers:
+      name: radioarchive-signup-code-emails
+    attrs:
+      expression: |
+        import hashlib
+        from datetime import timedelta
+        from django.db import transaction
+        from django.utils.timezone import now
+        from authentik.core.models import User
+        from authentik.events.models import Event
+        from authentik.flows.planner import PLAN_CONTEXT_PENDING_USER
+        from authentik.stages.authenticator_email.stage import PLAN_CONTEXT_EMAIL_DEVICE
+
+        # Event.new adds "custom_" to the action.
+        LIMIT, WINDOW, ACTION = 5, timedelta(hours=1), "radioarchive_code_email"
+        plan = request.context["flow_plan"]
+        http = request.http_request
+        if http is None or http.method == "POST":
+            return True  # an answer: the code, checked by the stage
+        if PLAN_CONTEXT_EMAIL_DEVICE in plan.context:
+            return True  # this run's code was sent already
+        user = plan.context.get(PLAN_CONTEXT_PENDING_USER)
+        if user is None or user.pk is None or not user.email:
+            return True
+        address = hashlib.sha256(user.email.strip().lower().encode()).hexdigest()
+        with transaction.atomic():
+            # Two runs at once take turns here: the user row is the lock.
+            User.objects.select_for_update().filter(pk=user.pk).first()
+            t = now()
+            sent = list(Event.objects.filter(action="custom_" + ACTION, context__radioarchive_address=address,
+                                             created__gt=t - WINDOW).order_by("created").values_list("created", flat=True))
+            if len(sent) >= LIMIT:
+                at = sent[len(sent) - LIMIT] + WINDOW
+                minutes = max(1, -(-int((at - t).total_seconds()) // 60))
+                plan.context["radioarchive_code_wait"] = True
+                plan.context["deny_message"] = (
+                    f"That address has been sent {LIMIT} codes in the last hour, the most it can. "
+                    f"Try again in {minutes} minute{'s' if minutes != 1 else ''}.")
+                return False
+            Event.new(ACTION, app="radioarchive", radioarchive_address=address,
+                      message="RadioArchive sign-up code email").save()
+        return True
+  - model: authentik_policies_expression.expressionpolicy
+    id: code-wait
+    identifiers:
+      name: radioarchive-code-wait
+    attrs:
+      expression: |
+        # Set by radioarchive-signup-code-emails in the same flow when it refused.
+        return bool(request.context["flow_plan"].context.get("radioarchive_code_wait"))
+  - model: authentik_stages_deny.denystage
+    id: code-wait-deny
+    identifiers:
+      name: radioarchive-code-wait
+    attrs:
+      deny_message: That address has been sent as many codes as it can for now. Try again in an hour.
+  - model: authentik_stages_authenticator_email.authenticatoremailstage
+    id: signup-code
+    identifiers:
+      name: radioarchive-signup-code
+    attrs:
+      friendly_name: Email code
+      use_global_settings: true
+      token_expiry: minutes=15
+      subject: Your RadioArchive code
+      template: radioarchive/code.html # deploy/authentik/templates
+  # Reached only after the emailed code was entered: the next user write
+  # activates the user, and changes nothing else.
+  - model: authentik_policies_expression.expressionpolicy
+    id: signup-activate-policy
+    identifiers:
+      name: radioarchive-signup-activate
+    attrs:
+      expression: |
+        request.context["flow_plan"].context["prompt_data"] = {"is_active": True}
+        return True
+  - model: authentik_stages_user_write.userwritestage
+    id: signup-activate
+    identifiers:
+      name: radioarchive-signup-activate
+    attrs:
+      user_creation_mode: never_create
+  - model: authentik_stages_user_login.userloginstage
+    id: login
+    identifiers:
+      name: radioarchive-login
+  - model: authentik_stages_redirect.redirectstage
+    id: signup-to-app
+    identifiers:
+      name: radioarchive-signup-to-app
+    attrs:
+      mode: static
+      keep_context: false
+      target_static: !Format ["%s/auth/signin", !Context app_url]
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf signup
+      stage: !KeyOf signup-details
+      order: 10
+  - model: authentik_flows.flowstagebinding
+    id: signup-create-binding
+    identifiers:
+      target: !KeyOf signup
+      stage: !KeyOf signup-create
+      order: 20
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf signup-create-binding
+      policy: !KeyOf signup-resume
+      order: 0
+  - model: authentik_flows.flowstagebinding
+    id: signup-code-binding
+    identifiers:
+      target: !KeyOf signup
+      stage: !KeyOf signup-code
+      order: 30
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true # on every request
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf signup-code-binding
+      policy: !KeyOf signup-code-emails
+      order: 0
+  - model: authentik_flows.flowstagebinding
+    id: signup-code-binding-wait
+    identifiers:
+      target: !KeyOf signup
+      stage: !KeyOf code-wait-deny
+      order: 35
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf signup-code-binding-wait
+      policy: !KeyOf code-wait
+      order: 0
+  - model: authentik_flows.flowstagebinding
+    id: signup-activate-binding
+    identifiers:
+      target: !KeyOf signup
+      stage: !KeyOf signup-activate
+      order: 40
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf signup-activate-binding
+      policy: !KeyOf signup-activate-policy
+      order: 0
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf signup
+      stage: !KeyOf login
+      order: 50
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf signup
+      stage: !KeyOf signup-to-app
+      order: 60
+
+  # --------------------------------------------------------- password reset
+  - model: authentik_flows.flow
+    id: recovery
+    identifiers:
+      slug: radioarchive-recovery
+    attrs:
+      name: RadioArchive password reset
+      title: Reset your password
+      designation: recovery
+      authentication: require_unauthenticated
+  - model: authentik_stages_identification.identificationstage
+    id: recovery-identification
+    identifiers:
+      name: radioarchive-recovery-identification
+    attrs:
+      user_fields: [email]
+      pretend_user_exists: true
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: recovery-code
+    identifiers:
+      name: radioarchive-recovery-code
+    attrs:
+      device_classes: [email]
+      not_configured_action: deny
+      last_auth_threshold: seconds=0
+  - model: authentik_stages_prompt.promptstage
+    id: recovery-password
+    identifiers:
+      name: radioarchive-recovery-password
+    attrs:
+      fields:
+        - !KeyOf field-password
+        - !KeyOf field-password-repeat
+      validation_policies:
+        - !KeyOf password-policy
+  - model: authentik_stages_user_write.userwritestage
+    id: recovery-write
+    identifiers:
+      name: radioarchive-recovery-write
+    attrs:
+      user_creation_mode: never_create
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf recovery
+      stage: !KeyOf recovery-identification
+      order: 10
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf recovery
+      stage: !KeyOf recovery-code
+      order: 20
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf recovery
+      stage: !KeyOf recovery-password
+      order: 30
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf recovery
+      stage: !KeyOf recovery-write
+      order: 40
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf recovery
+      stage: !KeyOf login
+      order: 50
+
+  # ---------------------------------------------------------------- sign-in
+  # Email and password. "Sign up" is offered only while enrolment is on.
+  - model: authentik_flows.flow
+    id: authentication
+    identifiers:
+      slug: radioarchive-authentication
+    attrs:
+      name: RadioArchive sign-in
+      title: Sign in to RadioArchive
+      designation: authentication
+      authentication: none
+  - model: authentik_stages_password.passwordstage
+    id: authentication-password
+    identifiers:
+      name: radioarchive-authentication-password
+    attrs:
+      configure_flow: !Find [authentik_flows.flow, [slug, default-password-change]]
+      backends:
+        - authentik.core.auth.InbuiltBackend
+      failed_attempts_before_cancel: 5
+  - model: authentik_stages_identification.identificationstage
+    id: authentication-identification
+    identifiers:
+      name: radioarchive-authentication-identification
+    attrs:
+      user_fields: [email]
+      password_stage: null # its own page, as PagerArchive's
+      recovery_flow: !KeyOf recovery
+      enrollment_flow: !KeyOf signup
+      pretend_user_exists: true
+  # The same page with no "Sign up", for while enrolment is off. One of the
+  # two is shown, by RA_LISTENER_SIGNUP as the sign-in starts.
+  - model: authentik_stages_identification.identificationstage
+    id: authentication-identification-closed
+    identifiers:
+      name: radioarchive-authentication-identification-closed
+    attrs:
+      user_fields: [email]
+      password_stage: null
+      recovery_flow: !KeyOf recovery
+      enrollment_flow: null
+      pretend_user_exists: true
+  - model: authentik_flows.flowstagebinding
+    id: authentication-identification-binding
+    identifiers:
+      target: !KeyOf authentication
+      stage: !KeyOf authentication-identification
+      order: 10
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf authentication-identification-binding
+      policy: !KeyOf signup-on
+      order: 0
+  - model: authentik_flows.flowstagebinding
+    id: authentication-identification-closed-binding
+    identifiers:
+      target: !KeyOf authentication
+      stage: !KeyOf authentication-identification-closed
+      order: 11
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf authentication-identification-closed-binding
+      policy: !KeyOf signup-off
+      order: 0
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf authentication
+      stage: !KeyOf authentication-password
+      order: 20
+  # Authentik's own administrators (akadmin) also sign in here, and their
+  # account can change everything in Authentik: they must use a second
+  # factor, set up on first sign-in. Listeners never see this stage.
+  - model: authentik_policies_expression.expressionpolicy
+    id: authentik-admin
+    identifiers:
+      name: radioarchive-authentik-admin
+    attrs:
+      expression: |
+        user = request.user
+        return getattr(user, "pk", None) is not None and not user.is_anonymous and user.is_superuser
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: admin-second-factor
+    identifiers:
+      name: radioarchive-authentik-admin-second-factor
+    attrs:
+      device_classes: [totp, webauthn, static]
+      not_configured_action: configure
+      configuration_stages:
+        - !Find [authentik_stages_authenticator_totp.authenticatortotpstage, [name, default-authenticator-totp-setup]]
+      last_auth_threshold: seconds=0
+  - model: authentik_flows.flowstagebinding
+    id: admin-second-factor-binding
+    identifiers:
+      target: !KeyOf authentication
+      stage: !KeyOf admin-second-factor
+      order: 30
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf admin-second-factor-binding
+      policy: !KeyOf authentik-admin
+      order: 0
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf authentication
+      stage: !KeyOf login
+      order: 100
+
+  # ---------------------------------------------------------- user settings
+  # Name only: the address is what the account was confirmed with.
+  - model: authentik_flows.flow
+    id: user-settings
+    identifiers:
+      slug: radioarchive-user-settings
+    attrs:
+      name: RadioArchive user settings
+      title: Your details
+      designation: stage_configuration
+      authentication: require_authenticated
+  - model: authentik_stages_prompt.promptstage
+    id: user-settings-prompt
+    identifiers:
+      name: radioarchive-user-settings
+    attrs:
+      fields:
+        - !KeyOf field-name
+  - model: authentik_stages_user_write.userwritestage
+    id: user-settings-write
+    identifiers:
+      name: radioarchive-user-settings-write
+    attrs:
+      user_creation_mode: never_create
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf user-settings
+      stage: !KeyOf user-settings-prompt
+      order: 10
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf user-settings
+      stage: !KeyOf user-settings-write
+      order: 20
+
+  - model: authentik_brands.brand
+    identifiers:
+      domain: authentik-default
+    attrs:
+      default: true
+      branding_title: RadioArchive
+      flow_authentication: !KeyOf authentication
+      flow_recovery: !KeyOf recovery
+      flow_user_settings: !KeyOf user-settings
+      flow_enrollment: null

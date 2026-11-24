@@ -40,8 +40,13 @@ export class ListeningState {
 	/** Talkgroups added for this session, apart from the set. */
 	session: Entry[] = $state(read(session, SESSION));
 
+	/** Told whenever the saved set changes: the account saves it too, when
+	 * signed in (ADR 0009). The session's additions never tell it. */
+	onsetchange: (() => void) | undefined;
+
 	#saveSet() {
 		write(local, SAVED, this.saved);
+		this.onsetchange?.();
 	}
 	#saveSession() {
 		write(session, SESSION, this.session);
@@ -153,4 +158,13 @@ export class ListeningState {
 			this.#saveSession();
 		}
 	}
+}
+
+let shared: ListeningState | undefined;
+
+/** The page's one listening state, shared by the Listen page and the
+ * account (the frame's account menu). */
+export function listeningState(): ListeningState {
+	shared ??= new ListeningState();
+	return shared;
 }

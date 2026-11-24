@@ -30,6 +30,19 @@ func TestRouteTableRefusesMisplacedRoutes(t *testing.T) {
 		{AppRoute, "GET /healthz", false},
 		{HealthRoute, "GET /", false},
 		{AdminRoute, "GET /api/v1/calls", false},
+		// The listener's account (ADR 0009): its own places only, and
+		// nothing else may sit in them.
+		{AccountRoute, "GET /auth/signin", true},
+		{AccountRoute, "GET /api/v1/account", true},
+		{AccountRoute, "PUT /api/v1/account/profile", true},
+		{AccountRoute, "GET /api/v1/catalogue", false},
+		{AccountRoute, "GET " + AdminPath + "/systems", false},
+		{AccountRoute, "GET /", false},
+		{PublicRoute, "GET /api/v1/account", false},
+		{PublicRoute, "GET /api/v1/account/profile", false},
+		{AppRoute, "GET /auth/signin", false},
+		{AppRoute, "GET /auth", false},
+		{AdminRoute, "GET /api/v1/account", false},
 	} {
 		func() {
 			defer func() {

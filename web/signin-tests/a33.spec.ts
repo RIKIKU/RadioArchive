@@ -1,0 +1,277 @@
+/// <reference types="node" />
+// Listeners' sign-in and the saved profile (SPEC.md P3, R41, R48, R103,
+// R110, R111, A33; ADR 0009), in a real browser against the compose stack
+// (scripts/ci/e2e-signin.sh): Authentik's own pages are used as a listener
+// would, sign-up codes are read from Mailpit, and every account is made up
+// and new for its test.
+import { test, expect, type APIRequestContext, type Browser, type Page } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
+
+/** A36 for what sign-in adds to the page. */
+async function accessible(page: Page) {
+	const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+	expect(results.violations).toEqual([]);
+}
+
+const MAILPIT = process.env.RA_MAILPIT_URL ?? 'http://localhost:8025';
+
+type Entry = { system?: number; id: number; priority?: boolean };
+type Account = { signin: boolean; account: { id: string; name?: string; email?: string } | null; profile: { talkgroups: Entry[]; look?: string } | null; saves: boolean };
+
+/** A new made-up address for each account. */
+const address = (who: string) => `${who}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}@example.test`;
+const passwordOf = (email: string) => `correct horse ${email.split('@')[0]} staple`;
+
+/**
+ * The text of the newest email to address after since. Authentik's worker
+ * sends it from its queue, so it can take a while.
+ */
+async function mail(request: APIRequestContext, to: string, since: Date): Promise<string> {
+	const deadline = Date.now() + 60_000;
+	let seen: { ID: string; Created: string; Subject: string }[] = [];
+	while (Date.now() < deadline) {
+		const res = await request.get(`${MAILPIT}/api/v1/search`, { params: { query: `to:"${to}"` } });
+		seen = ((await res.json()) as { messages: typeof seen }).messages;
+		const m = seen.find((m) => new Date(m.Created) > since);
+		if (m) return ((await (await request.get(`${MAILPIT}/api/v1/message/${m.ID}`)).json()) as { Text: string }).Text;
+		await new Promise((r) => setTimeout(r, 500));
+	}
+	throw new Error(`no email to ${to} within 60 s; the catcher had ${seen.length} for that address`);
+}
+
+/**
+ * Answers one of Authentik's flow pages. The page redraws while its loading
+ * overlay is up, which empties a field filled in before that.
+ */
+async function answer(page: Page, fields: Record<string, string>) {
+	const first = page.locator(`input[name="${Object.keys(fields)[0]}"]`);
+	await expect(first).toBeVisible({ timeout: 60_000 });
+	await expect(page.locator('ak-loading-overlay')).toHaveCount(0, { timeout: 30_000 });
+	for (const [name, value] of Object.entries(fields)) await page.locator(`input[name="${name}"]`).fill(value);
+	await page.locator('button[type="submit"]').click();
+}
+
+/** A new browser whose listening set is set. */
+async function browserWith(browser: Browser, set: Entry[], width = 1280): Promise<Page> {
+	const context = await browser.newContext({ viewport: { width, height: width < 600 ? 800 : 900 } });
+	await context.addInitScript((kept) => {
+		if (!sessionStorage.getItem('test.seeded')) {
+			localStorage.setItem('radioarchive.listening-set', kept);
+			sessionStorage.setItem('test.seeded', '1');
+		}
+	}, JSON.stringify({ v: 1, talkgroups: set }));
+	const page = await context.newPage();
+	await page.goto('/');
+	await expect(page.getByRole('heading', { level: 2, name: 'Your listening set' })).toBeVisible();
+	return page;
+}
+
+async function openMenu(page: Page) {
+	const button = page.getByRole('button', { name: /^Account menu/ });
+	if ((await button.getAttribute('aria-expanded')) !== 'true') await button.click();
+}
+
+async function closeMenu(page: Page) {
+	const button = page.getByRole('button', { name: /^Account menu/ });
+	if ((await button.getAttribute('aria-expanded')) === 'true') await button.click();
+}
+
+/** Back in the radio, signed in. */
+async function signedIn(page: Page, baseURL: string) {
+	await page.waitForURL((u) => u.origin === new URL(baseURL).origin && !u.pathname.startsWith('/auth/'), { timeout: 60_000 });
+	await expect(page.getByRole('button', { name: /^Account menu, / })).not.toHaveAccessibleName('Account menu, signed out', { timeout: 30_000 });
+}
+
+/** Signs up from the account menu (R103): details, then the emailed code. */
+async function signUp(page: Page, request: APIRequestContext, baseURL: string, email: string) {
+	await openMenu(page);
+	await page.getByRole('link', { name: 'Sign in' }).click();
+	await page.getByRole('link', { name: /Sign up/ }).click();
+	const since = new Date(Date.now() - 2000);
+	await answer(page, { email, name: 'Made Up Listener', password: passwordOf(email), password_repeat: passwordOf(email) });
+	const code = /\b\d{6}\b/.exec(await mail(request, email, since))?.[0];
+	expect(code, 'a code in the email').toBeTruthy();
+	await answer(page, { code: code! });
+	await signedIn(page, baseURL);
+}
+
+/** Signs in from the account menu with an account made before. */
+async function signIn(page: Page, baseURL: string, email: string) {
+	await openMenu(page);
+	await page.getByRole('link', { name: 'Sign in' }).click();
+	await answer(page, { uidField: email });
+	await answer(page, { password: passwordOf(email) });
+	await signedIn(page, baseURL);
+}
+
+async function account(page: Page): Promise<Account> {
+	const r = await page.request.get('/api/v1/account');
+	expect(r.status()).toBe(200);
+	return (await r.json()) as Account;
+}
+
+const savedSet = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('radioarchive.listening-set') ?? '{"talkgroups":[]}').talkgroups);
+const ids = (es: Entry[]) => es.map((e) => e.id).sort();
+
+/** The pull request's screenshots (RA_SHOTS names a folder). */
+async function shot(page: Page, name: string) {
+	if (!process.env.RA_SHOTS) return;
+	await page.screenshot({ path: `${process.env.RA_SHOTS}/${name}.png` });
+}
+
+test('A33: a signed-out listener with {1001} signs up; the set is saved to the new account, with no prompt', async ({ browser, request, baseURL }) => {
+	const page = await browserWith(browser, [{ id: 1001 }]);
+	expect((await account(page)).account).toBeNull();
+	const email = address('first');
+	await signUp(page, request, baseURL!, email);
+
+	await expect(page.getByRole('heading', { name: 'Use the listening set saved to your account?' })).toHaveCount(0);
+	await expect.poll(async () => (await account(page)).profile?.talkgroups, { timeout: 15_000 }).toEqual([{ id: 1001 }]);
+	const st = await account(page);
+	expect(st.account?.email).toBe(email);
+	// Listening is as it was: the set, and Start listening.
+	expect(ids(await savedSet(page))).toEqual([1001]);
+	await expect(page.getByRole('button', { name: 'Start listening' })).toBeVisible();
+});
+
+test('A33: an account with {1002} on a browser with {1001}: one prompt, and nothing is merged either way', async ({ browser, request, baseURL }) => {
+	// The account, saved with {1002} from another browser.
+	const email = address('second');
+	const other = await browserWith(browser, [{ id: 1002 }]);
+	await signUp(other, request, baseURL!, email);
+	await expect.poll(async () => (await account(other)).profile?.talkgroups, { timeout: 15_000 }).toEqual([{ id: 1002 }]);
+	await other.context().close();
+
+	// Replace: this browser takes the account's set, and only that.
+	const page = await browserWith(browser, [{ id: 1001 }]);
+	await signIn(page, baseURL!, email);
+	const prompt = page.getByRole('region', { name: 'Use the listening set saved to your account?' });
+	await expect(prompt).toBeVisible();
+	await expect(prompt.getByRole('listitem')).toHaveText(['Fireground 41']);
+	await accessible(page);
+	await prompt.getByRole('button', { name: "Use my account's set" }).click();
+	await expect(prompt).toHaveCount(0);
+	expect(ids(await savedSet(page))).toEqual([1002]);
+	await expect(page.getByRole('list', { name: 'Your listening set' }).getByRole('listitem')).toHaveCount(1);
+	expect(ids((await account(page)).profile!.talkgroups)).toEqual([1002]);
+	// Once: the next page doesn't ask again.
+	await page.reload();
+	await expect(page.getByRole('heading', { level: 2, name: 'Your listening set' })).toBeVisible();
+	await page.waitForTimeout(1000);
+	await expect(prompt).toHaveCount(0);
+	expect(ids(await savedSet(page))).toEqual([1002]);
+
+	// Keep: a third browser keeps its own, which replaces the account's.
+	const third = await browserWith(browser, [{ id: 1001, priority: true }]);
+	await signIn(third, baseURL!, email);
+	const asked = third.getByRole('region', { name: 'Use the listening set saved to your account?' });
+	await expect(asked).toBeVisible();
+	await asked.getByRole('button', { name: "Keep this browser's set" }).click();
+	await expect.poll(async () => (await account(third)).profile?.talkgroups, { timeout: 15_000 }).toEqual([{ id: 1001, priority: true }]);
+	expect(await savedSet(third)).toEqual([{ id: 1001, priority: true }]);
+});
+
+test('signed in, changes are saved to the account; hold and session additions never are', async ({ browser, request, baseURL }) => {
+	const page = await browserWith(browser, [{ id: 1001 }]);
+	await signUp(page, request, baseURL!, address('changes'));
+	await expect.poll(async () => (await account(page)).profile?.talkgroups, { timeout: 15_000 }).toEqual([{ id: 1001 }]);
+
+	// A priority mark and the look are saved.
+	await page.getByRole('checkbox', { name: 'Priority: Dispatch North' }).check();
+	await openMenu(page);
+	await page.getByRole('combobox', { name: 'Look' }).selectOption('console');
+	await closeMenu(page);
+	await expect.poll(async () => (await account(page)).profile, { timeout: 15_000 }).toMatchObject({ talkgroups: [{ id: 1001, priority: true }], look: 'console' });
+
+	// A fireground link's talkgroup is added for the session only (R47).
+	await page.goto('/?fireground=41');
+	await expect(page.getByRole('list', { name: 'Added for this session' })).toContainText('Fireground 41');
+	await page.waitForTimeout(1500);
+	expect(ids((await account(page)).profile!.talkgroups)).toEqual([1001]);
+});
+
+test('signed in or not, the catalogue and the public API answer the same (P3, R111)', async ({ browser, request, baseURL }) => {
+	const page = await browserWith(browser, [{ id: 1001 }]);
+	await signUp(page, request, baseURL!, address('same'));
+	for (const path of ['/api/v1/catalogue', '/api/v1/catalogue/search?q=north', '/api/v1/fireground/41', '/api/v1/fireground/43']) {
+		const signedIn = await page.request.get(path);
+		const signedOut = await request.get(path);
+		expect(signedIn.status(), path).toBe(signedOut.status());
+		expect(await signedIn.text(), path).toBe(await signedOut.text());
+	}
+	// And nothing hidden is in the account's answer.
+	const body = await (await page.request.get('/api/v1/account')).text();
+	expect(body).not.toContain('1003');
+	expect(body).not.toContain('Admin');
+});
+
+test('clearing empties the account and leaves the browser its set; signing out ends both sessions', async ({ browser, request, baseURL }) => {
+	const page = await browserWith(browser, [{ id: 1001 }, { id: 1002, priority: true }]);
+	const email = address('clear');
+	await signUp(page, request, baseURL!, email);
+	await expect.poll(async () => (await account(page)).profile?.talkgroups.length, { timeout: 15_000 }).toBe(2);
+
+	await openMenu(page);
+	await page.getByRole('button', { name: 'Clear saved settings' }).click();
+	const confirm = page.getByRole('region', { name: 'Clear what your account holds?' });
+	await expect(confirm).toBeVisible();
+	await accessible(page);
+	await confirm.getByRole('button', { name: "Clear my account's settings" }).click();
+	await expect(page.getByRole('status').filter({ hasText: 'Your account holds nothing now.' })).toBeVisible();
+	expect((await account(page)).profile).toBeNull();
+	expect(ids(await savedSet(page))).toEqual([1001, 1002]);
+	// A page load doesn't put it back.
+	await page.reload();
+	await expect(page.getByRole('heading', { level: 2, name: 'Your listening set' })).toBeVisible();
+	await page.waitForTimeout(1500);
+	expect((await account(page)).profile).toBeNull();
+
+	// Signing out: back on the Listen page, signed out, with the set.
+	await openMenu(page);
+	await page.getByRole('button', { name: 'Sign out' }).click();
+	await page.waitForURL((u) => u.origin === new URL(baseURL!).origin && u.pathname === '/', { timeout: 30_000 });
+	await expect(page.getByRole('status').filter({ hasText: "You're signed out." })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Account menu, signed out' })).toBeVisible();
+	expect((await account(page)).account).toBeNull();
+	expect(ids(await savedSet(page))).toEqual([1001, 1002]);
+	// Authentik's session ended too: signing in asks who again.
+	await openMenu(page);
+	await page.getByRole('link', { name: 'Sign in' }).click();
+	await expect(page.locator('input[name="uidField"]')).toBeVisible({ timeout: 60_000 });
+});
+
+test('screenshots: the account menu signed out and in, the prompt and the clear', async ({ browser, request, baseURL }) => {
+	test.skip(!process.env.RA_SHOTS, 'only when RA_SHOTS names a folder');
+	const email = address('shots');
+	const setup = await browserWith(browser, [{ id: 1002 }]);
+	await signUp(setup, request, baseURL!, email);
+	await expect.poll(async () => (await account(setup)).profile?.talkgroups, { timeout: 15_000 }).toEqual([{ id: 1002 }]);
+	await setup.context().close();
+
+	for (const width of [1280, 375]) {
+		const page = await browserWith(browser, [{ id: 1001 }], width);
+		await openMenu(page);
+		await shot(page, `account-signed-out-${width}`);
+		await signIn(page, baseURL!, email);
+		const prompt = page.getByRole('region', { name: 'Use the listening set saved to your account?' });
+		await expect(prompt.getByRole('listitem')).toHaveText(['Fireground 41']);
+		await shot(page, `first-sign-in-prompt-${width}`);
+		await prompt.getByRole('button', { name: "Use my account's set" }).click();
+		await openMenu(page);
+		await expect(page.getByText('Your listening set and settings are saved to your account.')).toBeVisible();
+		await shot(page, `account-signed-in-${width}`);
+		await page.getByRole('button', { name: 'Clear saved settings' }).click();
+		await expect(page.getByRole('region', { name: 'Clear what your account holds?' })).toBeVisible();
+		await shot(page, `clear-confirm-${width}`);
+		await page.getByRole('button', { name: "Clear my account's settings" }).click();
+		await expect(page.getByRole('status').filter({ hasText: 'Your account holds nothing now.' })).toBeVisible();
+		await shot(page, `clear-done-${width}`);
+		// Put it back for the next width's prompt.
+		const r = await page.request.put('/api/v1/account/profile', {
+			headers: { Origin: new URL(baseURL!).origin, 'Content-Type': 'application/json' },
+			data: { v: 1, talkgroups: [{ id: 1002 }], alerts: false }
+		});
+		expect(r.status()).toBe(204);
+		await page.context().close();
+	}
+});

@@ -20,6 +20,18 @@
 //	RECORDER_NOTICE_AFTER  how long a recorder is disconnected or deaf before
 //	                listeners see "Some talkgroups aren't being received
 //	                right now", as a Go duration (default 2m)
+//
+// Listeners' sign-in (ADR 0009), on when AUTHENTIK_URL is set:
+//
+//	APP_URL                 the radio's public URL, e.g. https://radio.example.org
+//	AUTHENTIK_URL           Authentik's public URL, its own subdomain
+//	AUTHENTIK_INTERNAL_URL  how the API reaches Authentik, e.g. http://authentik-server:9000
+//	                        (default: AUTHENTIK_URL)
+//	OIDC_CLIENT_ID          the radio's OIDC client and application slug (default radioarchive)
+//	OIDC_CLIENT_SECRET      its secret, or OIDC_CLIENT_SECRET_FILE naming a file holding it
+//	AUTHENTIK_API_TOKEN     the API's Authentik token, or AUTHENTIK_API_TOKEN_FILE
+//
+// The secret and the token are never logged.
 package main
 
 import (
@@ -147,9 +159,20 @@ func serve(log *slog.Logger) error {
 	}
 	go job.Run(ctx)
 
+	sc, err := signInFromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if !sc.on() {
+		log.Warn("listener sign-in is off: AUTHENTIK_URL isn't set. Listening works as ever; nobody can save to an account")
+	}
+	handler, err := apiHandler(st, log, rs, g, sc)
+	if err != nil {
+		return err
+	}
 	srv := &http.Server{
 		Addr:              listenAddr(),
-		Handler:           apiHandler(st, log, rs, g),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errc := make(chan error, 1)
@@ -174,9 +197,17 @@ func serve(log *slog.Logger) error {
 // (Authentik, M4) exists. Until then only tests serve it, with an
 // authenticator that lives in their _test.go files, so no build of this
 // binary can serve it.
-func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate) *server.API {
-	return server.New(st, log, server.WithRecorders(rs),
-		server.WithPublic(public.New(g, log)), server.WithApp(web.New()))
+//
+// Listeners' sign-in (internal/account, ADR 0009) only saves their
+// preferences, in their Authentik profile: it serves no admin route and
+// authenticates no admin.
+func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate, sc signInConfig) (*server.API, error) {
+	acc, err := sc.service(g, log)
+	if err != nil {
+		return nil, err
+	}
+	return server.New(st, log, server.WithRecorders(rs), server.WithPublic(public.New(g, log)),
+		server.WithAccount(acc), server.WithApp(web.New())), nil
 }
 
 // retentionJob is the nightly retention job and the low-disk check (R88),

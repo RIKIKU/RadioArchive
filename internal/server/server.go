@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RIKIKU/RadioArchive/internal/account"
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/web"
@@ -32,21 +33,26 @@ type RouteKind int
 // Route kinds. Every route the API serves is one of these, by its path:
 // the health check, the recorder client's (under RecorderPath, behind its
 // client key), the admin API's (under AdminPath, behind the admin
-// authenticator), public, or the app's. A public route can only come from
+// authenticator), public, the listener's account (under account.AuthPath
+// and account.AccountPath), or the app's. A public route can only come from
 // internal/public, whose handlers read through the hidden-talkgroup gate
-// (ADR 0004), and lives under APIPath. An app route can only come from the
-// web package, the browser app's static files, which carry no deployment
-// data, and lives outside APIPath. New refuses any other route.
+// (ADR 0004), and lives under APIPath; it never sees the request's cookies
+// or credentials, so signing in can't change its answer (P3, ADR 0009). An
+// account route can only come from internal/account. An app route can only
+// come from the web package, the browser app's static files, which carry no
+// deployment data, and lives outside APIPath and the sign-in hops. New
+// refuses any other route.
 const (
 	HealthRoute RouteKind = iota
 	RecorderRoute
 	AdminRoute
 	PublicRoute
 	AppRoute
+	AccountRoute
 )
 
 func (k RouteKind) String() string {
-	return [...]string{"health", "recorder", "admin", "public", "app"}[k]
+	return [...]string{"health", "recorder", "admin", "public", "app", "account"}[k]
 }
 
 // Route is one route the API serves.
@@ -80,9 +86,11 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.app.ServeHTTP(w, r)
 }
 
-// apiPath says whether path is the API's rather than the app's.
+// apiPath says whether path is the API's rather than the app's: the sign-in
+// hops are the API's too.
 func apiPath(path string) bool {
-	return path == "/healthz" || path == APIPath || under(path, APIPath)
+	return path == "/healthz" || path == APIPath || under(path, APIPath) ||
+		path == account.AuthPath || under(path, account.AuthPath)
 }
 
 // Routes are every route the API serves, and their kinds. The A10 harness
@@ -109,7 +117,10 @@ func (a *API) handle(kind RouteKind, pattern string, h http.Handler) {
 		fits = under(path, AdminPath)
 	case PublicRoute:
 		fits = under(path, APIPath) && !under(path, RecorderPath) && !under(path, AdminPath) &&
-			path != RecorderPath && path != AdminPath
+			!under(path, account.AccountPath) &&
+			path != RecorderPath && path != AdminPath && path != account.AccountPath
+	case AccountRoute:
+		fits = under(path, account.AuthPath) || path == account.AccountPath || under(path, account.AccountPath)
 	case AppRoute:
 		fits = strings.HasPrefix(path, "/") && !apiPath(path)
 	}
@@ -134,11 +145,34 @@ func WithRecorders(rs *Recorders) Option {
 }
 
 // WithPublic serves the public API, every route of which reads through the
-// gate (R32).
+// gate (R32), and sees no cookie or credential (anonymous).
 func WithPublic(p *public.API) Option {
 	return func(a *API) {
 		for _, r := range p.Routes() {
-			a.handle(PublicRoute, r.Pattern, r.Handler)
+			a.handle(PublicRoute, r.Pattern, anonymous(r.Handler))
+		}
+	}
+}
+
+// anonymous hands h the request without its cookies or credentials, so a
+// public route answers a signed-in listener exactly as anyone else (P3,
+// R111): it can't tell them apart (ADR 0009).
+func anonymous(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.Clone(r.Context())
+		r.Header.Del("Cookie")
+		r.Header.Del("Authorization")
+		h.ServeHTTP(w, r)
+	})
+}
+
+// WithAccount serves listeners' sign-in and their account (ADR 0009). None
+// of its routes is the admin API's, and its session is no admin
+// authenticator: listener sign-in opens nothing (R111).
+func WithAccount(acc *account.Service) Option {
+	return func(a *API) {
+		for _, r := range acc.Routes() {
+			a.handle(AccountRoute, r.Pattern, r.Handler)
 		}
 	}
 }
