@@ -24,6 +24,12 @@
 //	go run ./testing/webfixture <database URL> talkgroup <ID> state <public|hidden|ignored>
 //	go run ./testing/webfixture <database URL> talkgroup <ID> delay <minutes>
 //	go run ./testing/webfixture <database URL> talkgroup <ID> alert|led <name|null>
+//	go run ./testing/webfixture <database URL> calls <recorder name> <recordings dir>
+//
+// The Recent calls page's tests (issue #79) need an archive to search:
+// `calls` stores made-up calls as Bench's, by the hour before now, with
+// recordings (silent Ogg/Opus files) on the volume (calls.go). Each run
+// adds them again, at times from its own now.
 package main
 
 import (
@@ -103,8 +109,11 @@ func changeTalkgroup(ctx context.Context, conn *pgx.Conn, id, field, value strin
 
 func main() {
 	talkgroup := len(os.Args) == 6 && os.Args[2] == "talkgroup"
-	if len(os.Args) != 2 && len(os.Args) != 3 && !talkgroup {
-		fmt.Fprintln(os.Stderr, "usage: webfixture <database URL> [recorder name]\n       webfixture <database URL> talkgroup <ID> state|delay <value>")
+	calls := len(os.Args) == 5 && os.Args[2] == "calls"
+	one := len(os.Args) == 7 && os.Args[2] == "call"
+	if len(os.Args) != 2 && len(os.Args) != 3 && !talkgroup && !calls && !one {
+		fmt.Fprintln(os.Stderr, "usage: webfixture <database URL> [recorder name]\n       webfixture <database URL> talkgroup <ID> state|delay <value>\n"+
+			"       webfixture <database URL> calls <recorder name> <recordings dir>\n       webfixture <database URL> call <recorder name> <recordings dir> <talkgroup> <unit>")
 		os.Exit(2)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -115,6 +124,26 @@ func main() {
 		os.Exit(1)
 	}
 	defer conn.Close(context.Background())
+	if calls {
+		if err := storeCalls(ctx, conn, os.Args[3], os.Args[4], time.Now()); err != nil {
+			fmt.Fprintln(os.Stderr, "webfixture: calls:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if one {
+		tg, err1 := strconv.ParseInt(os.Args[5], 10, 32)
+		unit, err2 := strconv.ParseInt(os.Args[6], 10, 64)
+		if err1 != nil || err2 != nil {
+			fmt.Fprintln(os.Stderr, "webfixture: call: the talkgroup and the unit are numbers")
+			os.Exit(2)
+		}
+		if err := storeOne(ctx, conn, os.Args[3], os.Args[4], int32(tg), unit); err != nil {
+			fmt.Fprintln(os.Stderr, "webfixture: call:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if talkgroup {
 		if err := changeTalkgroup(ctx, conn, os.Args[3], os.Args[4], os.Args[5]); err != nil {
 			fmt.Fprintln(os.Stderr, "webfixture:", err)

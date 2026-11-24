@@ -3,6 +3,7 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,7 +34,11 @@ import (
 var a10Probes = map[string][]a10Probe{
 	"QUERY " + public.CallsPath:     callListProbes("QUERY"),
 	"POST " + public.CallsPath:      callListProbes("POST"),
-	"GET " + public.RecentCallsPath: recentProbes(),
+	"GET " + public.RecentCallsPath: recentProbes("GET"),
+	// The same search with its parameters in a JSON body (ADR 0016), for a
+	// set of talkgroups too long for a URL: the same probes, as bodies.
+	"QUERY " + public.RecentCallsPath: recentProbes("QUERY"),
+	"POST " + public.RecentCallsPath:  recentProbes("POST"),
 	"GET " + public.RecordingPath: {
 		{"whole", func(f *a10World, id string) *http.Request { return f.req("GET", public.RecordingURL(id), "") }},
 		{"a range", func(f *a10World, id string) *http.Request {
@@ -111,13 +116,17 @@ var a10Probes = map[string][]a10Probe{
 // only it, filters naming its talkgroup (for a hidden call, 1003 or 1005;
 // for a deleted one, 4711, which doesn't exist), alone, beside public 1001
 // and by system, a unit heard only on it, and cursors made from it, both
-// ways. Every unavailable call's answer must equal a deleted call's.
-func recentProbes() []a10Probe {
+// ways. Every unavailable call's answer must equal a deleted call's. GET
+// sends them in the query string; QUERY and POST in a JSON body (ADR 0016).
+func recentProbes(method string) []a10Probe {
 	window := func(f *a10World) url.Values {
 		return url.Values{"from": {"2025-11-24T15:00:00Z"}, "to": {"2025-11-24T17:00:00Z"}}
 	}
 	probe := func(name string, q func(f *a10World, id string) url.Values) a10Probe {
 		return a10Probe{name, func(f *a10World, id string) *http.Request {
+			if method != "GET" {
+				return f.req(method, public.RecentCallsPath, searchBody(q(f, id)))
+			}
 			return f.req("GET", public.RecentCallsPath+"?"+q(f, id).Encode(), "")
 		}}
 	}
@@ -133,7 +142,7 @@ func recentProbes() []a10Probe {
 		}
 		return public.Cursor(f.at[id], id)
 	}
-	return []a10Probe{
+	probes := []a10Probe{
 		probe("a range holding only it", func(f *a10World, id string) url.Values {
 			return url.Values{"from": {f.at[id].Format(time.RFC3339)}, "to": {f.at[id].Add(time.Second).Format(time.RFC3339)}}
 		}),
@@ -164,10 +173,35 @@ func recentProbes() []a10Probe {
 			return with(window(f), "cursor", cursor(f, id), "order", "oldest")
 		}),
 		probe("a page of one", func(f *a10World, _ string) url.Values { return with(window(f), "limit", "1") }),
-		{"HEAD", func(f *a10World, id string) *http.Request {
-			return f.req("HEAD", public.RecentCallsPath+"?"+with(window(f), "talkgroups", f.names[id]).Encode(), "")
-		}},
 	}
+	if method != "GET" {
+		return probes
+	}
+	return append(probes, a10Probe{"HEAD", func(f *a10World, id string) *http.Request {
+		return f.req("HEAD", public.RecentCallsPath+"?"+with(window(f), "talkgroups", f.names[id]).Encode(), "")
+	}})
+}
+
+// searchBody is a search's query string as the JSON body QUERY and POST
+// take (ADR 0016): talkgroups as a list, limit as a number.
+func searchBody(q url.Values) string {
+	body := map[string]any{}
+	for name := range q {
+		v := q.Get(name)
+		switch name {
+		case "talkgroups":
+			body[name] = strings.Split(v, ",")
+		case "limit":
+			body[name] = json.Number(v)
+		default:
+			body[name] = v
+		}
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
 }
 
 func searchProbe(q string) func(f *a10World, _ string) *http.Request {

@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -22,7 +24,8 @@ import (
 // Cache-Control: no-store, so hiding a talkgroup takes effect at the next
 // request.
 
-// RecentCallsPath is recent calls and search.
+// RecentCallsPath is recent calls and search: GET with the search in the
+// query string, or QUERY and POST with it in a JSON body (ADR 0016).
 const RecentCallsPath = "/api/v1/recent-calls"
 
 // MaxTalkgroups is the most talkgroups one search may name: a listening
@@ -138,9 +141,7 @@ func readSearch(q url.Values) (gate.Search, *apiError) {
 		return vs[0], nil
 	}
 	for name := range q {
-		switch name {
-		case "talkgroups", "from", "to", "unit", "order", "cursor", "limit":
-		default:
+		if !searchParam(name) {
 			e := badSearch("unknown_parameter", fmt.Sprintf("%q isn't a search parameter.", name))
 			return s, &e
 		}
@@ -214,7 +215,94 @@ func readSearch(q url.Values) (gate.Search, *apiError) {
 }
 
 func (a *API) recentCalls(w http.ResponseWriter, r *http.Request) {
-	s, bad := readSearch(r.URL.Query())
+	a.serveRecent(w, r, r.URL.Query())
+}
+
+// recentCallsBody is the same search with its parameters in a JSON body
+// (QUERY, and POST while browsers' support for QUERY is unsettled): for a
+// list of talkgroups too long for a URL behind a default nginx (ADR 0016).
+// The body is read into the query string's form and answered by the same
+// code, so every rule, refusal and answer is the GET's.
+func (a *API) recentCallsBody(w http.ResponseWriter, r *http.Request) {
+	q, bad := readSearchBody(w, r)
+	if bad != nil {
+		writeJSON(w, http.StatusBadRequest, bad)
+		return
+	}
+	a.serveRecent(w, r, q)
+}
+
+// MaxSearchBody is the most a search's JSON body may hold: 1,000
+// talkgroups, each with its system, and the other parameters, with room.
+const MaxSearchBody = 64 << 10
+
+var invalidSearchBody = apiError{Code: "invalid_body",
+	Message: `The body is a JSON object of the search's parameters: {"talkgroups": ["1001", "1.1002"], "from", "to", "unit", "order", "cursor", "limit"}.`}
+
+// readSearchBody reads a search's JSON body into the query string's form:
+// talkgroups is an array of `[system "."] id` strings, limit a number, and
+// the rest strings. A null is a parameter not given.
+func readSearchBody(w http.ResponseWriter, r *http.Request) (url.Values, *apiError) {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxSearchBody))
+	var in map[string]json.RawMessage
+	if err := dec.Decode(&in); err != nil || in == nil || dec.Decode(&struct{}{}) != io.EOF {
+		return nil, &invalidSearchBody
+	}
+	q := url.Values{}
+	for name, raw := range in {
+		if !searchParam(name) {
+			e := badSearch("unknown_parameter", fmt.Sprintf("%q isn't a search parameter.", name))
+			return nil, &e
+		}
+		if string(raw) == "null" {
+			continue
+		}
+		switch name {
+		case "talkgroups":
+			var items []string
+			if err := json.Unmarshal(raw, &items); err != nil {
+				return nil, &invalidSearchBody
+			}
+			for _, item := range items {
+				if item == "" || strings.Contains(item, ",") {
+					e := badSearch("invalid_talkgroups",
+						"talkgroups is a list of talkgroup IDs, each optionally after its system's ID and a dot.")
+					return nil, &e
+				}
+			}
+			if len(items) > 0 {
+				q.Set(name, strings.Join(items, ","))
+			}
+		case "limit":
+			// A number, not a string holding one (which json.Number takes).
+			var n json.Number
+			if err := json.Unmarshal(raw, &n); err != nil || raw[0] == '"' {
+				return nil, &invalidSearchBody
+			}
+			q.Set(name, n.String())
+		default:
+			var v string
+			if err := json.Unmarshal(raw, &v); err != nil {
+				return nil, &invalidSearchBody
+			}
+			q.Set(name, v)
+		}
+	}
+	return q, nil
+}
+
+func searchParam(name string) bool {
+	switch name {
+	case "talkgroups", "from", "to", "unit", "order", "cursor", "limit":
+		return true
+	}
+	return false
+}
+
+// serveRecent answers a search read from a query string, or from a body in
+// that form.
+func (a *API) serveRecent(w http.ResponseWriter, r *http.Request, q url.Values) {
+	s, bad := readSearch(q)
 	if bad != nil {
 		writeJSON(w, http.StatusBadRequest, bad)
 		return

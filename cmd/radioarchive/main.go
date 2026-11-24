@@ -17,7 +17,8 @@
 //	RECORDINGS_EARLY_DELETE_FLOOR  calls that started within this are never
 //	                deleted early, as a Go duration (default 24h)
 //	TZ              the deployment's time zone, e.g. Australia/Sydney (default UTC):
-//	                the nightly run's, and the one downloads are named in (ADR 0014)
+//	                the nightly run's, the one downloads are named in (ADR 0014),
+//	                and the one the browser shows times in (ADR 0016)
 //	NIGHTLY_AT      local time of the nightly retention run, HH:MM (default 03:00, in TZ)
 //	RECORDER_NOTICE_AFTER  how long a recorder is disconnected or deaf before
 //	                listeners see "Some talkgroups aren't being received
@@ -46,8 +47,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // TZ's zone wherever the binary runs (ADR 0016)
 
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/public"
@@ -208,8 +211,25 @@ func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate
 	if err != nil {
 		return nil, err
 	}
-	return server.New(st, log, server.WithRecorders(rs), server.WithPublic(public.New(g, log)),
+	return server.New(st, log, server.WithRecorders(rs), server.WithPublic(public.New(g, log, public.WithLocation(deploymentZone()))),
 		server.WithAccount(acc), server.WithApp(web.New())), nil
+}
+
+// deploymentZone is TZ's zone, loaded by its name so the public API can tell
+// the browser which zone to show times in (ADR 0016); Go calls the zone it
+// reads from TZ "Local". The zone database is in the binary (time/tzdata),
+// so TZ works wherever it runs. TZ unset, or a zone it doesn't know, is
+// time.Local, as the retention job reads it.
+func deploymentZone() *time.Location {
+	name := strings.TrimPrefix(os.Getenv("TZ"), ":")
+	if name == "" {
+		return time.Local
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return time.Local
+	}
+	return loc
 }
 
 // retentionJob is the nightly retention job and the low-disk check (R88),

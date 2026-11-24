@@ -61,6 +61,10 @@ func TestIntegrationCatalogue(t *testing.T) {
 	if a.header.Get("Cache-Control") != "no-store" || a.header.Get("Content-Type") != "application/json" {
 		t.Errorf("headers %v", a.header)
 	}
+	// The deployment's time zone, which the browser shows times in (ADR 0016).
+	if c.TimeZone != "Australia/Sydney" {
+		t.Errorf("time zone %q, want the deployment's Australia/Sydney", c.TimeZone)
+	}
 	d, f := c.Talkgroups[0], c.Talkgroups[1]
 	if d.Name != "Dispatch North" || d.Label != "DISP N" || d.Tag != "dispatch" || !slices.Equal(d.Groups, []string{"North"}) ||
 		d.System != nil || d.FiregroundChannel != nil || d.DelayMinutes != 0 || d.LEDColour != nil || d.Alert != nil {

@@ -27,7 +27,7 @@ Recent calls and search are one public route, `GET /api/v1/recent-calls`, readin
 
 R46 has one list with filters, and A10 lists "search" and "recent calls" as surfaces; with no free text (R46), a search is the recent-calls list with filters, so they're one route with one set of probes. It's a `GET` with a query string: nothing in it is private (talkgroup IDs and times), a browser can retry it, and load more is the same URL with a cursor. R67's QUERY and POST are for lists of call IDs; this takes none.
 
-The 1,000-talkgroup cap is the deployment's size (section 2). A full listening set of 4-digit IDs is about 5 KB of query string, inside nginx's default 8 KB header buffers (R85); with a system prefix on each, a listening set of 1,000 talkgroups in several systems could pass it. That's the page's to watch (#79): a listening set that large is better sent as no filter, which is every public talkgroup.
+The 1,000-talkgroup cap is the deployment's size (section 2). A full listening set of 4-digit IDs is about 5 KB of query string, inside nginx's default 8 KB header buffers (R85); with a system prefix on each, a listening set of 1,000 talkgroups in several systems could pass it. That's the page's to watch (#79): a listening set that large is better sent as no filter, which is every public talkgroup. (ADR 0016 chose otherwise: `QUERY` and `POST` take the same search as a JSON body, through the same code, and the page sends one when the GET would be too long.)
 
 ## The default (R46, P4)
 

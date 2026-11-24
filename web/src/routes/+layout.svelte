@@ -12,6 +12,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { Player } from '#lib/audio/player.svelte.ts';
 	import Dock from '#lib/audio/Dock.svelte';
+	import { providePlayer } from '#lib/audio/context.ts';
 	import { keyOf } from '#lib/listening/set.ts';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
@@ -39,7 +40,11 @@
 		isPriority: (t) => listening.saved.some((e) => e.priority && keyOf(e) === keyOf(t)),
 		alerts: () => alerts
 	});
-	onDestroy(() => player.stop());
+	onDestroy(() => {
+		player.stop();
+		player.replay.stop();
+	});
+	providePlayer(player);
 
 	function chooseAlerts(on: boolean) {
 		alerts = on;
@@ -113,8 +118,13 @@
 	const signInHref = $derived(`/auth/signin?return=${encodeURIComponent(page.url.pathname + page.url.search)}`);
 	const who = $derived(acct.who ? { name: acct.who.name, email: acct.who.email } : null);
 
-	// R84's pages, as they arrive: Listen for now.
-	const top = [{ href: '/', label: 'Listen', icon: 'play', text: 'Live calls from your listening set' }];
+	// R84's pages, as they arrive: Listen and Recent calls (Basket is #81's).
+	// The phone's bottom bar says Recent.
+	const top = [
+		{ href: '/', label: 'Listen', icon: 'play', text: 'Live calls from your listening set' },
+		{ href: '/recent', label: 'Recent calls', icon: 'clock', text: 'Search and replay the archive' }
+	];
+	const bar = [top[0], { ...top[1], label: 'Recent' }];
 	const brand = { name: 'RadioArchive', mark: 'RA', href: '/' };
 </script>
 
@@ -155,7 +165,7 @@
 			{/snippet}
 		</AccountMenu>
 	{/snippet}
-	{#snippet bottomBar()}<BottomBar entries={top} current={page.url.pathname} />{/snippet}
+	{#snippet bottomBar()}<BottomBar entries={bar} current={page.url.pathname} />{/snippet}
 
 	{#if notice === 'signin-failed'}
 		<p class="alert" role="alert">Couldn't sign you in. Try again from the account menu. Listening works as before.</p>

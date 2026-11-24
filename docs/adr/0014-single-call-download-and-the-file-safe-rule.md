@@ -13,7 +13,7 @@ A listener downloads one call from `GET /api/v1/calls/{call}/download` (and `HEA
 | Part | Choice |
 |---|---|
 | **Route** | `GET /api/v1/calls/{call}/download`, in `internal/public`, through the gate (`Gate.Download`). A route of its own, not a query parameter on the recording, so the recording's answer and its browser cache stay as they are |
-| **Body** | The recording's own answer (ADR 0004's playback): `http.ServeContent` over the stored file, so range requests, `If-Range` and `Last-Modified` resume a broken download; `Content-Type: audio/ogg; codecs=opus`; `Cache-Control: private, max-age=31536000, immutable` (R74). Nothing is transcoded or written into the file (R62) |
+| **Body** | The recording's own answer (ADR 0004's playback): `http.ServeContent` over the stored file, so range requests, `If-Range` and `Last-Modified` resume a broken download; `Content-Type: audio/ogg; codecs=opus` (since ADR 0016, `application/octet-stream`, so Firefox and Safari keep `.opus`); `Cache-Control: private, max-age=31536000, immutable` (R74). Nothing is transcoded or written into the file (R62) |
 | **File name** | `Content-Disposition: attachment; filename="..."`, with `filename*=UTF-8''...` (RFC 6266, RFC 8187) only when the name has a character outside printable ASCII |
 | **Name** | `<YYYY-MM-DD>_<HHMMSS>_<talkgroup label>_<talkgroup ID>.opus`, at the call's start, in the deployment's time zone. The label is the talkgroup's label (R63), not its name. A label with nothing left once safe is left out with its underscore: `<YYYY-MM-DD>_<HHMMSS>_<talkgroup ID>.opus` |
 | **Time zone** | `TZ`, as Go reads it into `time.Local` (the retention job's too, ADR 0005). `public.WithLocation` sets it in tests. The compose file passes `TZ`, UTC by default |
