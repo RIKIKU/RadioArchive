@@ -31,12 +31,21 @@ function storeCall(talkgroup: number, unit: number): Promise<{ id: string; ended
  * at most two lines, and the dock no more than a third of the screen.
  */
 async function compactDock(page: Page, what: string) {
+	// The look's --target, in pixels (ArchiveUx: 44 px on touch screens).
+	const target = await page.evaluate(() => {
+		const probe = document.body.appendChild(document.createElement('div'));
+		probe.style.width = 'var(--target)';
+		const w = probe.getBoundingClientRect().width;
+		probe.remove();
+		return w;
+	});
+	expect(target).toBeGreaterThan(0);
 	const sameRow = async (controls: ReturnType<typeof dock>, n: string) => {
 		const boxes = await controls.getByRole('button').evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => ({ top: r.top, width: r.width, height: r.height })));
 		expect(boxes.length, n).toBeGreaterThan(0);
 		for (const b of boxes) {
 			expect(b.top, `${n} in one row, ${what}`).toBe(boxes[0].top);
-			expect(Math.min(b.width, b.height), `${n} whole targets, ${what}`).toBeGreaterThanOrEqual(44);
+			expect(Math.min(b.width, b.height), `${n} whole targets, ${what}`).toBeGreaterThanOrEqual(target - 0.5);
 		}
 	};
 	const replay = dock(page).locator('.replay');

@@ -21,7 +21,7 @@
 	// show which call of them is playing, and when it started.
 	//
 	// On a phone (ADR 0023, "On a phone") the dock stacks: the replay first,
-	// its name on one line beside its controls and the rest under both, then
+	// its name beside its controls and the rest under both, then
 	// live listening, its status in a line above its controls. On a desktop
 	// the two sit side by side, as before (the wrapper isn't drawn there).
 	import { Icon, LiveBadge } from 'archiveux/components';
@@ -298,14 +298,13 @@
 			gap: var(--space-xs);
 			min-width: 0;
 		}
-		/* The replay: its name on one line, beside its three controls; the
+		/* The replay: its badge, name and group beside its three controls; the
 		   rest under both, across the width, wrapping between its parts. */
 		.replay {
 			position: relative;
 			display: block;
 		}
 		.replay .np-name {
-			flex-wrap: nowrap;
 			min-height: var(--target);
 			padding-right: calc(3 * var(--target) + 3 * var(--space-xs));
 		}
@@ -316,10 +315,11 @@
 		.replay .tg {
 			min-width: 0;
 		}
-		/* The group gives way first, shortened with an ellipsis; the name
-		   wraps rather than being cut. Both are read out whole. */
+		/* Beside the controls, the name and the group each move to the next
+		   line whole when there's no room; a group longer than the line is
+		   shortened with an ellipsis, a name wraps. Both are read out whole. */
 		.replay .group {
-			flex: 0 1000 auto;
+			max-width: 100%;
 			min-width: 0;
 			overflow: hidden;
 			text-overflow: ellipsis;
