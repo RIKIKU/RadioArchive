@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -55,6 +56,58 @@ var a10Probes = map[string][]a10Probe{
 	"GET /robots.txt": {
 		{"robots.txt", func(f *a10World, id string) *http.Request { return f.req("GET", "/robots.txt", "") }},
 	},
+	// The catalogue and search name no call: their probes ignore the ID,
+	// so every answer must be the same, and none may name 1003 or 1005.
+	"GET " + public.CataloguePath: {
+		{"whole", func(f *a10World, _ string) *http.Request { return f.req("GET", public.CataloguePath, "") }},
+		{"HEAD", func(f *a10World, _ string) *http.Request { return f.req("HEAD", public.CataloguePath, "") }},
+	},
+	"GET " + public.SearchPath: {
+		{"empty query", searchProbe("")},
+		{"no query", func(f *a10World, _ string) *http.Request { return f.req("GET", public.SearchPath, "") }},
+		{"1003's ID", searchProbe("1003")},
+		{"1003's name", searchProbe("Admin")},
+		{"1003's label", searchProbe("ADMIN")},
+		{"1003's tag", searchProbe("admin")},
+		{"1003's group", searchProbe("Covert group")},
+		{"1005's name", searchProbe("Covert ops")},
+		{"part of an ID", searchProbe("100")},
+	},
+	// The fireground lookup names a talkgroup by its number: a public
+	// call's probe asks for 1002's (41, with and without a leading zero),
+	// a deleted call's for one no talkgroup has (99), and every other for
+	// 1003's (hidden) or 1005's (ignored), which must answer as 99 does.
+	"GET " + public.FiregroundPath: {
+		{"by number", func(f *a10World, id string) *http.Request {
+			return f.req("GET", public.FiregroundURL(f.fireground(id)), "")
+		}},
+		{"HEAD", func(f *a10World, id string) *http.Request {
+			return f.req("HEAD", public.FiregroundURL(f.fireground(id)), "")
+		}},
+	},
+}
+
+func searchProbe(q string) func(f *a10World, _ string) *http.Request {
+	return func(f *a10World, _ string) *http.Request {
+		return f.req("GET", public.SearchPath+"?q="+url.QueryEscape(q), "")
+	}
+}
+
+// fireground is the fireground channel number a probe for call id asks for.
+func (f *a10World) fireground(id string) string {
+	switch {
+	case id == f.public[0]:
+		return "041"
+	case id == f.public[1]:
+		return "41"
+	case id == f.deleted:
+		return "99"
+	case strings.Contains(f.callName[id], "1005"):
+		return "45"
+	case strings.HasPrefix(f.callName[id], "never"):
+		return "0043"
+	}
+	return "43"
 }
 
 // appBuild stands in for the browser app's build (web/build) in the
@@ -92,6 +145,7 @@ type a10World struct {
 	// unavailable names every way a call can be unavailable; each must
 	// answer exactly as deleted does.
 	unavailable map[string]string
+	callName    map[string]string // unavailable, inverted
 	deleted     string
 	secrets     []string // nothing public may contain these
 	secretAudio [][]byte
@@ -157,8 +211,17 @@ func newA10World(t *testing.T) *a10World {
 		t.Fatal(err)
 	}
 
-	f.secrets = []string{"1003", "1005", "Admin", "ADMIN", "Covert ops", "SECRET 5"}
+	// Hidden 1003 and ignored 1005 have fireground channel numbers and a
+	// group of their own, which no public talkgroup is in.
+	for tg, n := range map[int]int{1003: 43, 1005: 45} {
+		e.mustAdmin(t, "PATCH", fmt.Sprintf("/systems/%d/talkgroups/%d", e.sys, tg),
+			map[string]any{"fireground_channel": n, "groups": []string{"Covert group"}}, 200)
+	}
+
+	f.secrets = []string{"1003", "1005", "Admin", "ADMIN", `"admin"`, "Covert ops", "SECRET 5", "Covert group"}
+	f.callName = map[string]string{}
 	for k, id := range f.unavailable {
+		f.callName[id] = k
 		if !strings.HasPrefix(k, "never") && !strings.HasPrefix(k, "not") {
 			f.secrets = append(f.secrets, id)
 		}

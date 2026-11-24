@@ -124,6 +124,19 @@ type Call struct {
 	RecordingAt       pgtype.Timestamptz
 }
 
+type CatalogueGeneration struct {
+	One bool
+	N   int64
+}
+
+type Group struct {
+	ID        int64
+	Name      string
+	Alert     *string
+	LedColour *string
+	SortOrder int32
+}
+
 type Job struct {
 	Name       string
 	RanFor     pgtype.Timestamptz
@@ -144,6 +157,19 @@ type PublicCall struct {
 	RecordingPath     *string
 	RecordingSize     *int64
 	RecordingAt       pgtype.Timestamptz
+}
+
+type PublicTalkgroup struct {
+	SystemID          int64
+	TalkgroupID       int32
+	Label             string
+	Name              string
+	TagID             *int64
+	DelayMinutes      int32
+	Alert             *string
+	LedColour         *string
+	SortOrder         int32
+	FiregroundChannel *int32
 }
 
 type Recorder struct {
@@ -183,23 +209,40 @@ type System struct {
 	Name       string
 	AutoCreate bool
 	UpdatedAt  pgtype.Timestamptz
+	Alert      *string
+	LedColour  *string
+	SortOrder  int32
 }
 
 type Tag struct {
-	ID   int64
-	Name string
+	ID        int64
+	Name      string
+	Alert     *string
+	LedColour *string
+	SortOrder int32
 }
 
 type Talkgroup struct {
+	SystemID          int64
+	TalkgroupID       int32
+	Label             string
+	Name              string
+	TagID             *int64
+	State             TalkgroupState
+	Unreviewed        bool
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	DelayMinutes      int32
+	Alert             *string
+	LedColour         *string
+	SortOrder         int32
+	FiregroundChannel *int32
+}
+
+type TalkgroupGroup struct {
 	SystemID    int64
 	TalkgroupID int32
-	Label       string
-	Name        string
-	TagID       *int64
-	State       TalkgroupState
-	Unreviewed  bool
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
+	GroupID     int64
 }
 
 type Transmission struct {

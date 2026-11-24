@@ -4,8 +4,8 @@
 // Its handlers see the deployment only through the gate (internal/gate).
 // This package may not import the store, the database driver or the file
 // system (imports_test.go enforces it), and its routes are the only public
-// ones the server mounts (internal/server). A new public surface (the
-// catalogue, search, the live feed, zips) is added here, on the gate, and to
+// ones the server mounts (internal/server). A new public surface (recent
+// calls, the live feed, zips) is added here, on the gate, and to
 // the A10 harness (internal/server/a10_test.go), which fails while any public
 // route is missing from it.
 package public
@@ -41,6 +41,7 @@ type API struct {
 	g      *gate.Gate
 	log    *slog.Logger
 	routes []Route
+	cat    catalogueBody
 }
 
 // New returns the public API, reading through g.
@@ -49,6 +50,9 @@ func New(g *gate.Gate, log *slog.Logger) *API {
 	a.handle("QUERY "+CallsPath, a.calls)
 	a.handle("POST "+CallsPath, a.calls)
 	a.handle("GET "+RecordingPath, a.recording)
+	a.handle("GET "+CataloguePath, a.catalogue)
+	a.handle("GET "+SearchPath, a.search)
+	a.handle("GET "+FiregroundPath, a.fireground)
 	return a
 }
 
@@ -74,7 +78,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	if err != nil {
 		code, b = http.StatusInternalServerError, []byte(`{"error":"internal","message":"Something went wrong."}`)
 	}
-	b = append(b, '\n')
+	writeBody(w, code, append(b, '\n'))
+}
+
+// writeBody answers with an encoded JSON body, never cached (R74).
+func writeBody(w http.ResponseWriter, code int, b []byte) {
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	h.Set("Cache-Control", "no-store")

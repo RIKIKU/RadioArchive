@@ -73,6 +73,9 @@ type env struct {
 	dir  string
 	sink *sink
 	sys  int64 // the test's fixture system, once recorder has made it
+	// fixtures counts the fixture systems made: only the first is EX (ID 1)
+	// with fireground channel number 41, which is unique in the deployment.
+	fixtures int
 	// The retention job, on the test's clock and free space. Nothing runs
 	// it on a schedule: tests trigger its runs.
 	job   *retention.Job
@@ -89,7 +92,9 @@ func newEnv(t *testing.T) *env {
 func newEnvAt(t *testing.T, serverVersion string) *env {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	st, err := store.Open(ctx, storetest.URL(t))
+	// A database of its own: the catalogue and fireground channel numbers
+	// are the whole deployment's.
+	st, err := store.Open(ctx, storetest.FreshURL(t))
 	if err != nil {
 		t.Fatal(err)
 	}

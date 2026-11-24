@@ -50,25 +50,32 @@ SELECT id, retired_at FROM recorders WHERE name = sqlc.arg(name);
 -- Systems (R11). The ID is the admin's.
 
 -- name: CreateSystem :one
-INSERT INTO systems (id, label, name, auto_create)
-VALUES (sqlc.arg(id), sqlc.arg(label), sqlc.arg(name), sqlc.arg(auto_create))
-RETURNING id, label, name, auto_create, created_at, updated_at;
+INSERT INTO systems (id, label, name, auto_create, alert, led_colour, sort_order)
+VALUES (sqlc.arg(id), sqlc.arg(label), sqlc.arg(name), sqlc.arg(auto_create),
+        sqlc.narg(alert), sqlc.narg(led_colour), sqlc.arg(sort_order))
+RETURNING id, label, name, auto_create, alert, led_colour, sort_order, created_at, updated_at;
 
 -- name: ListSystems :many
-SELECT id, label, name, auto_create, created_at, updated_at FROM systems ORDER BY id;
+SELECT id, label, name, auto_create, alert, led_colour, sort_order, created_at, updated_at
+FROM systems ORDER BY id;
 
 -- name: GetSystem :one
-SELECT id, label, name, auto_create, created_at, updated_at FROM systems WHERE id = sqlc.arg(id);
+SELECT id, label, name, auto_create, alert, led_colour, sort_order, created_at, updated_at
+FROM systems WHERE id = sqlc.arg(id);
 
 -- name: UpdateSystem :one
--- Changes only the fields given.
+-- Changes only the fields given. Alert and LED colour may be cleared (NULL:
+-- none of its own), so each has a flag saying it's given.
 UPDATE systems
 SET label = COALESCE(sqlc.narg(label), label),
     name = COALESCE(sqlc.narg(name), name),
     auto_create = COALESCE(sqlc.narg(auto_create), auto_create),
+    sort_order = COALESCE(sqlc.narg(sort_order)::integer, sort_order),
+    alert = CASE WHEN sqlc.arg(set_alert)::bool THEN sqlc.narg(alert)::text ELSE alert END,
+    led_colour = CASE WHEN sqlc.arg(set_led_colour)::bool THEN sqlc.narg(led_colour)::text ELSE led_colour END,
     updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, label, name, auto_create, created_at, updated_at;
+RETURNING id, label, name, auto_create, alert, led_colour, sort_order, created_at, updated_at;
 
 -- name: SystemInUse :one
 -- A system that still has talkgroups or calls can't be deleted (R11).
@@ -101,6 +108,10 @@ DELETE FROM attachments WHERE recorder_id = sqlc.arg(recorder_id) AND short_name
 
 -- name: ListTalkgroups :many
 SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.unreviewed,
+       ARRAY(SELECT x.name FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
+             WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
+             ORDER BY x.sort_order, x.name)::text[] AS groups,
+       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel,
        t.created_at, t.updated_at
 FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
 WHERE t.system_id = sqlc.arg(system_id)
@@ -108,6 +119,10 @@ ORDER BY t.talkgroup_id;
 
 -- name: GetTalkgroup :one
 SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.unreviewed,
+       ARRAY(SELECT x.name FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
+             WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
+             ORDER BY x.sort_order, x.name)::text[] AS groups,
+       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel,
        t.created_at, t.updated_at
 FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
 WHERE t.system_id = sqlc.arg(system_id) AND t.talkgroup_id = sqlc.arg(talkgroup_id);
@@ -118,25 +133,93 @@ ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
 RETURNING id;
 
 -- name: PutTalkgroup :exec
--- An admin's add or full edit. It marks the talkgroup reviewed.
-INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state)
+-- An admin's add or full edit. It marks the talkgroup reviewed. Its groups
+-- are set apart (ClearTalkgroupGroups, AddTalkgroupGroups).
+INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state,
+                        delay_minutes, alert, led_colour, sort_order, fireground_channel)
 VALUES (sqlc.arg(system_id), sqlc.arg(talkgroup_id), sqlc.arg(label), sqlc.arg(name),
-        sqlc.arg(tag_id), sqlc.arg(state))
+        sqlc.arg(tag_id), sqlc.arg(state), sqlc.arg(delay_minutes), sqlc.narg(alert),
+        sqlc.narg(led_colour), sqlc.arg(sort_order), sqlc.narg(fireground_channel))
 ON CONFLICT (system_id, talkgroup_id) DO UPDATE
 SET label = EXCLUDED.label, name = EXCLUDED.name, tag_id = EXCLUDED.tag_id, state = EXCLUDED.state,
+    delay_minutes = EXCLUDED.delay_minutes, alert = EXCLUDED.alert, led_colour = EXCLUDED.led_colour,
+    sort_order = EXCLUDED.sort_order, fireground_channel = EXCLUDED.fireground_channel,
     unreviewed = false, updated_at = now();
 
 -- name: PatchTalkgroup :execrows
 -- An admin's partial edit, of the fields given. It marks the talkgroup
--- reviewed, so it needs a tag by then (the table's check).
+-- reviewed, so it needs a tag by then (the table's check). Alert, LED
+-- colour and fireground channel number may be cleared, so each has a flag
+-- saying it's given.
 UPDATE talkgroups
 SET label = COALESCE(sqlc.narg(label), label),
     name = COALESCE(sqlc.narg(name), name),
     tag_id = COALESCE(sqlc.narg(tag_id), tag_id),
     state = COALESCE(sqlc.narg(state)::talkgroup_state, state),
+    delay_minutes = COALESCE(sqlc.narg(delay_minutes)::integer, delay_minutes),
+    sort_order = COALESCE(sqlc.narg(sort_order)::integer, sort_order),
+    alert = CASE WHEN sqlc.arg(set_alert)::bool THEN sqlc.narg(alert)::text ELSE alert END,
+    led_colour = CASE WHEN sqlc.arg(set_led_colour)::bool THEN sqlc.narg(led_colour)::text ELSE led_colour END,
+    fireground_channel = CASE WHEN sqlc.arg(set_fireground_channel)::bool
+        THEN sqlc.narg(fireground_channel)::integer ELSE fireground_channel END,
     unreviewed = false,
     updated_at = now()
 WHERE system_id = sqlc.arg(system_id) AND talkgroup_id = sqlc.arg(talkgroup_id);
+
+-- name: FiregroundHolder :one
+-- The talkgroup, other than this one, that has a fireground channel number
+-- (R100), to name it in the refusal.
+SELECT t.system_id, s.label AS system_label, t.talkgroup_id, t.label, t.name
+FROM talkgroups t JOIN systems s ON s.id = t.system_id
+WHERE t.fireground_channel = sqlc.arg(channel)::integer
+  AND NOT (t.system_id = sqlc.arg(system_id)::bigint AND t.talkgroup_id = sqlc.arg(talkgroup_id)::integer);
+
+-- name: ClearTalkgroupGroups :exec
+DELETE FROM talkgroup_groups
+WHERE system_id = sqlc.arg(system_id) AND talkgroup_id = sqlc.arg(talkgroup_id);
+
+-- name: AddTalkgroupGroups :exec
+INSERT INTO talkgroup_groups (system_id, talkgroup_id, group_id)
+SELECT sqlc.arg(system_id)::bigint, sqlc.arg(talkgroup_id)::integer, g
+FROM unnest(sqlc.arg(group_ids)::bigint[]) AS g
+ON CONFLICT DO NOTHING;
+
+-- Groups and tags (R22): names, with alert, LED colour and sort order.
+
+-- name: EnsureGroup :one
+-- A group named on a talkgroup is created on first use, as a tag is.
+INSERT INTO groups (name) VALUES (sqlc.arg(name))
+ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+RETURNING id;
+
+-- name: CreateGroup :one
+INSERT INTO groups (name, alert, led_colour, sort_order)
+VALUES (sqlc.arg(name), sqlc.narg(alert), sqlc.narg(led_colour), sqlc.arg(sort_order))
+RETURNING id, name, alert, led_colour, sort_order;
+
+-- name: ListGroups :many
+SELECT id, name, alert, led_colour, sort_order FROM groups ORDER BY sort_order, name;
+
+-- name: UpdateGroup :one
+UPDATE groups
+SET name = COALESCE(sqlc.narg(name), name),
+    sort_order = COALESCE(sqlc.narg(sort_order)::integer, sort_order),
+    alert = CASE WHEN sqlc.arg(set_alert)::bool THEN sqlc.narg(alert)::text ELSE alert END,
+    led_colour = CASE WHEN sqlc.arg(set_led_colour)::bool THEN sqlc.narg(led_colour)::text ELSE led_colour END
+WHERE id = sqlc.arg(id)
+RETURNING id, name, alert, led_colour, sort_order;
+
+-- name: ListTags :many
+SELECT id, name, alert, led_colour, sort_order FROM tags ORDER BY sort_order, name;
+
+-- name: UpdateTag :one
+UPDATE tags
+SET name = COALESCE(sqlc.narg(name), name),
+    sort_order = COALESCE(sqlc.narg(sort_order)::integer, sort_order),
+    alert = CASE WHEN sqlc.arg(set_alert)::bool THEN sqlc.narg(alert)::text ELSE alert END,
+    led_colour = CASE WHEN sqlc.arg(set_led_colour)::bool THEN sqlc.narg(led_colour)::text ELSE led_colour END
+WHERE id = sqlc.arg(id)
+RETURNING id, name, alert, led_colour, sort_order;
 
 -- Ingest's decisions (R12, R17, R18, R21), made in one transaction when the
 -- server first hears of a call: store.Admit.
@@ -335,6 +418,32 @@ SELECT c.recording_path::text AS recording_path, c.recording_size::bigint AS rec
        c.recording_at::timestamptz AS recording_at
 FROM public_calls c
 WHERE c.id = sqlc.arg(id) AND c.recording_path IS NOT NULL;
+
+-- The catalogue (R15, R22, R24, R42, R77, R101; ADR 0006). It reads
+-- talkgroups only through the public_talkgroups view (migration 00007), as
+-- the call queries read public_calls, and only internal/gate calls it.
+
+-- name: GateCatalogueGeneration :one
+-- Moves at the commit of any change the catalogue is built from.
+SELECT n FROM catalogue_generation;
+
+-- name: GateCatalogue :many
+-- Every public talkgroup, with what its settings are taken from: its own,
+-- its tag's, its groups' (in their order) and its system's.
+SELECT p.system_id, s.label AS system_label, s.name AS system_name,
+       s.alert AS system_alert, s.led_colour AS system_led_colour,
+       p.talkgroup_id, p.label, p.name, p.delay_minutes, p.alert, p.led_colour, p.fireground_channel,
+       g.name AS tag, g.sort_order AS tag_sort_order, g.alert AS tag_alert, g.led_colour AS tag_led_colour,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object('name', x.name, 'sort_order', x.sort_order,
+                                                     'alert', x.alert, 'led_colour', x.led_colour)
+                                  ORDER BY x.sort_order, x.name)
+                 FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
+                 WHERE m.system_id = p.system_id AND m.talkgroup_id = p.talkgroup_id),
+                '[]'::jsonb)::jsonb AS groups
+FROM public_talkgroups p
+JOIN systems s ON s.id = p.system_id
+LEFT JOIN tags g ON g.id = p.tag_id
+ORDER BY s.sort_order, s.id, p.sort_order, p.talkgroup_id;
 
 -- Admin playback (R34): any stored call's recording, whatever its state.
 

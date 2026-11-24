@@ -73,23 +73,40 @@ func (e *env) wantRefusal(t *testing.T, method, path string, body any, status in
 
 func newSystemID() int64 { return rand.Int64N(1<<52) + 1 }
 
-// fixture creates the test fixture's system and talkgroups under a new ID
-// (the tests share one database) and returns the ID.
+// fixture creates the test fixture's system and talkgroups (SPEC.md section
+// 8) and returns the system's ID. The env's first is EX, ID 1, with group
+// "North" on 1001 and fireground channel number 41 on 1002. A second in the
+// same env has a new ID and label, and no fireground channel number, which
+// is unique across the deployment (R100).
 func (e *env) fixture(t *testing.T) int64 {
 	t.Helper()
-	id := newSystemID()
-	e.mustAdmin(t, "POST", "/systems", map[string]any{"id": id, "label": fmt.Sprintf("EX-%d", id), "name": "Example network"}, 201)
+	e.fixtures++
+	first := e.fixtures == 1
+	id, label := int64(1), "EX"
+	if !first {
+		id = newSystemID()
+		label = fmt.Sprintf("EX-%d", id)
+	}
+	e.mustAdmin(t, "POST", "/systems", map[string]any{"id": id, "label": label, "name": "Example network"}, 201)
 	for _, tg := range []struct {
 		id                     int
 		label, name, tag, stat string
+		groups                 []string
+		fireground             any
 	}{
-		{1001, "DISP N", "Dispatch North", "dispatch", "public"},
-		{1002, "FG 41", "Fireground 41", "fireground", "public"},
-		{1003, "ADMIN", "Admin", "admin", "hidden"},
-		{1004, "", "", "other", "ignored"},
+		{1001, "DISP N", "Dispatch North", "dispatch", "public", []string{"North"}, nil},
+		{1002, "FG 41", "Fireground 41", "fireground", "public", nil, 41},
+		{1003, "ADMIN", "Admin", "admin", "hidden", nil, nil},
+		{1004, "", "", "other", "ignored", nil, nil},
 	} {
-		e.mustAdmin(t, "PUT", fmt.Sprintf("/systems/%d/talkgroups/%d", id, tg.id),
-			map[string]any{"label": tg.label, "name": tg.name, "tag": tg.tag, "state": tg.stat}, 201)
+		body := map[string]any{"label": tg.label, "name": tg.name, "tag": tg.tag, "state": tg.stat}
+		if tg.groups != nil {
+			body["groups"] = tg.groups
+		}
+		if tg.fireground != nil && first {
+			body["fireground_channel"] = tg.fireground
+		}
+		e.mustAdmin(t, "PUT", fmt.Sprintf("/systems/%d/talkgroups/%d", id, tg.id), body, 201)
 	}
 	return id
 }
@@ -113,7 +130,8 @@ func TestIntegrationAdminSignIn(t *testing.T) {
 	e := newEnv(t)
 	for _, p := range []string{"GET /systems", "POST /systems", "GET /attachments", "GET /rejections",
 		"PUT /systems/1/talkgroups/1001", "PUT /recorders/x/attachments/ex", "DELETE /systems/1",
-		"GET /calls/00000000-0000-4000-8000-000000000000/recording", "GET /retention", "PUT /retention"} {
+		"GET /calls/00000000-0000-4000-8000-000000000000/recording", "GET /retention", "PUT /retention",
+		"GET /groups", "POST /groups", "PATCH /groups/1", "GET /tags", "PATCH /tags/1"} {
 		method, path, _ := strings.Cut(p, " ")
 		code, b := e.adminReq(t, "", method, path, map[string]any{})
 		if code != 401 || !strings.Contains(string(b), `"admin_sign_in_required"`) {
