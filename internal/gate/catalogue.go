@@ -53,8 +53,40 @@ type Catalogue struct {
 	Groups     []string
 	Talkgroups []CatalogueTalkgroup
 
-	fireground map[int32]int // number → index in Talkgroups
-	keys       [][]string    // per talkgroup: name, label, tag, ID, lower case
+	fireground map[int32]int        // number → index in Talkgroups
+	byID       map[talkgroupKey]int // system and talkgroup → index in Talkgroups
+	keys       [][]string           // per talkgroup: name, label, tag, ID, lower case
+	delayed    bool                 // some talkgroup has a delay
+}
+
+type talkgroupKey struct {
+	system    int64
+	talkgroup int32
+}
+
+// talkgroup finds a public talkgroup.
+func (c *Catalogue) talkgroup(system int64, talkgroup int32) (CatalogueTalkgroup, bool) {
+	i, ok := c.byID[talkgroupKey{system, talkgroup}]
+	if !ok {
+		return CatalogueTalkgroup{}, false
+	}
+	return c.Talkgroups[i], true
+}
+
+// delayOf is the delay of a call on talkgroup patched with patched (R23):
+// the longest in its patch, since the call is heard on each of them. A
+// patched ID the system doesn't list has none, as it has no state.
+func (c *Catalogue) delayOf(system int64, talkgroup int32, patched []int32) int32 {
+	if !c.delayed {
+		return 0
+	}
+	var d int32
+	for _, tg := range append([]int32{talkgroup}, patched...) {
+		if t, ok := c.talkgroup(system, tg); ok {
+			d = max(d, t.DelayMinutes)
+		}
+	}
+	return d
 }
 
 // Catalogue returns the catalogue as it is now.
@@ -99,7 +131,7 @@ type ordered struct {
 func catalogueOf(gen int64, rows []db.GateCatalogueRow) (*Catalogue, error) {
 	c := &Catalogue{Generation: gen, Systems: []System{}, Tags: []string{}, Groups: []string{},
 		Talkgroups: make([]CatalogueTalkgroup, 0, len(rows)), fireground: map[int32]int{},
-		keys: make([][]string, 0, len(rows))}
+		byID: make(map[talkgroupKey]int, len(rows)), keys: make([][]string, 0, len(rows))}
 	seenSystem := map[int64]bool{}
 	tags, groups := map[string]int32{}, map[string]int32{}
 	for _, r := range rows {
@@ -130,6 +162,8 @@ func catalogueOf(gen int64, rows []db.GateCatalogueRow) (*Catalogue, error) {
 		if t.Fireground != nil {
 			c.fireground[*t.Fireground] = len(c.Talkgroups)
 		}
+		c.byID[talkgroupKey{sys.ID, t.ID}] = len(c.Talkgroups)
+		c.delayed = c.delayed || t.DelayMinutes > 0
 		c.Talkgroups = append(c.Talkgroups, t)
 		c.keys = append(c.keys, []string{strings.ToLower(t.Name), strings.ToLower(t.Label),
 			strings.ToLower(t.Tag), strconv.Itoa(int(t.ID))})

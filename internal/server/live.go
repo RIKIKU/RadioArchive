@@ -299,7 +299,15 @@ func (s *session) callStart(ctx context.Context, id cp.CallID, e event) error {
 		s.refused[id] = true
 		return nil
 	}
-	s.calls[id] = &liveCall{id: callID, idText: uuidString(callID)}
+	c := &liveCall{id: callID, idText: uuidString(callID)}
+	s.calls[id] = c
+	if live := s.rs.cfg.Live; live != nil {
+		var unit uint32
+		if e.Unit != nil {
+			unit = *e.Unit
+		}
+		live.CallStarted(c.idText, unit)
+	}
 	return nil
 }
 
@@ -357,6 +365,11 @@ func (s *session) transmission(ctx context.Context, id cp.CallID, e event) error
 	if err := s.extendPatch(ctx, id, c, e.PatchedTalkgroups); err != nil {
 		return protoErr(websocket.StatusInternalError, "transmission: %v", err)
 	}
+	// Told even when the patch has just become ignored: the live feed
+	// reads the call again, and withdraws it.
+	if live := s.rs.cfg.Live; live != nil {
+		live.Transmission(c.idText, *e.Unit, int32(*e.OffsetMS))
+	}
 	return nil
 }
 
@@ -376,8 +389,13 @@ func (s *session) callEnd(ctx context.Context, id cp.CallID, e event) error {
 	if err := s.extendPatch(ctx, id, c, e.PatchedTalkgroups); err != nil {
 		return protoErr(websocket.StatusInternalError, "call_end: %v", err)
 	}
+	live := s.rs.cfg.Live
 	if s.refused[id] {
+		// Its patch has just become ignored: the live feed withdraws it.
 		delete(s.refused, id)
+		if live != nil {
+			live.CallEnded(c.idText)
+		}
 		return nil
 	}
 	err := s.rs.st.EndLiveCall(ctx, db.EndLiveCallParams{ID: c.id, EndedAt: tsMS(*e.StopTimeMS), Frames: c.unflush})
@@ -385,6 +403,9 @@ func (s *session) callEnd(ctx context.Context, id cp.CallID, e event) error {
 		return protoErr(websocket.StatusInternalError, "call_end: %s", store.SafeError(err))
 	}
 	delete(s.calls, id)
+	if live != nil {
+		live.CallEnded(c.idText)
+	}
 	return nil
 }
 

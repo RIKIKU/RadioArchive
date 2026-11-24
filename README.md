@@ -67,6 +67,11 @@ curl -X QUERY -H 'Content-Type: application/json' --data '{"ids":["<call ID>"]}'
 curl -H 'Range: bytes=0-999' http://127.0.0.1:8080/api/v1/calls/<call ID>/recording
 ```
 
+The live feed is one WebSocket per listener, `/api/v1/live`: the listener
+sends `{"type": "set", "talkgroups": [1001, 1002]}` and gets the call events
+and Opus frames of those talkgroups' public calls, as they happen
+(`docs/adr/0007-the-live-feed-to-listeners.md`).
+
 A new public endpoint goes in `internal/public`, reads through the gate, and
 adds itself to the A10 harness (`internal/server/a10_test.go`), which fails
 until it does. `scripts/ci/e2e-a10.sh` checks the same through the images.

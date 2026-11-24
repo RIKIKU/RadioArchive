@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
@@ -55,7 +56,7 @@ func TestIntegrationNoAdminAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	api := apiHandler(st, slog.New(slog.DiscardHandler), rs, dir)
+	api := apiHandler(st, slog.New(slog.DiscardHandler), rs, gate.New(st, dir, slog.New(slog.DiscardHandler)))
 	srv := httptest.NewServer(api)
 	defer srv.Close()
 	// Nor the retention setting; and nothing in the binary triggers a
