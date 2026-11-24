@@ -53,8 +53,8 @@ type Recording struct {
 	Queued time.Time
 }
 
-// Uploader takes finished calls' recordings. This slice's is in memory
-// (upload.go); issue #36 puts a disk queue (R5) behind the same interface.
+// Uploader takes finished calls' recordings: R5's disk queue (queue.go,
+// upload.go). Enqueue returns once the entry is on disk.
 type Uploader interface {
 	Enqueue(Recording)
 	Queue() cp.QueueState
@@ -95,13 +95,14 @@ func (c *call) callID() cp.CallID {
 // engine turns plugin datagrams into live frames, events and recordings.
 // It's used from one goroutine.
 type engine struct {
-	log    *slog.Logger
-	m      *Metrics
-	live   Live
-	up     Uploader
-	newEnc NewEncoder
-	now    func() time.Time
-	remove func(string) error // os.Remove; deletes a dropped copy's WAV
+	log     *slog.Logger
+	m       *Metrics
+	live    Live
+	up      Uploader
+	newEnc  NewEncoder
+	now     func() time.Time
+	remove  func(string) error // os.Remove; deletes a dropped copy's WAV
+	version string             // this client's, in the heartbeat
 
 	calls   map[rp.Identity]*call
 	copies  map[rp.Identity]time.Time // dropped patch copies, by last packet
@@ -116,7 +117,7 @@ type engine struct {
 }
 
 func newEngine(log *slog.Logger, m *Metrics, live Live, up Uploader, newEnc NewEncoder, now func() time.Time) *engine {
-	return &engine{log: log, m: m, live: live, up: up, newEnc: newEnc, now: now, remove: os.Remove,
+	return &engine{log: log, m: m, live: live, up: up, newEnc: newEnc, now: now, remove: os.Remove, version: version.Version,
 		calls: map[rp.Identity]*call{}, copies: map[rp.Identity]time.Time{}, logged: map[string]time.Time{}}
 }
 
@@ -426,7 +427,7 @@ func (e *engine) reconnected() {
 
 func (e *engine) heartbeat() cp.Heartbeat {
 	now := e.now()
-	hb := cp.Heartbeat{Type: cp.TypeHeartbeat, ClientVersion: version.Version, TimeMS: now.UnixMilli(),
+	hb := cp.Heartbeat{Type: cp.TypeHeartbeat, ClientVersion: e.version, TimeMS: now.UnixMilli(),
 		Systems: []cp.SystemRate{}, Queue: e.up.Queue(),
 		UDP: cp.UDPCounters{Lost: e.m.Sum(MetricLost), Malformed: e.m.Sum(MetricMalformed),
 			PatchCopies: e.m.Sum(MetricPatchCopies)}}

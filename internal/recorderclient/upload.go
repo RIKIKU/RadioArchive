@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"math/rand/v2"
@@ -15,71 +17,69 @@ import (
 	"net/http"
 	"net/textproto"
 	"os"
-	"sync"
 	"time"
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	"github.com/RIKIKU/RadioArchive/internal/oggopus"
 )
 
-// maxAttempts bounds this slice's retries. Issue #36 replaces the in-memory
-// queue with R5's disk queue, which keeps an entry until the server answers
-// or QUEUE_MAX_AGE passes.
-const maxAttempts = 10
+// uploader is the Uploader: R5's disk queue (queue.go), uploaded oldest
+// first, one at a time. An entry is retried with backoff until the server
+// gives a final answer or the entry is older than maxAge.
+type uploader struct {
+	q       *diskQueue
+	url     string // https://host/api/v1/recorder/recordings
+	key     string
+	version string
+	http    *http.Client
+	log     *slog.Logger
+	m       *Metrics
+	newEnc  NewEncoder
+	now     func() time.Time
+	maxAge  time.Duration
 
-// memUploader is a minimal Uploader: an in-memory FIFO, oldest first, one
-// upload at a time, retried with backoff while the error is transient.
-type memUploader struct {
-	url    string // https://host/api/v1/recorder/recordings
-	key    string
-	http   *http.Client
-	log    *slog.Logger
-	m      *Metrics
-	newEnc NewEncoder
-
-	mu    sync.Mutex
-	queue []Recording
-	wake  chan struct{}
+	wake  chan struct{} // a new entry, for an idle queue
+	retry chan struct{} // Kick: retry now
 
 	// done is called after each entry leaves the queue (tests).
 	done func(Recording, outcome)
 }
 
-func newMemUploader(url, key string, hc *http.Client, log *slog.Logger, m *Metrics, newEnc NewEncoder) *memUploader {
-	return &memUploader{url: url, key: key, http: hc, log: log, m: m, newEnc: newEnc, wake: make(chan struct{}, 1)}
+func newUploader(q *diskQueue, url, key, version string, hc *http.Client, log *slog.Logger, m *Metrics,
+	newEnc NewEncoder, now func() time.Time, maxAge time.Duration) *uploader {
+	u := &uploader{q: q, url: url, key: key, version: version, http: hc, log: log, m: m, newEnc: newEnc,
+		now: now, maxAge: maxAge, wake: make(chan struct{}, 1), retry: make(chan struct{}, 1)}
+	m.SetGauge(MetricQueueEntries, func() float64 { return float64(q.state().Count) })
+	m.SetGauge(MetricQueueOldestAge, func() float64 { return float64(q.state().OldestAgeS) })
+	return u
 }
 
-// Enqueue implements Uploader.
-func (u *memUploader) Enqueue(r Recording) {
-	u.mu.Lock()
-	u.queue = append(u.queue, r)
-	u.mu.Unlock()
+// Enqueue implements Uploader. The entry is on disk when it returns.
+func (u *uploader) Enqueue(r Recording) {
+	u.q.add(r)
+	signal(u.wake)
+}
+
+// Queue implements Uploader.
+func (u *uploader) Queue() cp.QueueState { return u.q.state() }
+
+// Kick ends a wait between retries early, with the backoff reset: the live
+// socket has just reconnected, so the server is probably back. A new entry
+// doesn't, or every call during an outage would reset the backoff.
+func (u *uploader) Kick() { signal(u.retry) }
+
+func signal(c chan struct{}) {
 	select {
-	case u.wake <- struct{}{}:
+	case c <- struct{}{}:
 	default:
 	}
 }
 
-// Queue implements Uploader.
-func (u *memUploader) Queue() cp.QueueState {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	q := cp.QueueState{Count: len(u.queue)}
-	if len(u.queue) > 0 {
-		q.OldestAgeS = int64(time.Since(u.queue[0].Queued) / time.Second)
-	}
-	return q
-}
-
-func (u *memUploader) run(ctx context.Context) {
-	for {
-		u.mu.Lock()
-		var r *Recording
-		if len(u.queue) > 0 {
-			r = &u.queue[0]
-		}
-		u.mu.Unlock()
-		if r == nil {
+func (u *uploader) run(ctx context.Context) {
+	for ctx.Err() == nil {
+		u.expire()
+		e := u.q.head()
+		if e == nil {
 			select {
 			case <-ctx.Done():
 				return
@@ -87,18 +87,43 @@ func (u *memUploader) run(ctx context.Context) {
 				continue
 			}
 		}
-		o := u.process(ctx, *r)
-		if ctx.Err() != nil {
+		o := u.process(ctx, e)
+		if o == outCancelled {
 			return
 		}
-		u.mu.Lock()
-		rec := u.queue[0]
-		u.queue = u.queue[1:]
-		u.mu.Unlock()
-		u.m.Inc(MetricUploads, "result", string(o))
-		if u.done != nil {
-			u.done(rec, o)
+		u.leave(e, o)
+	}
+}
+
+// expire drops the entries older than maxAge, wherever they are in the
+// queue. Their WAVs stay: the server never acknowledged them.
+func (u *uploader) expire() {
+	for _, e := range u.q.expired(u.maxAge) {
+		u.leave(e, outExpired)
+	}
+}
+
+func (u *uploader) leave(e *entry, o outcome) {
+	log := u.log.With("sys_num", e.Meta.SysNum, "call_num", e.Meta.CallNum, "start_time", e.Meta.StartTime)
+	switch o {
+	case outStored, outDuplicate:
+		// Acknowledged with our SHA-256: trunk-recorder's WAV has done its
+		// job (owner, issue #31). The WAV goes first, then the entry: an
+		// entry left without its WAV after a crash is known to be done.
+		if err := os.Remove(e.WAV); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Warn("recording uploaded but its WAV couldn't be deleted", "file", e.WAV, "error", err)
 		}
+	case outExpired:
+		u.m.Inc(MetricQueueExpired)
+		log.Error("dropped a recording that waited longer than QUEUE_MAX_AGE; its WAV is kept",
+			"file", e.WAV, "queued", e.Queued, "max_age", u.maxAge)
+	}
+	u.q.remove(e)
+	if o != outExpired {
+		u.m.Inc(MetricUploads, "result", string(o))
+	}
+	if u.done != nil {
+		u.done(e.Recording, o)
 	}
 }
 
@@ -112,7 +137,8 @@ const (
 	outConflict  outcome = "conflict"  // same identity stored with another file
 	outInvalid   outcome = "invalid"   // 400, 413, 415: retrying won't help
 	outNoFile    outcome = "unreadable"
-	outGaveUp    outcome = "gave_up"
+	outExpired   outcome = "expired"   // older than QUEUE_MAX_AGE
+	outCancelled outcome = "cancelled" // the client is stopping; the entry stays
 )
 
 // verdict is one attempt's result.
@@ -125,54 +151,72 @@ const (
 )
 
 // process encodes the recording once and uploads it until the server gives
-// a final answer, the attempts run out, or ctx ends.
-func (u *memUploader) process(ctx context.Context, r Recording) outcome {
-	log := u.log.With("sys_num", r.Meta.SysNum, "call_num", r.Meta.CallNum, "start_time", r.Meta.StartTime)
-	ogg, err := u.encode(r.WAV)
+// a final answer, the entry gets too old, or ctx ends.
+func (u *uploader) process(ctx context.Context, e *entry) outcome {
+	log := u.log.With("sys_num", e.Meta.SysNum, "call_num", e.Meta.CallNum, "start_time", e.Meta.StartTime)
+	ogg, err := u.encode(e.Recording)
+	if errors.Is(err, os.ErrNotExist) {
+		// Only an acknowledgement deletes it, so after a crash this entry
+		// was done; or someone removed the file.
+		log.Warn("the recording's WAV is gone; dropping its queue entry", "file", e.WAV)
+		return outNoFile
+	}
 	if err != nil {
-		log.Error("can't read or encode the recording; it won't be uploaded", "file", r.WAV, "error", err)
+		log.Error("can't read or encode the recording; it won't be uploaded", "file", e.WAV, "error", err)
 		return outNoFile
 	}
 	sum := sha256.Sum256(ogg)
-	meta := r.Meta
+	meta := e.Meta
 	meta.SHA256 = hex.EncodeToString(sum[:])
 	meta.Size = int64(len(ogg))
 
+	// A Kick from before this entry's first attempt is stale.
+	select {
+	case <-u.retry:
+	default:
+	}
 	backoff := backoffMin
-	for attempt := 1; ; attempt++ {
+	for {
+		if u.now().Sub(e.Queued) > u.maxAge {
+			return outExpired
+		}
 		o, v, err := u.attempt(ctx, meta, ogg)
+		if ctx.Err() != nil {
+			return outCancelled
+		}
 		if v == vDone {
-			if o == outStored || o == outDuplicate {
-				// Acknowledged with our SHA-256: trunk-recorder's WAV has
-				// done its job (owner, issue #31).
-				if err := os.Remove(r.WAV); err != nil && !errors.Is(err, os.ErrNotExist) {
-					log.Warn("recording uploaded but its WAV couldn't be deleted", "file", r.WAV, "error", err)
-				}
-			} else {
+			if o != outStored && o != outDuplicate {
 				log.Warn("the server refused the recording", "outcome", string(o), "error", err)
 			}
 			return o
-		}
-		if attempt >= maxAttempts {
-			log.Error("giving up on the recording after repeated failures", "attempts", attempt, "error", err)
-			return outGaveUp
 		}
 		if v == vPause {
 			backoff = backoffMax
 		}
 		wait := backoff/2 + rand.N(backoff/2+1)
-		log.Warn("recording upload failed; retrying", "error", err, "in", wait.Round(time.Millisecond))
+		log.Warn("recording upload failed; it stays queued and is retried", "error", err, "in", wait.Round(time.Millisecond))
+		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
-			return outGaveUp
-		case <-time.After(wait):
+			t.Stop()
+			return outCancelled
+		case <-u.retry:
+			t.Stop()
+			backoff = backoffMin
+		case <-t.C:
+			backoff = min(2*backoff, backoffMax)
 		}
-		backoff = min(2*backoff, backoffMax)
+		// An entry further back may have aged out meanwhile.
+		for _, x := range u.q.expired(u.maxAge) {
+			if x != e {
+				u.leave(x, outExpired)
+			}
+		}
 	}
 }
 
-func (u *memUploader) encode(path string) ([]byte, error) {
-	f, err := os.Open(path)
+func (u *uploader) encode(r Recording) ([]byte, error) {
+	f, err := os.Open(r.WAV)
 	if err != nil {
 		return nil, err
 	}
@@ -185,11 +229,25 @@ func (u *memUploader) encode(path string) ([]byte, error) {
 		u.m.Inc(MetricMalformed, "reason", "sample_rate")
 		return nil, fmt.Errorf("recording is %d Hz; v1 takes %d Hz (P25) only", rate, SampleRate)
 	}
-	return encodeOggOpus(u.newEnc, rate, pcm)
+	return encodeOggOpus(u.newEnc, oggSerial(r.Meta.CallID), rate, pcm)
 }
 
-// encodeOggOpus encodes a whole recording with R4's settings.
-func encodeOggOpus(newEnc NewEncoder, rate int, pcm []int16) ([]byte, error) {
+// oggSerial is the recording's Ogg stream serial number, derived from the
+// call's identity so that encoding the same WAV again gives the same bytes,
+// and the same SHA-256 (queue.go, crash safety).
+func oggSerial(id cp.CallID) uint32 {
+	h := fnv.New32a()
+	var b [18]byte
+	binary.LittleEndian.PutUint16(b[0:], id.SysNum)
+	binary.LittleEndian.PutUint64(b[2:], uint64(id.CallNum))
+	binary.LittleEndian.PutUint64(b[10:], uint64(id.StartTime))
+	_, _ = h.Write(b[:])
+	return h.Sum32()
+}
+
+// encodeOggOpus encodes a whole recording with R4's settings. The same
+// encoder, serial and PCM always give the same bytes.
+func encodeOggOpus(newEnc NewEncoder, serial uint32, rate int, pcm []int16) ([]byte, error) {
 	enc, err := newEnc(rate)
 	if err != nil {
 		return nil, err
@@ -197,7 +255,7 @@ func encodeOggOpus(newEnc NewEncoder, rate int, pcm []int16) ([]byte, error) {
 	defer enc.Close()
 	scale := 48000 / rate
 	var buf bytes.Buffer
-	w, err := oggopus.NewWriter(&buf, rand.Uint32(), uint16(enc.Lookahead()*scale), uint32(rate))
+	w, err := oggopus.NewWriter(&buf, serial, uint16(enc.Lookahead()*scale), uint32(rate))
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +278,7 @@ func encodeOggOpus(newEnc NewEncoder, rate int, pcm []int16) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (u *memUploader) attempt(ctx context.Context, meta cp.RecordingMetadata, ogg []byte) (outcome, verdict, error) {
+func (u *uploader) attempt(ctx context.Context, meta cp.RecordingMetadata, ogg []byte) (outcome, verdict, error) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	mj, err := json.Marshal(meta)
@@ -245,7 +303,7 @@ func (u *memUploader) attempt(ctx context.Context, meta cp.RecordingMetadata, og
 	if err != nil {
 		return outInvalid, vDone, err
 	}
-	req.Header = headers(u.key)
+	req.Header = headers(u.key, u.version)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	resp, err := u.http.Do(req)
 	if err != nil {

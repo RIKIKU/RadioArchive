@@ -16,7 +16,6 @@ import (
 	"github.com/coder/websocket"
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
-	"github.com/RIKIKU/RadioArchive/internal/version"
 )
 
 // Reconnect backoff (ADR 0002: 1 s to 60 s with jitter).
@@ -33,18 +32,19 @@ type outMsg struct {
 // liveConn keeps the live WebSocket open, reconnecting with backoff, and
 // sends what the engine gives it while it's up.
 type liveConn struct {
-	url string // ws:// or wss://
-	key string
-	log *slog.Logger
-	m   *Metrics
+	url     string // ws:// or wss://
+	version string // this client's, sent in the headers
+	key     string
+	log     *slog.Logger
+	m       *Metrics
 
 	out       chan outMsg
 	connected chan struct{} // a signal for the engine after each welcome
 	up        atomic.Bool
 }
 
-func newLiveConn(url, key string, log *slog.Logger, m *Metrics) *liveConn {
-	return &liveConn{url: url, key: key, log: log, m: m,
+func newLiveConn(url, key, version string, log *slog.Logger, m *Metrics) *liveConn {
+	return &liveConn{url: url, key: key, version: version, log: log, m: m,
 		out: make(chan outMsg, 2048), connected: make(chan struct{}, 1)}
 }
 
@@ -73,10 +73,10 @@ func (l *liveConn) SendText(v any) {
 // SendFrame implements Live.
 func (l *liveConn) SendFrame(b []byte) { l.send(outMsg{websocket.MessageBinary, b}) }
 
-func headers(key string) http.Header {
+func headers(key, clientVersion string) http.Header {
 	h := http.Header{}
 	h.Set("Authorization", "Bearer "+key)
-	h.Set(cp.HeaderClientVersion, version.Version)
+	h.Set(cp.HeaderClientVersion, clientVersion)
 	h.Set(cp.HeaderProtocol, strconv.Itoa(cp.Protocol))
 	return h
 }
@@ -105,12 +105,19 @@ func (l *liveConn) run(ctx context.Context) {
 // session runs one connection until it fails.
 func (l *liveConn) session(ctx context.Context) (welcomed bool, err error) {
 	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	conn, resp, err := websocket.Dial(dctx, l.url, &websocket.DialOptions{HTTPHeader: headers(l.key)})
+	conn, resp, err := websocket.Dial(dctx, l.url, &websocket.DialOptions{HTTPHeader: headers(l.key, l.version)})
 	cancel()
 	if err != nil {
 		if resp != nil {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 			resp.Body.Close()
+			var er cp.ErrorResponse
+			if json.Unmarshal(body, &er) == nil && er.Error == cp.ErrClientTooOld {
+				// R6. It still retries with backoff; recordings stay
+				// queued until the client is upgraded.
+				l.log.Error("the server refuses this recorder client as too old; upgrade it",
+					"client_version", er.ClientVersion, "server_version", er.ServerVersion)
+			}
 			return false, fmt.Errorf("server refused the connection: %s %s", resp.Status, body)
 		}
 		return false, err

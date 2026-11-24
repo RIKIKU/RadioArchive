@@ -10,8 +10,8 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -27,6 +27,7 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/storetest"
+	"github.com/RIKIKU/RadioArchive/internal/version"
 	"github.com/RIKIKU/RadioArchive/testing/fakerecorder"
 )
 
@@ -48,15 +49,44 @@ func (s *sink) get(callID string) []cp.Frame {
 	return slices.Clone(s.frames[callID])
 }
 
+// clock is the client's clock: real time plus an offset a test moves on, so
+// a queued recording can be an hour (or a day) old without waiting.
+type clock struct {
+	mu  sync.Mutex
+	off time.Duration
+}
+
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Now().Add(c.off)
+}
+
+func (c *clock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.off += d
+	c.mu.Unlock()
+}
+
 type rig struct {
-	st      *store.Store
-	sink    *sink
-	dir     string // recordings volume
-	name    string
-	sys     int64 // the fixture's system
-	api     string
+	st    *store.Store
+	sink  *sink
+	dir   string // recordings volume
+	name  string
+	key   string
+	sys   int64  // the fixture's system
+	api   string // the server's base URL
+	log   *slog.Logger
+	clock *clock
+	queue string // the client's queue directory, kept across its restarts
+
+	serverVersion string
+	addr          string // the server's address, the same across its restarts
+	rs            *server.Recorders
+	stopSrv       func()
+
 	client  *recorderclient.Client
-	stopCli context.CancelFunc
+	stopCli func()
 }
 
 // testAdmin stands in for admin sign-in (Authentik, not built yet): a
@@ -158,51 +188,117 @@ func waitFor(t *testing.T, what string, d time.Duration, ok func() bool) {
 // start runs the server and a recorder client for a new recorder.
 func start(t *testing.T) *rig {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	st, err := store.Open(ctx, storetest.URL(t))
+	r := newRig(t, version.Version)
+	r.serverUp(t)
+	r.clientUp(t, "")
+	waitFor(t, "the client's live connection", 10*time.Second, r.client.LiveConnected)
+	return r
+}
+
+// newRig makes the database, the recorder and its key; nothing runs yet.
+func newRig(t *testing.T, serverVersion string) *rig {
+	t.Helper()
+	st, err := store.Open(context.Background(), storetest.URL(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The key listener holds a connection until ctx ends, so cancel first.
-	t.Cleanup(func() { cancel(); st.Close() })
-	r := &rig{st: st, sink: &sink{frames: map[string][]cp.Frame{}}, dir: t.TempDir(),
-		name: fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano())}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	rs, err := server.NewRecorders(st, log, server.RecordersConfig{RecordingsDir: r.dir, Live: r.sink, ServerVersion: "e2e"})
+	r := &rig{st: st, sink: &sink{frames: map[string][]cp.Frame{}}, dir: t.TempDir(), queue: t.TempDir(),
+		name:          fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano()),
+		log:           slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
+		clock:         &clock{},
+		serverVersion: serverVersion, addr: "127.0.0.1:0"}
+	// Cleanups run last first: the client stops, then the server, then the
+	// pool closes.
+	t.Cleanup(st.Close)
+	t.Cleanup(func() { r.serverDown(t) })
+	t.Cleanup(r.clientDown)
+	r.key, err = st.AddRecorder(context.Background(), r.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// serverUp starts the API, a new process's worth of it, on the rig's
+// address: a restart keeps the database and the recordings volume.
+func (r *rig) serverUp(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	rs, err := server.NewRecorders(r.st, r.log, server.RecordersConfig{RecordingsDir: r.dir, Live: r.sink,
+		ServerVersion: r.serverVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
 	go rs.Run(ctx)
 	<-rs.Listening()
-	admin, err := server.NewAdmin(st, log, testAdmin{})
+	admin, err := server.NewAdmin(r.st, r.log, testAdmin{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(server.New(st, log, server.WithRecorders(rs), server.WithAdmin(admin)))
-	t.Cleanup(srv.Close)
-	r.api = srv.URL
-
-	key, err := st.AddRecorder(ctx, r.name)
-	if err != nil {
-		t.Fatal(err)
+	var ln net.Listener
+	for i := 0; ; i++ {
+		if ln, err = net.Listen("tcp", r.addr); err == nil {
+			break
+		}
+		if i > 50 {
+			t.Fatal(err)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	r.fixture(t)
-	r.client, err = recorderclient.New(recorderclient.Config{ServerURL: srv.URL, ClientKey: key,
-		UDPAddr: "127.0.0.1:0", NewEncoder: newEncoder, Log: log})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cctx, stop := context.WithCancel(ctx)
-	r.stopCli = stop
+	r.addr = ln.Addr().String()
+	r.api = "http://" + r.addr
+	srv := &http.Server{Handler: server.New(r.st, r.log, server.WithRecorders(rs), server.WithAdmin(admin)),
+		// Live sockets are hijacked, so Close doesn't end them; cancelling
+		// their requests' context does.
+		BaseContext: func(net.Listener) context.Context { return ctx }}
 	done := make(chan struct{})
-	go func() { _ = r.client.Run(cctx); close(done) }()
-	t.Cleanup(func() { stop(); <-done })
-	waitFor(t, "the client's live connection", 10*time.Second, r.client.LiveConnected)
-	return r
+	go func() { _ = srv.Serve(ln); close(done) }()
+	r.rs = rs
+	r.stopSrv = func() {
+		cancel()
+		_ = srv.Close()
+		<-done
+	}
+	if r.sys == 0 {
+		r.fixture(t) // once: it's in the database
+	}
 }
 
-// replay writes the scenario's WAVs where its call_ends say (moved under a
-// temporary directory), then sends it to the client in real time.
+// serverDown stops the API: its listener, its connections and the live
+// sockets all close, as when its process stops.
+func (r *rig) serverDown(t *testing.T) {
+	if r.stopSrv != nil {
+		r.stopSrv()
+		r.stopSrv = nil
+	}
+}
+
+// clientUp starts a recorder client on the rig's queue directory, at
+// clientVersion ("" for this build's).
+func (r *rig) clientUp(t *testing.T, clientVersion string) {
+	t.Helper()
+	c, err := recorderclient.New(recorderclient.Config{ServerURL: "http://" + r.addr, ClientKey: r.key,
+		UDPAddr: "127.0.0.1:0", QueueDir: r.queue, NewEncoder: newEncoder, Log: r.log,
+		Version: clientVersion, Now: r.clock.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = c.Run(ctx); close(done) }()
+	r.client = c
+	r.stopCli = func() { stop(); <-done }
+}
+
+// clientDown stops the client, as its process stopping would.
+func (r *rig) clientDown() {
+	if r.stopCli != nil {
+		r.stopCli()
+		r.stopCli = nil
+	}
+}
+
+// replay plays a scenario file from the fake recorder's testdata.
 func (r *rig) replay(t *testing.T, scenario string) map[int64]string {
 	t.Helper()
 	f, err := os.Open(filepath.Join("..", "fakerecorder", "testdata", "scenarios", scenario))
@@ -214,6 +310,13 @@ func (r *rig) replay(t *testing.T, scenario string) map[int64]string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return r.play(t, s, 1)
+}
+
+// play writes the scenario's WAVs where its call_ends say (moved under a
+// temporary directory), then sends it to the client at speed (0: at once).
+func (r *rig) play(t *testing.T, s *fakerecorder.Scenario, speed float64) map[int64]string {
+	t.Helper()
 	media := t.TempDir()
 	wavs := map[int64]string{}
 	for i, e := range s.Events {
@@ -235,11 +338,32 @@ func (r *rig) replay(t *testing.T, scenario string) map[int64]string {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if err := fakerecorder.Replay(context.Background(), conn, plan, 1); err != nil {
+	if err := fakerecorder.Replay(context.Background(), conn, plan, speed); err != nil {
 		t.Fatal(err)
 	}
 	return wavs
 }
+
+// backToBack builds a scenario of n back-to-back calls on talkgroup 1001, with
+// call_num from first, each half a second of audio from one unit.
+func backToBack(first int64, n int, startTime int64) *fakerecorder.Scenario {
+	s := &fakerecorder.Scenario{BootID: uint32(first), EpochMS: startTime * 1000, Calls: map[string]fakerecorder.Call{}}
+	for i := range n {
+		num := first + int64(i)
+		name := fmt.Sprintf("c%d", num)
+		s.Calls[name] = fakerecorder.Call{CallNum: num, StartTime: startTime + int64(i), ShortName: "ex",
+			Talkgroup: 1001, Freq: 851012500 + uint32(i)*12500}
+		at := int64(i) * 1000
+		s.Events = append(s.Events,
+			fakerecorder.Event{AtMS: at, Type: fakerecorder.EventTransmission, Call: name, Unit: 5001},
+			fakerecorder.Event{AtMS: at, Type: fakerecorder.EventAudio, Call: name, Unit: 5001, PCM: "noise-bursts-500ms.pcm"},
+			fakerecorder.Event{AtMS: at + 600, Type: fakerecorder.EventCallEnd, Call: name,
+				Filename: fmt.Sprintf("/app/media/ex/1001-%d-call_%d.wav", startTime+int64(i), num)})
+	}
+	return s
+}
+
+func gone(p string) bool { _, err := os.Stat(p); return os.IsNotExist(err) }
 
 type stored struct {
 	id        string

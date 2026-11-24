@@ -212,9 +212,18 @@ type UploadResponse struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// Refusals before the WebSocket upgrade or of an upload.
+const (
+	ErrInvalidClientKey    = "invalid_client_key"
+	ErrClientTooOld        = "client_too_old"
+	ErrUnsupportedProtocol = "unsupported_protocol"
+)
+
 // ErrorResponse is a refusal before the WebSocket upgrade or of an upload.
 type ErrorResponse struct {
-	Error     string `json:"error"`
-	Protocol  *int   `json:"protocol,omitempty"`
-	Supported []int  `json:"supported,omitempty"`
+	Error         string `json:"error"`
+	ClientVersion string `json:"client_version,omitempty"` // client_too_old
+	ServerVersion string `json:"server_version,omitempty"` // client_too_old
+	Protocol      *int   `json:"protocol,omitempty"`
+	Supported     []int  `json:"supported,omitempty"`
 }

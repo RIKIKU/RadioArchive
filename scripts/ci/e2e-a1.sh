@@ -43,11 +43,11 @@ psql "INSERT INTO systems (id, label, name) VALUES (1, 'EX', 'Example network') 
 # trunk-recorder's media directory: the fake recorder writes the WAVs here,
 # and the client deletes them once acknowledged, so it runs as their owner,
 # as it would beside trunk-recorder.
-mkdir -p "$media/app/media"
+mkdir -p "$media/app/media" "$media/queue"
 
 docker run -d --name "$client" --network host --user "$(id -u):$(id -g)" \
 	-e SERVER_URL="http://127.0.0.1:$api_port" -e CLIENT_KEY="$key" -e UDP_ADDR="127.0.0.1:$udp_port" \
-	-v "$media/app/media:/app/media" "$image" >/dev/null
+	-v "$media/app/media:/app/media" -v "$media/queue:/var/lib/radioarchive-client/queue" "$image" >/dev/null
 
 # Wait for the live connection.
 i=0
@@ -96,5 +96,13 @@ done
 # trunk-recorder's WAVs are gone once the server acknowledged them.
 left=$(find "$media" -name '*.wav' | wc -l)
 test "$left" -eq 0 || { echo "FAIL: $left WAVs left after upload" >&2; exit 1; }
+
+# And the disk queue (R5) is empty.
+i=0
+until [ -z "$(ls -A "$media/queue")" ]; do
+	i=$((i + 1))
+	if [ "$i" -gt 50 ]; then echo "FAIL: queue entries left after upload: $(ls -A "$media/queue")" >&2; exit 1; fi
+	sleep 0.1
+done
 
 echo "ok: A1 end to end (fake recorder -> client image -> API image -> PostgreSQL)"

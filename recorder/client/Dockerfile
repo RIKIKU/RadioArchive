@@ -38,10 +38,15 @@ RUN set -eu; \
     PKG_CONFIG_LIBDIR=/usr/lib/$triplet/pkgconfig:/usr/share/pkgconfig \
       go build -trimpath -ldflags "-s -w" -o /out/radioarchive-client ./cmd/radioarchive-client; \
     mkdir -p /out/lib; \
-    cp -L /usr/lib/$triplet/libopus.so.0 /out/lib/libopus.so.0
+    cp -L /usr/lib/$triplet/libopus.so.0 /out/lib/libopus.so.0; \
+    mkdir -p /out/queue
 
 FROM gcr.io/distroless/base-debian13:nonroot@sha256:83e67481ae9fc8c7a6d211113431fb8085619bed49672e583261111bac184f0d
 # /usr/lib is on the dynamic loader's default path on every architecture.
 COPY --from=build /out/lib/libopus.so.0 /usr/lib/libopus.so.0
 COPY --from=build /out/radioarchive-client /usr/local/bin/radioarchive-client
+# The queue of unsent recordings (SPEC.md R5, QUEUE_DIR). Mount a volume or
+# a host directory here, writable by the user the client runs as, so the
+# queue survives a restart of the container.
+COPY --from=build --chown=65532:65532 /out/queue /var/lib/radioarchive-client/queue
 ENTRYPOINT ["/usr/local/bin/radioarchive-client"]

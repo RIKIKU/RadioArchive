@@ -954,6 +954,28 @@ func (q *Queries) SetCallRecording(ctx context.Context, arg SetCallRecordingPara
 	return err
 }
 
+const setRecorderClient = `-- name: SetRecorderClient :exec
+
+UPDATE recorders
+SET client_version = $1,
+    client_out_of_date = $2,
+    client_seen_at = now()
+WHERE id = $3
+`
+
+type SetRecorderClientParams struct {
+	ClientVersion   *string
+	ClientOutOfDate bool
+	ID              int64
+}
+
+// Recorder client versions (R6).
+// Records the client version a recorder connected with.
+func (q *Queries) SetRecorderClient(ctx context.Context, arg SetRecorderClientParams) error {
+	_, err := q.db.Exec(ctx, setRecorderClient, arg.ClientVersion, arg.ClientOutOfDate, arg.ID)
+	return err
+}
+
 const setRecorderKey = `-- name: SetRecorderKey :one
 UPDATE recorders
 SET key_hash = $1, key_rotated_at = now()

@@ -48,7 +48,7 @@ func TestReadWAV(t *testing.T) {
 
 func TestEncodeOggOpus(t *testing.T) {
 	pcm := make([]int16, 8000+80) // 1.01 s: 51 frames, the last half padding
-	ogg, err := encodeOggOpus(newFake, 8000, pcm)
+	ogg, err := encodeOggOpus(newFake, 1, 8000, pcm)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,11 +105,8 @@ func runUpload(t *testing.T, answers ...func(cp.RecordingMetadata, string) (int,
 	fs := &fakeServer{t: t, answers: answers}
 	srv := httptest.NewServer(fs)
 	defer srv.Close()
-	wav := filepath.Join(t.TempDir(), "call.wav")
-	if err := os.WriteFile(wav, fakerecorder.WAV(8000, make([]byte, 3200)), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	u := newMemUploader(srv.URL+cp.RecordingsPath, "rak_test", srv.Client(), slog.New(slog.DiscardHandler), NewMetrics(), newFake)
+	wav := writeWAV(t, t.TempDir(), "call.wav")
+	u := newTestUploader(t, srv.URL, srv.Client(), t.TempDir(), time.Now)
 	got := make(chan outcome, 1)
 	u.done = func(_ Recording, o outcome) { got <- o }
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -120,6 +117,9 @@ func runUpload(t *testing.T, answers ...func(cp.RecordingMetadata, string) (int,
 	case o := <-got:
 		if q := u.Queue(); q.Count != 0 {
 			t.Errorf("queue = %+v after the entry left", q)
+		}
+		if left, _ := os.ReadDir(u.q.dir); len(left) != 0 {
+			t.Errorf("queue directory holds %d files after the entry left", len(left))
 		}
 		return o, wav, fs
 	case <-ctx.Done():
@@ -180,14 +180,36 @@ func TestUploadOutcomes(t *testing.T) {
 	}
 }
 
+// writeWAV writes 0.2 s of 8 kHz silence, as trunk-recorder would.
+func writeWAV(t *testing.T, dir, name string) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, fakerecorder.WAV(8000, make([]byte, 3200)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func newTestUploader(t *testing.T, base string, hc *http.Client, dir string, now func() time.Time) *uploader {
+	t.Helper()
+	m := NewMetrics()
+	q, err := openQueue(dir, slog.New(slog.DiscardHandler), m, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newUploader(q, base+cp.RecordingsPath, "rak_test", "0.1.0-test", hc, slog.New(slog.DiscardHandler), m,
+		newFake, now, QueueMaxAge)
+}
+
 func TestUploadMissingWAV(t *testing.T) {
-	u := newMemUploader("http://127.0.0.1:1", "rak_test", http.DefaultClient, slog.New(slog.DiscardHandler), NewMetrics(), newFake)
-	if o := u.process(context.Background(), Recording{WAV: filepath.Join(t.TempDir(), "gone.wav")}); o != outNoFile {
+	u := newTestUploader(t, "http://127.0.0.1:1", http.DefaultClient, t.TempDir(), time.Now)
+	now := time.Now()
+	if o := u.process(context.Background(), &entry{Recording: Recording{WAV: filepath.Join(t.TempDir(), "gone.wav"), Queued: now}}); o != outNoFile {
 		t.Errorf("outcome %q, want %q", o, outNoFile)
 	}
 	wav := filepath.Join(t.TempDir(), "16k.wav")
 	_ = os.WriteFile(wav, fakerecorder.WAV(16000, make([]byte, 640)), 0o644)
-	if o := u.process(context.Background(), Recording{WAV: wav}); o != outNoFile {
+	if o := u.process(context.Background(), &entry{Recording: Recording{WAV: wav, Queued: now}}); o != outNoFile {
 		t.Errorf("16 kHz recording: outcome %q, want %q", o, outNoFile)
 	}
 	if n := u.m.Get(MetricMalformed, "reason", "sample_rate"); n != 1 {

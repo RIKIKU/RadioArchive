@@ -19,6 +19,8 @@ import (
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	"github.com/RIKIKU/RadioArchive/internal/store"
+	"github.com/RIKIKU/RadioArchive/internal/store/db"
+	"github.com/RIKIKU/RadioArchive/internal/version"
 )
 
 // LiveSink receives every live frame the server accepts, with the ID of the
@@ -37,19 +39,22 @@ type RecordersConfig struct {
 	RecordingsDir string
 	// Live is optional.
 	Live LiveSink
-	// ServerVersion is sent in the welcome.
+	// ServerVersion is sent in the welcome, and clients are checked against
+	// it (R6). It must be MAJOR.MINOR.PATCH.
 	ServerVersion string
 }
 
 // Counters are the recorder endpoints' totals, for metrics (R90) and tests.
 type Counters struct {
-	FramesUnstarted atomic.Uint64 // frames or transmissions for a call the socket hasn't started
-	UnknownTypes    atomic.Uint64 // unknown text type or binary kind
-	ProtocolCloses  atomic.Uint64 // sockets closed with 1007 or 1008 for bad input
-	Revoked         atomic.Uint64 // sockets closed because their key was rotated or retired
-	FramesRefused   atomic.Uint64 // frames of live calls refused by R12, R17 or R18
-	Uploads         sync.Map      // status -> *atomic.Uint64
-	Rejected        sync.Map      // reason -> *atomic.Uint64: calls refused, each counted once (R90)
+	FramesUnstarted  atomic.Uint64 // frames or transmissions for a call the socket hasn't started
+	UnknownTypes     atomic.Uint64 // unknown text type or binary kind
+	ProtocolCloses   atomic.Uint64 // sockets closed with 1007 or 1008 for bad input
+	Revoked          atomic.Uint64 // sockets closed because their key was rotated or retired
+	FramesRefused    atomic.Uint64 // frames of live calls refused by R12, R17 or R18
+	ClientsTooOld    atomic.Uint64 // live sockets and uploads refused with client_too_old (R6)
+	ClientsOutOfDate atomic.Uint64 // live sockets opened by a client one minor version behind (R6)
+	Uploads          sync.Map      // status -> *atomic.Uint64
+	Rejected         sync.Map      // reason -> *atomic.Uint64: calls refused, each counted once (R90)
 }
 
 func (c *Counters) upload(status string) { inc(&c.Uploads, status) }
@@ -104,6 +109,9 @@ type Recorders struct {
 func NewRecorders(st *store.Store, log *slog.Logger, cfg RecordersConfig) (*Recorders, error) {
 	if cfg.RecordingsDir == "" {
 		return nil, errors.New("recordings directory is not set")
+	}
+	if _, err := version.Parse(cfg.ServerVersion); err != nil {
+		return nil, fmt.Errorf("server version: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Join(cfg.RecordingsDir, incomingDir), 0o750); err != nil {
 		return nil, fmt.Errorf("recordings directory: %w", err)
@@ -230,13 +238,48 @@ func (rs *Recorders) authenticate(w http.ResponseWriter, r *http.Request) (store
 		writeJSON(w, http.StatusServiceUnavailable, cp.ErrorResponse{Error: "unavailable"})
 		return store.Recorder{}, false
 	}
-	// The client version (R6) is checked in issue #36.
+	// R6: up to one minor version behind the server.
+	cv := r.Header.Get(cp.HeaderClientVersion)
+	if version.Check(cv, rs.cfg.ServerVersion) == version.TooOld {
+		rs.Stat.ClientsTooOld.Add(1)
+		rs.log.Warn("refused a recorder client that is too old", "recorder", rec.Name,
+			"client_version", clip(cv), "server_version", rs.cfg.ServerVersion)
+		writeJSON(w, http.StatusUpgradeRequired, cp.ErrorResponse{Error: cp.ErrClientTooOld,
+			ClientVersion: clip(cv), ServerVersion: rs.cfg.ServerVersion})
+		return store.Recorder{}, false
+	}
 	p, err := strconv.Atoi(r.Header.Get(cp.HeaderProtocol))
 	if err != nil || p != cp.Protocol {
-		writeJSON(w, http.StatusUpgradeRequired, cp.ErrorResponse{Error: "unsupported_protocol", Protocol: &p, Supported: []int{cp.Protocol}})
+		writeJSON(w, http.StatusUpgradeRequired, cp.ErrorResponse{Error: cp.ErrUnsupportedProtocol, Protocol: &p, Supported: []int{cp.Protocol}})
 		return store.Recorder{}, false
 	}
 	return rec, true
+}
+
+// clip bounds a client-supplied version for logs, answers and the database.
+func clip(s string) string {
+	if len(s) > maxVersionLen {
+		return s[:maxVersionLen]
+	}
+	return s
+}
+
+const maxVersionLen = 100
+
+// recordClient stores the client version the recorder connected with, and
+// whether it's out of date, for the Recorders page (R6, R14). A failure is
+// logged, not fatal: the connection matters more.
+func (rs *Recorders) recordClient(ctx context.Context, rec store.Recorder, clientVersion string) {
+	out := version.Check(clientVersion, rs.cfg.ServerVersion) == version.OutOfDate
+	if out {
+		rs.Stat.ClientsOutOfDate.Add(1)
+		rs.log.Warn("recorder client is one minor version behind the server; upgrade it", "recorder", rec.Name,
+			"client_version", clip(clientVersion), "server_version", rs.cfg.ServerVersion)
+	}
+	v := clip(clientVersion)
+	if err := rs.st.SetRecorderClient(ctx, db.SetRecorderClientParams{ID: rec.ID, ClientVersion: &v, ClientOutOfDate: out}); err != nil {
+		rs.log.Warn("couldn't record the recorder client's version", "recorder", rec.Name, "error", store.SafeError(err))
+	}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
