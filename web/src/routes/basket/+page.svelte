@@ -46,6 +46,8 @@
 		type ZipPart
 	} from '#lib/basket/basket.ts';
 	import { callInfoOf, clock, nameOf, startOf, talkgroupOf, unitsOf, zoneLabel, type RecentCall } from '#lib/recent/search.ts';
+	import ShareButton from '#lib/share/ShareButton.svelte';
+	import { shareOf } from '#lib/share/conversation.ts';
 
 	/** How often calls waiting for their recording are asked about again; and the rest. */
 	const POLL_MS = 5000;
@@ -244,6 +246,10 @@
 			.map((c) => ({ info: callInfoOf(ix!, c), url: c.recording!.url }));
 		player.replayAll(v.name, calls);
 	}
+	// Share (R66; ADR 0020): a link carrying the conversation's name, note
+	// and calls, all but those known to be unavailable, in its order.
+	const shareFor = (v: Conversation) => shareOf({ name: v.name, note: v.note ?? '', calls: v.calls.map((c) => c.id).filter((id) => details.get(id) !== null) });
+
 	function play(c: RecentCall) {
 		if (!ix || !c.recording) return;
 		player.replayCall(callInfoOf(ix, c), c.recording.url);
@@ -458,6 +464,7 @@
 				{#if editing === v.id}
 					{@render form()}
 				{:else}
+					{@const shared = shareFor(v)}
 					<div class="conversation-head">
 						<h3 id="conversation-{v.id}">{v.name}</h3>
 						{#if v.note}
@@ -476,6 +483,9 @@
 						{#if v.calls.some((c) => ready(c.id))}
 							<button type="button" class="secondary" onclick={() => playAll(v)}><Icon name="play" /><span>Play all</span></button>
 						{/if}
+						{#if shared.path}
+							<ShareButton href={location.origin + shared.path} label={v.name} />
+						{/if}
 						<button type="button" class="ghost" onclick={() => startEdit(v)} aria-label="Edit: {v.name}">Edit</button>
 						{#if deleting === v.id}
 							<span class="confirm-inline" role="group" aria-label="Delete {v.name}?">
@@ -487,6 +497,11 @@
 						{/if}
 					</div>
 					{#if deleting === v.id}<p class="meta">Its calls stay in the basket.</p>{/if}
+					{#if shared.path && shared.shortened}
+						<p class="meta">The note is too long for a link: the shared link carries its start.</p>
+					{:else if 'problem' in shared && shared.problem === 'too-many'}
+						<p class="meta">Too many calls to share in one link. A conversation of up to about 300 calls can be shared.</p>
+					{/if}
 				{/if}
 				{@render downloads({ kind: 'conversation', id: v.id }, v.name)}
 				{#if v.calls.length}

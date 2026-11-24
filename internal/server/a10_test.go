@@ -95,6 +95,18 @@ var a10Probes = map[string][]a10Probe{
 			r.Header.Set("Cookie", "look=console; theme=dark")
 			return r
 		}},
+		// A shared conversation's page (R66; ADR 0020): its list is in the
+		// fragment, which no browser sends, so the server sees only
+		// /conversation. Sent in the path or query by hand, it still
+		// mustn't change the page.
+		{"a shared conversation's list in a query", func(f *a10World, id string) *http.Request {
+			return f.req("GET", "/conversation?c="+conversationPacked(f, id), "")
+		}},
+		{"a shared conversation's list in the path", func(f *a10World, id string) *http.Request {
+			r := f.req("GET", "/conversation/"+conversationPacked(f, id), "")
+			r.Header.Set("Cookie", "look=console; theme=dark")
+			return r
+		}},
 		{"a file of the app", func(f *a10World, id string) *http.Request { return f.req("GET", "/_app/immutable/start.js", "") }},
 	},
 	"GET /robots.txt": {
@@ -273,6 +285,15 @@ func callListProbes(method string) []a10Probe {
 				f.public[1], id, f.unavailable["never stored"], f.public[0]))
 		}},
 	}
+}
+
+// conversationPacked is a shared conversation's list (ADR 0020), as its
+// link's fragment holds it: ADR 0015's packing of one conversation naming
+// a public call and then id.
+func conversationPacked(f *a10World, id string) string {
+	return strings.TrimPrefix(public.ZipURL(public.ZipRequest{Conversations: []public.ZipConversation{
+		{Name: "Structure fire", Note: "A note", Calls: []string{f.public[0], id}},
+	}}), "/api/v1/zip/")
 }
 
 func zipProbes(method string) []a10Probe {

@@ -1,21 +1,27 @@
 <script lang="ts">
-	// Share (SPEC.md R45, R46, R61; ADR 0017): copies a call's link. On a
-	// recent-calls row, on the call card and in now playing in the dock. Once
-	// copied it says so beside the button, and to a screen reader. A browser
-	// that won't copy gets the link in a field, selected, to copy by hand.
+	// Share (SPEC.md R45, R46, R61, R66; ADR 0017, ADR 0020): copies a call's
+	// link, or another link given whole (a conversation's). On a recent-calls
+	// row, on the call card, in now playing in the dock, and on a basket's
+	// conversation. Once copied it says so beside the button, and to a screen
+	// reader. A browser that won't copy gets the link in a field, selected,
+	// to copy by hand.
 	import { tick } from 'svelte';
 	import { Icon } from 'archiveux/components';
 	import { dockIcons } from '#lib/audio/icons.ts';
 	import { callLink, copyText } from './link.ts';
 
 	let {
-		callId,
+		callId = '',
+		href,
 		label,
 		icon = false,
 		compact = false
 	}: {
-		callId: string;
-		/** The call as a person reads it ("Dispatch North, Wed 25 Nov, 14:03:22"), for the button's name. */
+		/** The call whose link is copied. */
+		callId?: string;
+		/** Or the whole link to copy instead. */
+		href?: string;
+		/** What's shared as a person reads it ("Dispatch North, Wed 25 Nov, 14:03:22"), for the button's name. */
 		label: string;
 		/** Show the share icon before the word. */
 		icon?: boolean;
@@ -26,7 +32,7 @@
 	let shared: '' | 'copied' | 'failed' = $state('');
 	let field: HTMLInputElement | undefined = $state();
 	let timer: ReturnType<typeof setTimeout> | undefined;
-	const link = $derived(callLink(callId));
+	const link = $derived(href ?? callLink(callId));
 
 	async function share() {
 		clearTimeout(timer);

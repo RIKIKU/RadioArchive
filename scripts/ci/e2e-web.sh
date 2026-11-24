@@ -40,6 +40,9 @@
 # The basket's A19 test (issue #81) dates a call of its own and runs the
 # nightly retention job, and another hides 1001 for a while, with the
 # fixture's command: @live too.
+#
+# A shared conversation's tests (issue #82) that store calls of their own,
+# hidden, ignored and deleted ones among them, are @live as well.
 set -eu
 cd "$(dirname "$0")/../.."
 
