@@ -832,6 +832,215 @@ func (q *Queries) GatePublicRecording(ctx context.Context, id pgtype.UUID) (Gate
 	return i, err
 }
 
+const gateRecentCallsNewest = `-- name: GateRecentCallsNewest :many
+SELECT c.id, c.system_id, c.talkgroup, c.patched_talkgroups, c.started_at, c.ended_at, c.recording_size,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object('unit', x.unit, 'offset_ms', x.offset_ms,
+                                                     'duration_ms', x.duration_ms) ORDER BY x.offset_ms)
+                 FROM transmissions x WHERE x.call_id = c.id), '[]'::jsonb)::jsonb AS transmissions
+FROM public_calls c
+WHERE c.started_at >= $1 AND c.started_at < $2
+  AND (c.started_at, c.id) < ($3::timestamptz, $4::uuid)
+  AND ($5::integer[] IS NULL
+       OR c.talkgroup = ANY ($5::integer[])
+       OR c.patched_talkgroups && $5::integer[])
+  AND ($6::bigint IS NULL
+       OR EXISTS (SELECT 1 FROM transmissions u WHERE u.call_id = c.id AND u.unit = $6::bigint))
+  AND ($7::uuid[] IS NULL OR c.id = ANY ($7::uuid[]))
+  AND ($8::bigint IS NULL OR c.system_id = $8::bigint)
+ORDER BY c.started_at DESC, c.id DESC
+LIMIT $9
+`
+
+type GateRecentCallsNewestParams struct {
+	StartedFrom pgtype.Timestamptz
+	StartedTo   pgtype.Timestamptz
+	CursorAt    pgtype.Timestamptz
+	CursorID    pgtype.UUID
+	Talkgroups  []int32
+	Unit        *int64
+	CallIds     []pgtype.UUID
+	UnitSystem  *int64
+	RowLimit    int32
+}
+
+type GateRecentCallsNewestRow struct {
+	ID                pgtype.UUID
+	SystemID          int64
+	Talkgroup         int32
+	PatchedTalkgroups []int32
+	StartedAt         pgtype.Timestamptz
+	EndedAt           pgtype.Timestamptz
+	RecordingSize     *int64
+	Transmissions     []byte
+}
+
+// Recent calls and search (R46, R73; ADR 0013), newest first: the public
+// calls that started in [started_from, started_to) and come after the
+// cursor (before it in time; with no cursor the gate passes started_to and
+// the smallest ID). talkgroups, when given, are a superset of the filter's
+// public talkgroups by ID, matched against the call's own or its patch's
+// (R16); the gate checks each row's system. A unit filter (in unit_system
+// when that's given) comes as call_ids, the calls the unit was heard on
+// (GateUnitCalls), or, for a unit heard on more calls than that list
+// takes, as unit, a radio ID heard on the call (ADR 0013). The gate runs it
+// with custom plans, so a NULL filter costs nothing. It joins no talkgroup
+// or system: the gate names them from the catalogue, which every listed
+// call's talkgroup must be in, and the joins' estimates made the planner
+// sort a month of a busy talkgroup's calls rather than read the newest
+// hundred (ADR 0013).
+func (q *Queries) GateRecentCallsNewest(ctx context.Context, arg GateRecentCallsNewestParams) ([]GateRecentCallsNewestRow, error) {
+	rows, err := q.db.Query(ctx, gateRecentCallsNewest,
+		arg.StartedFrom,
+		arg.StartedTo,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.Talkgroups,
+		arg.Unit,
+		arg.CallIds,
+		arg.UnitSystem,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GateRecentCallsNewestRow
+	for rows.Next() {
+		var i GateRecentCallsNewestRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SystemID,
+			&i.Talkgroup,
+			&i.PatchedTalkgroups,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.RecordingSize,
+			&i.Transmissions,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const gateRecentCallsOldest = `-- name: GateRecentCallsOldest :many
+SELECT c.id, c.system_id, c.talkgroup, c.patched_talkgroups, c.started_at, c.ended_at, c.recording_size,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object('unit', x.unit, 'offset_ms', x.offset_ms,
+                                                     'duration_ms', x.duration_ms) ORDER BY x.offset_ms)
+                 FROM transmissions x WHERE x.call_id = c.id), '[]'::jsonb)::jsonb AS transmissions
+FROM public_calls c
+WHERE c.started_at >= $1 AND c.started_at < $2
+  AND (c.started_at, c.id) > ($3::timestamptz, $4::uuid)
+  AND ($5::integer[] IS NULL
+       OR c.talkgroup = ANY ($5::integer[])
+       OR c.patched_talkgroups && $5::integer[])
+  AND ($6::bigint IS NULL
+       OR EXISTS (SELECT 1 FROM transmissions u WHERE u.call_id = c.id AND u.unit = $6::bigint))
+  AND ($7::uuid[] IS NULL OR c.id = ANY ($7::uuid[]))
+  AND ($8::bigint IS NULL OR c.system_id = $8::bigint)
+ORDER BY c.started_at, c.id
+LIMIT $9
+`
+
+type GateRecentCallsOldestParams struct {
+	StartedFrom pgtype.Timestamptz
+	StartedTo   pgtype.Timestamptz
+	CursorAt    pgtype.Timestamptz
+	CursorID    pgtype.UUID
+	Talkgroups  []int32
+	Unit        *int64
+	CallIds     []pgtype.UUID
+	UnitSystem  *int64
+	RowLimit    int32
+}
+
+type GateRecentCallsOldestRow struct {
+	ID                pgtype.UUID
+	SystemID          int64
+	Talkgroup         int32
+	PatchedTalkgroups []int32
+	StartedAt         pgtype.Timestamptz
+	EndedAt           pgtype.Timestamptz
+	RecordingSize     *int64
+	Transmissions     []byte
+}
+
+// As GateRecentCallsNewest, oldest first: the cursor is the last row given,
+// or, with none, a microsecond before started_from and the largest ID.
+func (q *Queries) GateRecentCallsOldest(ctx context.Context, arg GateRecentCallsOldestParams) ([]GateRecentCallsOldestRow, error) {
+	rows, err := q.db.Query(ctx, gateRecentCallsOldest,
+		arg.StartedFrom,
+		arg.StartedTo,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.Talkgroups,
+		arg.Unit,
+		arg.CallIds,
+		arg.UnitSystem,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GateRecentCallsOldestRow
+	for rows.Next() {
+		var i GateRecentCallsOldestRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SystemID,
+			&i.Talkgroup,
+			&i.PatchedTalkgroups,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.RecordingSize,
+			&i.Transmissions,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const gateUnitCalls = `-- name: GateUnitCalls :many
+SELECT DISTINCT call_id FROM transmissions WHERE unit = $1 LIMIT $2
+`
+
+type GateUnitCallsParams struct {
+	Unit     int64
+	RowLimit int32
+}
+
+// The calls a radio ID was heard on, up to row_limit, for a search's unit
+// filter. It reads only the transmissions_unit index.
+func (q *Queries) GateUnitCalls(ctx context.Context, arg GateUnitCallsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, gateUnitCalls, arg.Unit, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var call_id pgtype.UUID
+		if err := rows.Scan(&call_id); err != nil {
+			return nil, err
+		}
+		items = append(items, call_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getJob = `-- name: GetJob :one
 
 SELECT name, ran_for, started_at, finished_at, ok, error, result FROM jobs WHERE name = $1

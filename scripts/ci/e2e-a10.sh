@@ -221,6 +221,32 @@ but 99 answers
 $unknown"
 done
 
+# Recent calls and search (R46, ADR 0013) over the fixture's calls: the
+# public call is listed and none of 1003's, and a filter naming 1003
+# answers byte for byte as one naming a talkgroup that doesn't exist. (The
+# fake recorder's calls share their start times, so a range holding only
+# 1003's calls is the Go harness's probe, not this one's.)
+iso() { psql "SELECT to_char(($1) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') $calls"; }
+from=$(iso "date_trunc('second', min(c.started_at))")
+to=$(iso "date_trunc('second', max(c.started_at)) + interval '2 s'")
+window="from=$from&to=$to"
+recent=$(answer GET "/api/v1/recent-calls?$window")
+echo "$recent" | grep -q "\"id\":\"$pub\"" || fail "recent calls don't list the public call: $recent"
+grep -iq '^cache-control: no-store' "$media/h" || fail "recent calls' Cache-Control"
+if echo "$recent" | sed "s/$pub//g" | grep -E -q '1003|Admin|ADMIN'; then fail "recent calls leak 1003: $recent"; fi
+for id in $hidden; do
+	if echo "$recent" | grep -q "$id"; then fail "recent calls list hidden call $id"; fi
+done
+unknown=$(answer GET "/api/v1/recent-calls?$window&talkgroups=4711")
+echo "$unknown" | grep -q '"calls":\[\]' || fail "a filter naming 4711: $unknown"
+for tgs in 1003 1.1003 1003,4711; do
+	got=$(answer GET "/api/v1/recent-calls?$window&talkgroups=$tgs")
+	test "$got" = "$unknown" || fail "a filter naming $tgs answers
+$got
+but one naming 4711 answers
+$unknown"
+done
+
 # Nothing was deleted to hide them.
 for path in $(psql "SELECT c.recording_path $calls AND c.talkgroup = 1003"); do
 	docker compose cp "api:/var/lib/radioarchive/recordings/$path" "$media/check.opus" >/dev/null ||

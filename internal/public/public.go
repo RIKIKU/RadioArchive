@@ -77,6 +77,7 @@ func New(g *gate.Gate, log *slog.Logger, opts ...Option) *API {
 	a.handle("GET "+SearchPath, a.search)
 	a.handle("GET "+FiregroundPath, a.fireground)
 	a.handle("GET "+LivePath, a.live)
+	a.handle("GET "+RecentCallsPath, a.recentCalls)
 	return a
 }
 

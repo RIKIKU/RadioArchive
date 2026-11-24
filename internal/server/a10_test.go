@@ -17,6 +17,7 @@ import (
 	"time"
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
+	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/internal/server"
 )
@@ -30,8 +31,9 @@ import (
 // the harness to exist. Surfaces that name no call (the catalogue, search)
 // add probes that ignore the ID; the leak check still applies to them.
 var a10Probes = map[string][]a10Probe{
-	"QUERY " + public.CallsPath: callListProbes("QUERY"),
-	"POST " + public.CallsPath:  callListProbes("POST"),
+	"QUERY " + public.CallsPath:     callListProbes("QUERY"),
+	"POST " + public.CallsPath:      callListProbes("POST"),
+	"GET " + public.RecentCallsPath: recentProbes(),
 	"GET " + public.RecordingPath: {
 		{"whole", func(f *a10World, id string) *http.Request { return f.req("GET", public.RecordingURL(id), "") }},
 		{"a range", func(f *a10World, id string) *http.Request {
@@ -103,6 +105,69 @@ var a10Probes = map[string][]a10Probe{
 			return f.req("HEAD", public.FiregroundURL(f.fireground(id)), "")
 		}},
 	},
+}
+
+// recentProbes search recent calls (R46) around one call: a range holding
+// only it, filters naming its talkgroup (for a hidden call, 1003 or 1005;
+// for a deleted one, 4711, which doesn't exist), alone, beside public 1001
+// and by system, a unit heard only on it, and cursors made from it, both
+// ways. Every unavailable call's answer must equal a deleted call's.
+func recentProbes() []a10Probe {
+	window := func(f *a10World) url.Values {
+		return url.Values{"from": {"2025-11-24T15:00:00Z"}, "to": {"2025-11-24T17:00:00Z"}}
+	}
+	probe := func(name string, q func(f *a10World, id string) url.Values) a10Probe {
+		return a10Probe{name, func(f *a10World, id string) *http.Request {
+			return f.req("GET", public.RecentCallsPath+"?"+q(f, id).Encode(), "")
+		}}
+	}
+	with := func(v url.Values, kv ...string) url.Values {
+		for i := 0; i+1 < len(kv); i += 2 {
+			v.Set(kv[i], kv[i+1])
+		}
+		return v
+	}
+	cursor := func(f *a10World, id string) string {
+		if _, ok := gate.ParseCallID(id); !ok {
+			id = f.unavailable["never stored"]
+		}
+		return public.Cursor(f.at[id], id)
+	}
+	return []a10Probe{
+		probe("a range holding only it", func(f *a10World, id string) url.Values {
+			return url.Values{"from": {f.at[id].Format(time.RFC3339)}, "to": {f.at[id].Add(time.Second).Format(time.RFC3339)}}
+		}),
+		probe("a range holding only it, oldest first", func(f *a10World, id string) url.Values {
+			return url.Values{"from": {f.at[id].Format(time.RFC3339)}, "to": {f.at[id].Add(time.Second).Format(time.RFC3339)},
+				"order": {"oldest"}}
+		}),
+		probe("every talkgroup", func(f *a10World, _ string) url.Values { return window(f) }),
+		probe("naming its talkgroup", func(f *a10World, id string) url.Values {
+			return with(window(f), "talkgroups", f.names[id])
+		}),
+		probe("naming its talkgroup and 1001", func(f *a10World, id string) url.Values {
+			return with(window(f), "talkgroups", "1001,"+f.names[id])
+		}),
+		probe("naming its talkgroup by system", func(f *a10World, id string) url.Values {
+			return with(window(f), "talkgroups", fmt.Sprintf("%d.%s", f.e.sys, f.names[id]))
+		}),
+		probe("a unit heard only on it", func(f *a10World, id string) url.Values {
+			return with(window(f), "unit", fmt.Sprint(f.unit[id]))
+		}),
+		probe("a unit heard only on it, by system", func(f *a10World, id string) url.Values {
+			return with(window(f), "unit", fmt.Sprintf("%d.%d", f.e.sys, f.unit[id]))
+		}),
+		probe("a cursor made from it", func(f *a10World, id string) url.Values {
+			return with(window(f), "cursor", cursor(f, id))
+		}),
+		probe("a cursor made from it, oldest first", func(f *a10World, id string) url.Values {
+			return with(window(f), "cursor", cursor(f, id), "order", "oldest")
+		}),
+		probe("a page of one", func(f *a10World, _ string) url.Values { return with(window(f), "limit", "1") }),
+		{"HEAD", func(f *a10World, id string) *http.Request {
+			return f.req("HEAD", public.RecentCallsPath+"?"+with(window(f), "talkgroups", f.names[id]).Encode(), "")
+		}},
+	}
 }
 
 func searchProbe(q string) func(f *a10World, _ string) *http.Request {
@@ -200,6 +265,11 @@ type a10World struct {
 	deleted     string
 	secrets     []string // nothing public may contain these
 	secretAudio [][]byte
+	// For recent calls' probes: each call's start time and unit, and the
+	// talkgroup a probe for it names.
+	at    map[string]time.Time
+	unit  map[string]int64
+	names map[string]string
 }
 
 func (f *a10World) req(method, path, body string) *http.Request {
@@ -223,16 +293,23 @@ func newA10World(t *testing.T) *a10World {
 	_, key := e.recorder(t)
 	f := &a10World{e: e, unavailable: map[string]string{}}
 	n := int64(100)
+	f.at, f.unit, f.names = map[string]time.Time{}, map[string]int64{}, map[string]string{}
+	// Each call starts a second after the one before and has a unit of its
+	// own, so a range or a unit can hold just one call.
 	store1 := func(tg int32, patched []int32, seed byte) string {
 		t.Helper()
 		n++
 		audio := oggBytes(seed)
 		m := recording(cp.CallID{CallNum: n, StartTime: 1764000100 + n}, audio)
 		m.Talkgroup, m.PatchedTalkgroups = tg, patched
+		m.StartTimeMS, m.StopTimeMS = (1764000100+n)*1000, (1764000100+n)*1000+900
+		m.Transmissions = []cp.RecordingTransmission{{Unit: uint32(7000 + n), OffsetMS: 0, DurationMS: 900}}
 		code, resp := e.upload(t, key, m, audio)
 		if code != 201 {
 			t.Fatalf("upload on %d: %d %+v", tg, code, resp)
 		}
+		f.at[resp.CallID] = time.UnixMilli(m.StartTimeMS).UTC()
+		f.unit[resp.CallID] = 7000 + n
 		return resp.CallID
 	}
 	f.public = []string{store1(1001, []int32{1002}, 'p'), store1(1001, nil, 'q')}
@@ -275,9 +352,33 @@ func newA10World(t *testing.T) *a10World {
 			map[string]any{"fireground_channel": n, "groups": []string{"Covert group"}}, 200)
 	}
 
-	// Every call ended at the same time (recording's StopTimeMS); a minute
-	// later, 1006's is still within its delay.
-	e.clock.set(time.UnixMilli(1764000009870).Add(time.Minute))
+	// Each call ended 0.9 s after it started, the last (the deleted one) at
+	// call n's; a minute later, 1006's is still within its delay.
+	e.clock.set(time.UnixMilli((1764000100+n)*1000 + 900).Add(time.Minute))
+
+	// What recent calls' probes name for each call: its talkgroup, or for
+	// a call patched with a hidden or ignored one, that one. A deleted
+	// call's and the others' name one that doesn't exist, 4711, which each
+	// hidden or ignored talkgroup, and delayed 1006 within its delay, must
+	// answer exactly as.
+	for _, id := range f.public {
+		f.names[id] = "1001"
+	}
+	for k, id := range f.unavailable {
+		switch {
+		case strings.Contains(k, "1006"):
+			f.names[id] = "1006"
+		case strings.Contains(k, "1005"):
+			f.names[id] = "1005"
+		case strings.Contains(k, "1003"):
+			f.names[id] = "1003"
+		default:
+			f.names[id] = "4711"
+			// A time and a unit no call has, after every call.
+			f.at[id], f.unit[id] = time.Unix(1764000100+200, 0).UTC(), 6999
+		}
+	}
+	f.names[f.deleted] = "4711"
 
 	f.secrets = []string{"1003", "1005", "Admin", "ADMIN", `"admin"`, "Covert ops", "SECRET 5", "Covert group"}
 	f.callName = map[string]string{}

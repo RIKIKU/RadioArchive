@@ -446,6 +446,63 @@ JOIN talkgroups t ON t.system_id = c.system_id AND t.talkgroup_id = c.talkgroup
 LEFT JOIN tags g ON g.id = t.tag_id
 WHERE c.id = ANY (sqlc.arg(ids)::uuid[]);
 
+-- name: GateUnitCalls :many
+-- The calls a radio ID was heard on, up to row_limit, for a search's unit
+-- filter. It reads only the transmissions_unit index.
+SELECT DISTINCT call_id FROM transmissions WHERE unit = sqlc.arg(unit) LIMIT sqlc.arg(row_limit);
+
+-- name: GateRecentCallsNewest :many
+-- Recent calls and search (R46, R73; ADR 0013), newest first: the public
+-- calls that started in [started_from, started_to) and come after the
+-- cursor (before it in time; with no cursor the gate passes started_to and
+-- the smallest ID). talkgroups, when given, are a superset of the filter's
+-- public talkgroups by ID, matched against the call's own or its patch's
+-- (R16); the gate checks each row's system. A unit filter (in unit_system
+-- when that's given) comes as call_ids, the calls the unit was heard on
+-- (GateUnitCalls), or, for a unit heard on more calls than that list
+-- takes, as unit, a radio ID heard on the call (ADR 0013). The gate runs it
+-- with custom plans, so a NULL filter costs nothing. It joins no talkgroup
+-- or system: the gate names them from the catalogue, which every listed
+-- call's talkgroup must be in, and the joins' estimates made the planner
+-- sort a month of a busy talkgroup's calls rather than read the newest
+-- hundred (ADR 0013).
+SELECT c.id, c.system_id, c.talkgroup, c.patched_talkgroups, c.started_at, c.ended_at, c.recording_size,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object('unit', x.unit, 'offset_ms', x.offset_ms,
+                                                     'duration_ms', x.duration_ms) ORDER BY x.offset_ms)
+                 FROM transmissions x WHERE x.call_id = c.id), '[]'::jsonb)::jsonb AS transmissions
+FROM public_calls c
+WHERE c.started_at >= sqlc.arg(started_from) AND c.started_at < sqlc.arg(started_to)
+  AND (c.started_at, c.id) < (sqlc.arg(cursor_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
+  AND (sqlc.narg(talkgroups)::integer[] IS NULL
+       OR c.talkgroup = ANY (sqlc.narg(talkgroups)::integer[])
+       OR c.patched_talkgroups && sqlc.narg(talkgroups)::integer[])
+  AND (sqlc.narg(unit)::bigint IS NULL
+       OR EXISTS (SELECT 1 FROM transmissions u WHERE u.call_id = c.id AND u.unit = sqlc.narg(unit)::bigint))
+  AND (sqlc.narg(call_ids)::uuid[] IS NULL OR c.id = ANY (sqlc.narg(call_ids)::uuid[]))
+  AND (sqlc.narg(unit_system)::bigint IS NULL OR c.system_id = sqlc.narg(unit_system)::bigint)
+ORDER BY c.started_at DESC, c.id DESC
+LIMIT sqlc.arg(row_limit);
+
+-- name: GateRecentCallsOldest :many
+-- As GateRecentCallsNewest, oldest first: the cursor is the last row given,
+-- or, with none, a microsecond before started_from and the largest ID.
+SELECT c.id, c.system_id, c.talkgroup, c.patched_talkgroups, c.started_at, c.ended_at, c.recording_size,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object('unit', x.unit, 'offset_ms', x.offset_ms,
+                                                     'duration_ms', x.duration_ms) ORDER BY x.offset_ms)
+                 FROM transmissions x WHERE x.call_id = c.id), '[]'::jsonb)::jsonb AS transmissions
+FROM public_calls c
+WHERE c.started_at >= sqlc.arg(started_from) AND c.started_at < sqlc.arg(started_to)
+  AND (c.started_at, c.id) > (sqlc.arg(cursor_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
+  AND (sqlc.narg(talkgroups)::integer[] IS NULL
+       OR c.talkgroup = ANY (sqlc.narg(talkgroups)::integer[])
+       OR c.patched_talkgroups && sqlc.narg(talkgroups)::integer[])
+  AND (sqlc.narg(unit)::bigint IS NULL
+       OR EXISTS (SELECT 1 FROM transmissions u WHERE u.call_id = c.id AND u.unit = sqlc.narg(unit)::bigint))
+  AND (sqlc.narg(call_ids)::uuid[] IS NULL OR c.id = ANY (sqlc.narg(call_ids)::uuid[]))
+  AND (sqlc.narg(unit_system)::bigint IS NULL OR c.system_id = sqlc.narg(unit_system)::bigint)
+ORDER BY c.started_at, c.id
+LIMIT sqlc.arg(row_limit);
+
 -- name: GateEndedSince :many
 -- The public calls that ended at or after ended_since, for the live feed to
 -- find, when it starts, the delayed calls it has still to release (R23).
