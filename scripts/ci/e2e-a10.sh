@@ -246,6 +246,23 @@ $got
 but one naming 4711 answers
 $unknown"
 done
+# The same searches with their parameters in a JSON body (ADR 0016): each
+# answers as its GET does.
+for method in QUERY POST; do
+	got=$(answer "$method" /api/v1/recent-calls -H 'Content-Type: application/json' --data "{\"from\":\"$from\",\"to\":\"$to\"}")
+	test "$got" = "$recent" || fail "$method recent calls answer
+$got
+but GET answers
+$recent"
+	for tgs in '"4711"' '"1003"' '"1.1003"' '"1003","4711"'; do
+		got=$(answer "$method" /api/v1/recent-calls -H 'Content-Type: application/json' \
+			--data "{\"from\":\"$from\",\"to\":\"$to\",\"talkgroups\":[$tgs]}")
+		test "$got" = "$unknown" || fail "$method recent calls naming $tgs answer
+$got
+but GET naming 4711 answers
+$unknown"
+	done
+done
 
 # Nothing was deleted to hide them.
 for path in $(psql "SELECT c.recording_path $calls AND c.talkgroup = 1003"); do

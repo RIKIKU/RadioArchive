@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 )
@@ -64,8 +65,11 @@ type CatalogueTalkgroup struct {
 
 // Catalogue is GET /api/v1/catalogue: every public talkgroup in the
 // catalogue's order (system, then sort order, then ID), and the tags and
-// groups they name, in their order.
+// groups they name, in their order. TimeZone is the deployment's (TZ), an
+// IANA name, which the browser shows times in (SPEC.md section 13; ADR
+// 0016).
 type Catalogue struct {
+	TimeZone   string               `json:"time_zone"`
 	Systems    []CatalogueSystem    `json:"systems,omitempty"`
 	Tags       []string             `json:"tags"`
 	Groups     []string             `json:"groups"`
@@ -82,6 +86,16 @@ type SearchResponse struct {
 type FiregroundResponse struct {
 	Systems   []CatalogueSystem  `json:"systems,omitempty"`
 	Talkgroup CatalogueTalkgroup `json:"talkgroup"`
+}
+
+// zoneName is a time zone's IANA name. Go names the zone TZ set "Local", so
+// the binary loads TZ by name (cmd/radioarchive); a zone still called Local
+// is one no TZ named, which is UTC in the image.
+func zoneName(loc *time.Location) string {
+	if loc == nil || loc.String() == "Local" || loc.String() == "" {
+		return "UTC"
+	}
+	return loc.String()
 }
 
 // catalogueBody keeps the last catalogue's encoded answer, so the same
@@ -138,7 +152,7 @@ func (a *API) catalogue(w http.ResponseWriter, r *http.Request) {
 	a.cat.mu.Lock()
 	defer a.cat.mu.Unlock()
 	if a.cat.of != c {
-		b, err := json.Marshal(Catalogue{Systems: systemsOf(c), Tags: c.Tags, Groups: c.Groups,
+		b, err := json.Marshal(Catalogue{TimeZone: zoneName(a.loc), Systems: systemsOf(c), Tags: c.Tags, Groups: c.Groups,
 			Talkgroups: talkgroupsOf(c, c.Talkgroups)})
 		if err != nil {
 			a.failed(w, r, err)

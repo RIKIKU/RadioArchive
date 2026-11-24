@@ -424,3 +424,84 @@ func TestIntegrationRecentCallsBusyUnit(t *testing.T) {
 		t.Errorf("unit 9200: %d calls", len(got.Calls))
 	}
 }
+
+// TestIntegrationRecentCallsBody: QUERY and POST take the search as a JSON
+// body (ADR 0016) and answer exactly as GET does, refusals included; and a
+// set of 1,000 talkgroups, each with its system, which a URL behind a
+// default nginx can't hold, searches in one request.
+func TestIntegrationRecentCallsBody(t *testing.T) {
+	e := newEnv(t)
+	_, key := e.recorder(t)
+	t0 := fixtureTime
+	a := e.uploadAt(t, key, 1, 1001, nil, t0, 5001)
+	b := e.uploadAt(t, key, 2, 1002, nil, t0.Add(time.Minute), 5123)
+	from := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for _, q := range []url.Values{
+		around(t0),
+		around(t0, "order", "oldest", "limit", "1"),
+		around(t0, "talkgroups", "1002,1001"),
+		around(t0, "talkgroups", fmt.Sprintf("%d.1002", e.sys)),
+		around(t0, "unit", "5001"),
+		around(t0, "cursor", public.Cursor(t0.Add(time.Minute), b)),
+		{"from": {from.Format(time.RFC3339)}, "to": {from.AddDate(0, 0, 32).Format(time.RFC3339)}},
+		{"talkgroups": {"1001,DISP N"}},
+		{"order": {"random"}},
+		{"limit": {"101"}},
+		{"cursor": {"not-a-cursor"}},
+	} {
+		get := e.pub(t, "GET", public.RecentCallsPath+"?"+q.Encode(), "")
+		for _, method := range []string{"QUERY", "POST"} {
+			got := e.pub(t, method, public.RecentCallsPath, searchBody(q))
+			if got.status != get.status || string(got.body) != string(get.body) ||
+				got.header.Get("Cache-Control") != get.header.Get("Cache-Control") {
+				t.Errorf("%s %s: %s\nbut GET ?%s: %s", method, searchBody(q), got, q.Encode(), get)
+			}
+		}
+	}
+	if got := e.pub(t, "POST", public.RecentCallsPath, `{"talkgroups": ["1001"], "from": null, "unit": null}`); got.status != 200 {
+		t.Errorf("nulls are parameters not given: %s", got)
+	}
+	for body, code := range map[string]string{
+		`{"q": "dispatch"}`:             "unknown_parameter",
+		`{"talkgroups": "1001"}`:        "invalid_body",
+		`{"talkgroups": [1001]}`:        "invalid_body",
+		`{"talkgroups": ["1001,1002"]}`: "invalid_talkgroups",
+		`{"talkgroups": [""]}`:          "invalid_talkgroups",
+		`{"limit": "10"}`:               "invalid_body",
+		`{"limit": 1.5}`:                "invalid_limit",
+		`{"from": 1}`:                   "invalid_body",
+		`[]`:                            "invalid_body",
+		`null`:                          "invalid_body",
+		``:                              "invalid_body",
+		`{} {}`:                         "invalid_body",
+		`{"order": "newest"`:            "invalid_body",
+		`{"cursor": "` + strings.Repeat("A", public.MaxSearchBody) + `"}`: "invalid_body",
+	} {
+		got := e.pub(t, "POST", public.RecentCallsPath, body)
+		var refusal struct{ Error, Message string }
+		_ = json.Unmarshal(got.body, &refusal)
+		if got.status != 400 || refusal.Error != code || refusal.Message == "" {
+			t.Errorf("POST %.60s: %s, want 400 %s", body, got, code)
+		}
+	}
+
+	// A listening set of 1,000 talkgroups in several systems: about 15 KB
+	// as a query string, past nginx's 8 KB request line, and one request
+	// as a body.
+	set := make([]string, 0, public.MaxTalkgroups)
+	set = append(set, fmt.Sprintf("%d.1001", e.sys))
+	for i := 1; len(set) < public.MaxTalkgroups; i++ {
+		set = append(set, fmt.Sprintf("%d.%d", 65000+i%3, 2_000_000_000+i))
+	}
+	q := around(t0, "talkgroups", strings.Join(set, ","))
+	if n := len(public.RecentCallsPath + "?" + q.Encode()); n <= 8192 {
+		t.Fatalf("the set's URL is only %d bytes", n)
+	}
+	got := e.pub(t, "QUERY", public.RecentCallsPath, searchBody(q))
+	if got.status != 200 {
+		t.Fatalf("QUERY with 1,000 talkgroups: %s", got)
+	}
+	if r := decodeJSON[public.RecentCallsResponse](t, got.body); !slices.Equal(ids(r.Calls), []string{a}) {
+		t.Errorf("QUERY with 1,000 talkgroups: %v, want %v", ids(r.Calls), []string{a})
+	}
+}

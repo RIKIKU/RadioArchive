@@ -92,6 +92,10 @@ _Avoid_: Favourite, preempt, emergency talkgroup
 A listener's temporary narrowing to only the talkgroup of the call playing now, lasting until they release it; it leaves the listening set unchanged.
 _Avoid_: Lock, pin, solo
 
+**Replay**:
+Playing a call from the archive because a listener chose it, apart from live listening, which waits meanwhile.
+_Avoid_: Playback (that's any call's audio), rewind, catch-up
+
 **Download basket**:
 The calls a listener has marked, and the conversations they've grouped them into, kept to download later.
 _Avoid_: Cart, queue, playlist

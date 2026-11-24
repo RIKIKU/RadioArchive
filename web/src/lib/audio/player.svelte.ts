@@ -34,6 +34,7 @@ import { decoding, type Decoding, type DecodePath, type OpusStream, type Pcm } f
 import { readOggOpus } from './ogg.ts';
 import { heldThrough, nextIndex, type TalkgroupKey } from './queue.ts';
 import { playAlert } from './alerts.ts';
+import { Replay } from './replay.svelte.ts';
 import { LIVE_WITHIN } from 'archiveux/live.js';
 
 export type Source = 'live' | 'recording';
@@ -130,6 +131,8 @@ export class Player {
 	last: CallInfo | undefined = $state();
 	/** Why listening couldn't start, if it couldn't. */
 	failure = $state('');
+	/** A call replayed from recent calls (R46), apart from the queue. */
+	readonly replay = new Replay();
 
 	#opts: PlayerOptions;
 	#ctx: AudioContext | undefined;
@@ -158,6 +161,8 @@ export class Player {
 	 */
 	async start() {
 		if (this.phase !== 'stopped') return;
+		// Live listening and a replay never play over each other.
+		this.replay.stop();
 		this.phase = 'starting';
 		this.failure = '';
 		// Made and resumed inside the gesture, before any await.
@@ -269,9 +274,10 @@ export class Player {
 		await this.#ctx?.suspend().catch(() => undefined);
 	}
 
-	/** Resume: carries on where it paused, then through the queue. */
+	/** Resume: carries on where it paused, then through the queue. A call being replayed stops. */
 	async resume() {
 		if (!this.paused) return;
+		this.replay.stop();
 		this.paused = false;
 		await this.#ctx?.resume().catch(() => undefined);
 		this.#pump();
@@ -292,6 +298,17 @@ export class Player {
 		const t = c.info.talkgroup;
 		this.hold = { talkgroup: t, key: c.info.system ? { system: c.info.system.id, id: t.id } : { id: t.id } };
 		this.#count();
+	}
+
+	/**
+	 * Replays a call from recent calls (R46), from its recording: call it
+	 * from the press. Live listening pauses, so live calls keep queuing,
+	 * and stays paused once the call has played, until the listener
+	 * resumes it (ADR 0016; #75's open question 3 may change that).
+	 */
+	replayCall(info: CallInfo, recording: string) {
+		if (this.phase !== 'stopped' && !this.paused) void this.pause();
+		this.replay.play(info, recording);
 	}
 
 	/** Plays a finished call again, from its recording (R20), after the one playing. */

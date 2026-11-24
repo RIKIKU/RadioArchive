@@ -25,6 +25,11 @@
 # recorder goes deaf (RECORDER_NOTICE_AFTER), not 2 min. They change
 # talkgroups as an admin would with the fixture's command (RA_WEBFIXTURE,
 # on RA_DATABASE_URL).
+#
+# The Recent calls page's tests (issue #79) search made-up calls the
+# fixture's command stores before the tests start; those that change a
+# talkgroup, or store a call of their own (on RA_RECORDINGS), are @live
+# too, so they run one at a time. The API runs in TZ=Australia/Melbourne.
 set -eu
 cd "$(dirname "$0")/../.."
 
@@ -86,7 +91,9 @@ CGO_ENABLED=0 go build -trimpath -o "$tmp/fakerecorder" ./testing/fakerecorder/c
 CGO_ENABLED=1 go build -trimpath -o "$tmp/radioarchive-client" ./cmd/radioarchive-client
 CGO_ENABLED=0 go build -trimpath -o "$tmp/webfixture" ./testing/webfixture
 mkdir -p "$tmp/recordings" "$tmp/media" "$tmp/queue"
-DATABASE_URL=$DATABASE_URL LISTEN_ADDR="127.0.0.1:$port" RECORDINGS_DIR="$tmp/recordings" RECORDER_NOTICE_AFTER=3s \
+# The deployment's time zone isn't the browsers' (UTC), so the Recent calls
+# page's tests show its times are TZ's (section 13).
+TZ=Australia/Melbourne DATABASE_URL=$DATABASE_URL LISTEN_ADDR="127.0.0.1:$port" RECORDINGS_DIR="$tmp/recordings" RECORDER_NOTICE_AFTER=3s \
 	"$tmp/radioarchive" serve >"$tmp/api.log" 2>&1 &
 pid=$!
 # Node, not curl: Playwright's image may have no curl.
@@ -103,6 +110,9 @@ SERVER_URL="http://127.0.0.1:$port" CLIENT_KEY="$key" UDP_ADDR="127.0.0.1:$udp" 
 	"$tmp/radioarchive-client" >"$tmp/client.log" 2>&1 &
 client=$!
 wait_for 60 "the recorder client's live connection" grep -q '"live connection open"' "$tmp/client.log"
+# The archive the Recent calls page's tests search (issue #79): made-up
+# calls as Bench's, with their recordings on the volume.
+"$tmp/webfixture" "$DATABASE_URL" calls Bench "$tmp/recordings"
 
 fixtures=$(pwd)/testing/fakerecorder/testdata/fixtures
 
@@ -126,5 +136,5 @@ cd web
 RA_URL="http://127.0.0.1:$port" npx playwright test --grep-invert @live --pass-with-no-tests "$@"
 RA_URL="http://127.0.0.1:$port" RA_FAKERECORDER="$tmp/fakerecorder" RA_FIXTURES="$fixtures" \
 	RA_UDP_ADDR="127.0.0.1:$udp" RA_MEDIA="$tmp/media" RA_HEARTBEATS_HELD="$held" \
-	RA_WEBFIXTURE="$tmp/webfixture" RA_DATABASE_URL="$DATABASE_URL" \
+	RA_WEBFIXTURE="$tmp/webfixture" RA_DATABASE_URL="$DATABASE_URL" RA_RECORDINGS="$tmp/recordings" \
 	npx playwright test --grep @live --workers=1 --pass-with-no-tests "$@"

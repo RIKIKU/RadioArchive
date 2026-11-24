@@ -13,6 +13,9 @@
 	// listening. Each has its name in words: shown on a desktop, read out on
 	// a phone, where the buttons show their icons only. Share and Add to
 	// basket (R45) are M3's.
+	//
+	// A call replayed from recent calls (R46; ADR 0016) shows first, with
+	// its own Stop, whether live listening is paused or never started.
 	import { Icon, LiveBadge } from 'archiveux/components';
 	import type { Player, CallInfo } from './player.svelte.ts';
 	import { dockIcons } from './icons.ts';
@@ -20,6 +23,7 @@
 	let { player }: { player: Player } = $props();
 
 	const c = $derived(player.playing);
+	const r = $derived(player.replay.call);
 	const clock = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 	const unitOf = (i: CallInfo) => (i.unit ? i.unit.name || String(i.unit.id) : 'Unit unknown');
 	const queuedText = $derived(
@@ -29,6 +33,26 @@
 	);
 </script>
 
+{#if r}
+	<div class="replay" data-replay={r.callId}>
+		<div class="what" aria-live="polite">
+			<p class="np-name">
+				<span class="replay-mark">Replaying</span>
+				{#if r.talkgroup.led_colour}<span class="led" data-led={r.talkgroup.led_colour} aria-hidden="true"></span>{/if}
+				<span class="tg">{r.talkgroup.name}</span>{#if r.talkgroup.groups?.[0]}<span class="group">{r.talkgroup.groups[0]}</span>{/if}
+			</p>
+			<p class="meta np-unit">
+				<span class="unit">{unitOf(r)}</span>{#if r.system}<span class="sep" aria-hidden="true">·</span><span class="system">{r.system.name}</span>{/if}
+				<span class="sep" aria-hidden="true">·</span><span class="elapsed"><span class="visually-hidden">{'Played '}</span>{clock(player.replay.elapsed)}</span>
+			</p>
+		</div>
+		<div class="controls" role="group" aria-label="Replay controls">
+			<button type="button" class="secondary" onclick={() => player.replay.stop()}><Icon svg={dockIcons.stop} /><span class="label">Stop replay</span></button>
+		</div>
+	</div>
+{:else if player.replay.failure}
+	<p class="error replay-failed" role="alert">{player.replay.failure}</p>
+{/if}
 {#if player.phase === 'stopped'}
 	<div class="idle">
 		<button type="button" class="start" onclick={() => player.start()}><Icon name="play" />Start listening</button>
@@ -102,6 +126,30 @@
 {/if}
 
 <style>
+	.replay {
+		display: flex;
+		flex: 1 1 100%;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-xs) var(--space-lg);
+		min-width: 0;
+		padding-bottom: var(--space-xs);
+		border-bottom: var(--border-width) solid var(--border);
+	}
+	.replay p,
+	.replay-failed {
+		margin: 0;
+	}
+	.replay-failed {
+		flex: 1 1 100%;
+	}
+	.replay-mark {
+		padding: var(--badge-pad-y) var(--badge-pad-x);
+		border-radius: var(--radius-badge);
+		background: var(--accent-soft);
+		color: var(--accent-soft-fg);
+		font-size: var(--text-sm);
+	}
 	.idle,
 	.player {
 		display: flex;
