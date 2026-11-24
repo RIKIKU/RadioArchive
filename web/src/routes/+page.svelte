@@ -322,7 +322,7 @@
 		margin: 0;
 	}
 	.what {
-		flex: 1 1 12rem;
+		flex: 1 1 auto;
 		min-width: 0;
 	}
 	.what p {
