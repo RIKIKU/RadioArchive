@@ -6,9 +6,13 @@
 	// phones, and the account menu, where the look and theme are chosen
 	// (R82) signed in or out, and where a listener signs in to save their
 	// preferences (R103, R110; ADR 0009). No app switcher until the combined
-	// deployment (M7, R102), and no dock until the player (#60).
+	// deployment (M7, R102). The dock holds the player (R44, R45, R81; ADR
+	// 0012) on every page, and the live feed's notices sit above it.
 	import { AccountMenu, BottomBar, Frame, Menu } from 'archiveux/components';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
+	import { Player } from '#lib/audio/player.svelte.ts';
+	import Dock from '#lib/audio/Dock.svelte';
+	import { keyOf } from '#lib/listening/set.ts';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
 	import { current, setLook, setTheme, type Look, type Theme } from '#lib/look.ts';
@@ -24,9 +28,24 @@
 	const sent = current();
 	let look: Look = $state(sent.look);
 	let theme: Theme = $state(sent.theme);
-	let alerts = alertsOn();
+	// Playback settings (R48): alert sounds, off by default.
+	let alerts = $state(alertsOn());
 
 	const listening = listeningState();
+
+	// The player, in the dock. Priority marks are the saved set's (R43); the
+	// talkgroups added for the session have none.
+	const player = new Player({
+		isPriority: (t) => listening.saved.some((e) => e.priority && keyOf(e) === keyOf(t)),
+		alerts: () => alerts
+	});
+	onDestroy(() => player.stop());
+
+	function chooseAlerts(on: boolean) {
+		alerts = on;
+		setAlerts(on);
+		acct.changed();
+	}
 	const acct = new Account({
 		listening,
 		look: () => look,
@@ -99,12 +118,24 @@
 	const brand = { name: 'RadioArchive', mark: 'RA', href: '/' };
 </script>
 
-<Frame>
+<Frame dockLabel="Now playing">
 	{#snippet menu()}<Menu {brand} current={page.url.pathname} {top} />{/snippet}
 	{#snippet start()}<a class="brand" href="/">RadioArchive</a>{/snippet}
+	{#snippet dock()}<Dock {player} />{/snippet}
+	{#snippet notices()}
+		<!-- The live feed's notices (R15, R81), above the dock, while they're on. -->
+		<div class="notice-place" aria-live="polite">
+			{#if player.notices.recorders}<p class="feed-notice">Some talkgroups aren't being received right now.</p>{/if}
+		</div>
+	{/snippet}
 	{#snippet account()}
 		<AccountMenu account={who} bind:theme bind:look onlook={chooseLook} signIn={signInHref} onsignout={() => acct.signOut()}>
 			{#snippet extra({ close }: { close: () => void })}
+				<!-- Playback settings (R48), with the look (R82), signed in or out. -->
+				<label class="setting">
+					<input type="checkbox" checked={alerts} onchange={(e) => chooseAlerts(e.currentTarget.checked)} />
+					<span>Alert sounds<span class="setting-hint">A talkgroup's sound when a call starts on it</span></span>
+				</label>
 				{#if acct.who}
 					<p class="saved" role="status">
 						{#if acct.mode === 'saving'}
@@ -188,6 +219,32 @@
 		.brand {
 			display: inline;
 		}
+	}
+	/* As the menu's own rows. */
+	.setting {
+		display: flex;
+		align-items: flex-start;
+		gap: var(--space-sm);
+		min-height: var(--target);
+		padding: var(--space-xs) var(--space-md);
+		font-size: var(--text-sm);
+		cursor: pointer;
+	}
+	.setting-hint {
+		display: block;
+		color: var(--muted);
+	}
+	/* A feed notice: a notice's look (ArchiveUx section 4), placed by
+	   .notice-place. It stays while it's on, so it has no timing. */
+	.feed-notice {
+		margin: 0;
+		padding: var(--space-sm) var(--space-md);
+		background: var(--highlight);
+		color: var(--fg);
+		border: var(--border-width-strong) solid var(--notice-edge);
+		border-radius: var(--radius);
+		box-shadow: var(--notice-shadow);
+		font-size: var(--text-sm);
 	}
 	.saved {
 		margin: 0;

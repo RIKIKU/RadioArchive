@@ -10,18 +10,31 @@
 //
 // Given a recorder's name (one `radioarchive recorder add` made), it also
 // attaches the recorder as the fixture's `Bench`: its `ex` is system EX, for
-// the browser tests that play the fake recorder's calls (issue #58).
+// the browser tests that play the fake recorder's calls (issue #58), and
+// gives it a quiet threshold of 1 minute (R14), so the browser tests can
+// show that a quiet recorder raises no notice (A27).
+//
+// The queue's browser tests (issue #60) change a talkgroup as an admin
+// would, which the binary can't do yet (M4): its state (A11) or its delay
+// (A14), its alert (R22) or its LED colour. It prints the moment the change
+// committed, in Unix milliseconds, and the live feed sees the catalogue's
+// generation move.
 //
 //	go run ./testing/webfixture <database URL> [recorder name]
+//	go run ./testing/webfixture <database URL> talkgroup <ID> state <public|hidden|ignored>
+//	go run ./testing/webfixture <database URL> talkgroup <ID> delay <minutes>
+//	go run ./testing/webfixture <database URL> talkgroup <ID> alert|led <name|null>
 package main
 
 import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const fixture = `
@@ -45,9 +58,53 @@ const attach = `
 INSERT INTO attachments (recorder_id, short_name, system_id)
 SELECT id, 'ex', 1 FROM recorders WHERE name = $1 ON CONFLICT DO NOTHING`
 
+// quiet is the recorder's quiet threshold (ADR 0010).
+const quiet = `UPDATE recorders SET quiet_after_minutes = 1 WHERE name = $1`
+
+// changeTalkgroup sets one of system EX's talkgroups' state, delay, alert
+// or LED colour ("null" for an alert or colour of none of its own).
+func changeTalkgroup(ctx context.Context, conn *pgx.Conn, id, field, value string) error {
+	tg, err := strconv.Atoi(id)
+	if err != nil {
+		return fmt.Errorf("talkgroup %q isn't a number", id)
+	}
+	orNull := func(v string) any {
+		if v == "null" {
+			return nil
+		}
+		return v
+	}
+	var tag pgconn.CommandTag
+	switch field {
+	case "state":
+		tag, err = conn.Exec(ctx, `UPDATE talkgroups SET state = $1 WHERE system_id = 1 AND talkgroup_id = $2`, value, tg)
+	case "delay":
+		var m int
+		if m, err = strconv.Atoi(value); err != nil {
+			return fmt.Errorf("delay %q isn't a number of minutes", value)
+		}
+		tag, err = conn.Exec(ctx, `UPDATE talkgroups SET delay_minutes = $1 WHERE system_id = 1 AND talkgroup_id = $2`, m, tg)
+	case "alert":
+		tag, err = conn.Exec(ctx, `UPDATE talkgroups SET alert = $1 WHERE system_id = 1 AND talkgroup_id = $2`, orNull(value), tg)
+	case "led":
+		tag, err = conn.Exec(ctx, `UPDATE talkgroups SET led_colour = $1 WHERE system_id = 1 AND talkgroup_id = $2`, orNull(value), tg)
+	default:
+		return fmt.Errorf("can't change a talkgroup's %q: state, delay, alert or led", field)
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("no talkgroup %d in system EX", tg)
+	}
+	fmt.Println(time.Now().UnixMilli())
+	return nil
+}
+
 func main() {
-	if len(os.Args) != 2 && len(os.Args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: webfixture <database URL> [recorder name]")
+	talkgroup := len(os.Args) == 6 && os.Args[2] == "talkgroup"
+	if len(os.Args) != 2 && len(os.Args) != 3 && !talkgroup {
+		fmt.Fprintln(os.Stderr, "usage: webfixture <database URL> [recorder name]\n       webfixture <database URL> talkgroup <ID> state|delay <value>")
 		os.Exit(2)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -58,6 +115,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer conn.Close(context.Background())
+	if talkgroup {
+		if err := changeTalkgroup(ctx, conn, os.Args[3], os.Args[4], os.Args[5]); err != nil {
+			fmt.Fprintln(os.Stderr, "webfixture:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if _, err := conn.Exec(ctx, fixture); err != nil {
 		fmt.Fprintln(os.Stderr, "webfixture:", err)
 		os.Exit(1)
@@ -70,6 +134,9 @@ func main() {
 			if err == nil && n == 0 {
 				err = fmt.Errorf("no recorder named %q", os.Args[2])
 			}
+		}
+		if err == nil {
+			_, err = conn.Exec(ctx, quiet, os.Args[2])
 		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "webfixture: attach:", err)
