@@ -273,5 +273,21 @@ func (a *API) download(w http.ResponseWriter, r *http.Request) {
 	defer rec.Close()
 	name := filename.Call(c.StartedAt, a.loc, c.Talkgroup.Label, c.Talkgroup.ID)
 	w.Header().Set("Content-Disposition", filename.Attachment(name))
-	rec.Serve(w, r)
+	rec.Serve(savedAs{w}, r)
+}
+
+// DownloadType is a download's media type. Firefox and Safari rename a
+// download to the extension they keep for its type (audio/ogg saves as
+// .ogx), so the file is sent as bytes to save, under R63's name, .opus
+// and all (ADR 0016).
+const DownloadType = "application/octet-stream"
+
+// savedAs answers a download's file as DownloadType.
+type savedAs struct{ http.ResponseWriter }
+
+func (s savedAs) WriteHeader(code int) {
+	if code < 300 {
+		s.Header().Set("Content-Type", DownloadType)
+	}
+	s.ResponseWriter.WriteHeader(code)
 }

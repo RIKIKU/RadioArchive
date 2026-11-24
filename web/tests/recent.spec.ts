@@ -46,10 +46,10 @@ async function callOf(page: Page, unit: number) {
 	return page.evaluate(async (u) => (await (await fetch(`/api/v1/recent-calls?unit=${u}`)).json()).calls[0], unit);
 }
 
-/** Nothing on the page names hidden 1003 or ignored 1004. */
+/** Nothing on the page names hidden 1003 or ignored 1004 (a unit the listener typed is theirs to see). */
 async function namesNothingHidden(page: Page) {
 	const text = await page.locator('body').innerText();
-	for (const s of ['1003', 'Admin', 'ADMIN', '1004', 'TG 1004', '9003', '9004', '9005']) expect(text, s).not.toContain(s);
+	for (const s of ['1003', 'Admin', 'ADMIN', '1004', 'TG 1004']) expect(text, s).not.toContain(s);
 }
 
 const openFilters = async (page: Page) => {
@@ -188,6 +188,8 @@ test('no page shows 1003, "Admin" or its label, whatever the filters', async ({ 
 		await expect(page.getByText(/Loading/)).toHaveCount(0);
 		await openFilters(page);
 		await namesNothingHidden(page);
+		// Units heard only on hidden or ignored calls list nothing.
+		if (q.startsWith('?unit=')) await expect(page.getByText('No calls match. Try other filters or a wider time range.')).toBeVisible();
 	}
 	// A filter naming only hidden talkgroups lists nothing, as one naming none that exist.
 	await page.goto('/recent?talkgroups=1003');
@@ -210,7 +212,11 @@ test("A17, browser half: Download on a row saves the stored file under R63's nam
 	);
 	const name = `${p.year}-${p.month}-${p.day}_${p.hour}${p.minute}${p.second}_DISP N_1001.opus`;
 	const [download] = await Promise.all([page.waitForEvent('download'), rows(page).first().getByRole('link', { name: /^Download/ }).click()]);
-	expect(download.suggestedFilename()).toBe(name);
+	// The name the server gives, exactly; Playwright's WebKit build on Linux
+	// saves spaces in a download's name as underscores, whatever the name.
+	expect(download.suggestedFilename()).toBe(test.info().project.name === 'webkit' ? name.replaceAll(' ', '_') : name);
+	const disposition = await page.evaluate(async (u) => (await fetch(u, { method: 'HEAD' })).headers.get('Content-Disposition'), `/api/v1/calls/${c.id}/download`);
+	expect(disposition).toBe(`attachment; filename="${name}"`);
 	const saved = readFileSync((await download.path())!);
 	const stored = Buffer.from(await page.evaluate(async (u) => Array.from(new Uint8Array(await (await fetch(u)).arrayBuffer())), c.recording.url));
 	expect(saved.equals(stored)).toBe(true);

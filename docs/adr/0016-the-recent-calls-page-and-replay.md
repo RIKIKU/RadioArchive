@@ -22,6 +22,7 @@ The Recent calls page lists the listening set's calls, with the talkgroups added
 | **Replay** | Pressing a call plays its recording (R20) in the dock, from a second `AudioContext`; live listening pauses (`suspend()`, ADR 0012) and keeps queuing. One call at a time; **Stop replay** stops it; Resume, Jump to live and Start listening stop it too. When it ends, live listening stays paused until Resume |
 | **In progress** | A call still in progress has no recording (ADR 0013): its row offers **Listen live**, which adds its talkgroup for the session if it isn't in the set (R47) and starts or resumes listening |
 | **Row actions** | **Download** (`/api/v1/calls/{id}/download`, R63's name, ADR 0014); Share (#80) and Add to basket (#81) go after it, through the list's `actions` snippet |
+| **Download's type** | The download route now answers `Content-Type: application/octet-stream` (ADR 0014 had `audio/ogg; codecs=opus`): Firefox and Safari renamed `….opus` to `….ogx` for that type, so A17's name held in Chromium only. The bytes, the name, ranges and caching are unchanged; the recording route keeps its type |
 
 ## The default includes the session's additions
 

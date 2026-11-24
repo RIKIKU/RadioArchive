@@ -45,7 +45,7 @@
 	const listening = listeningState();
 	const player = usePlayer();
 
-	let ix: Index | undefined = $state();
+	let ix: Index | undefined = $state.raw();
 	let timeZone = $state('UTC');
 	let loading: 'loading' | 'failed' | 'done' = $state('loading');
 

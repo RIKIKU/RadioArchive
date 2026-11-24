@@ -57,7 +57,7 @@ func TestIntegrationDownload(t *testing.T) {
 	}
 	for k, want := range map[string]string{
 		"Content-Disposition": `attachment; filename="2026-03-04_050607_DISP N_1001.opus"`,
-		"Content-Type":        "audio/ogg; codecs=opus",
+		"Content-Type":        public.DownloadType, // saved as .opus in every browser (ADR 0016)
 		"Cache-Control":       "private, max-age=31536000, immutable",
 		"Accept-Ranges":       "bytes",
 		"Content-Length":      fmt.Sprint(len(audio)),
