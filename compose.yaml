@@ -1,0 +1,53 @@
+# RadioArchive for development and tests: the API, built from this checkout,
+# and its own PostgreSQL. Not the release's compose file (SPEC.md R85).
+#
+#   docker compose up --build --wait
+#   curl http://127.0.0.1:8080/healthz
+#
+# The API applies its migrations at start, then answers /healthz.
+name: radioarchive
+
+services:
+  api:
+    build: .
+    image: radioarchive:dev
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://radioarchive:${POSTGRES_PASSWORD:-radioarchive}@db:5432/radioarchive?sslmode=disable
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/radioarchive", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      start_interval: 1s
+      retries: 3
+
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: radioarchive
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-radioarchive}
+      POSTGRES_DB: radioarchive
+    # For the Go tests on the host (README.md).
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # postgres:18 keeps its data in a versioned folder under this one.
+      - db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U radioarchive -d radioarchive"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      start_interval: 1s
+      retries: 5
+
+volumes:
+  db:
