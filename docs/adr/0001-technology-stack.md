@@ -93,7 +93,7 @@ Calls stay separate. Overlapping calls on different talkgroups are queued by the
 - **trunk-recorder upgrades are gated** on rebuilding the plugin against the new release.
 - **The recorder client isn't a static binary** (cgo with libopus). The server still is.
 - **Plain `postgres:18` alone.** If the combined deployment shares one `db` container with PagerArchive, it has to be PagerArchive's PostGIS image. That belongs to [What form do the shared UI and the combined deployment take?](https://github.com/RIKIKU/RadioArchive/issues/6).
-- **iOS background playback is unproven.** Web Audio is suspended when the screen is off, even with `audioSession.type = "playback"`, and WebKit has regressed between releases. Safari's Opus support in WebCodecs is also to be confirmed. If iOS screen-off listening becomes a requirement, the fallback is LL-HLS played by an `<audio>` element.
+- **iOS background playback is unproven.** Web Audio is suspended when the screen is off, even with `audioSession.type = "playback"`, and WebKit has regressed between releases. Safari's Opus support in WebCodecs is also to be confirmed. If iOS screen-off listening becomes a requirement, the fallback is LL-HLS played by an `<audio>` element. (2026-11-24: iOS is no longer supported, SPEC R40, so this stays moot unless that changes.)
 - **Storage sizing** for a month of about 1,000 talkgroups is still open (map fog). This ADR fixes only the kind of storage.
 
 ## How each choice will be verified
@@ -104,6 +104,6 @@ Calls stay separate. Overlapping calls on different talkgroups are queued by the
 | Exact match of live call to recording | An integration test: plugin → recorder client → API, asserting every recording links to the live call with the same identity, including overlapping calls on one talkgroup | First milestone |
 | Delay under about a second | Playwright with a fake recorder: time from the plugin's first PCM packet to the browser's first decoded frame | First milestone |
 | Browser playback | Playwright in Chrome, Firefox and WebKit: WebCodecs path, plus the WASM fallback with `AudioDecoder` removed | First milestone |
-| iOS background behaviour | A throwaway prototype on a real iPhone with the screen off and in the background. Its result decides whether LL-HLS is needed | First milestone |
+| iOS background behaviour | Dropped: iOS isn't supported (SPEC R40, owner, 2026-11-24) | — |
 | Hidden talkgroups never leave the server | Integration test: a hidden talkgroup's calls never appear on any listener WebSocket, recording URL or catalogue | First milestone |
 | Server stays static | CI builds the API on distroless `static`, and the build fails if cgo is enabled | First milestone |
