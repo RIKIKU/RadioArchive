@@ -24,15 +24,17 @@ import (
 // point:
 //
 //   - the WAV, once the server acknowledges the upload with our SHA-256
-//     (stored or duplicate), or when the entry outlives QUEUE_MAX_AGE and
-//     the recording is given up (there's no reason to keep WAVs, owner).
-//     A recording the server permanently refuses (rejected, conflict,
-//     400/413/415) keeps its WAV, logged with its path and counted, since
-//     that means a bug for a person to investigate. A client_too_old or
-//     invalid-key refusal (401, 426) removes nothing: the entry waits for
-//     the fix, until QUEUE_MAX_AGE;
-//   - the entry, after its WAV on an acknowledgement or expiry, or when
-//     the entry leaves the queue any other way (refused, unreadable).
+//     (stored or duplicate), when the server refuses the call on purpose
+//     (rejected as not_attached, unknown_talkgroup or ignored_talkgroup,
+//     counted by reason), or when the entry outlives QUEUE_MAX_AGE and the
+//     recording is given up: there's no reason to keep WAVs (owner). An
+//     unexpected refusal (another rejection reason, 409, or any other 4xx)
+//     keeps its WAV, logged with its path and counted, since that means a
+//     bug for a person to investigate. A client_too_old or invalid-key
+//     refusal (426, 401) removes nothing: the entry waits for the fix,
+//     until QUEUE_MAX_AGE;
+//   - the entry, after its WAV in those cases, or when the entry leaves the
+//     queue any other way (an unexpected refusal, an unreadable WAV).
 //
 // Crash safety. An entry is written to a temporary name, synced, renamed
 // into place and the directory synced, so after a crash an entry is either

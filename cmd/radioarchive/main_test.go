@@ -10,6 +10,7 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/storetest"
+	"github.com/RIKIKU/RadioArchive/internal/version"
 )
 
 // TestIntegrationNoAdminAPI: the binary serves no admin API until admin
@@ -22,7 +23,7 @@ func TestIntegrationNoAdminAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	rs, err := server.NewRecorders(st, slog.New(slog.DiscardHandler), server.RecordersConfig{RecordingsDir: t.TempDir()})
+	rs, err := server.NewRecorders(st, slog.New(slog.DiscardHandler), server.RecordersConfig{RecordingsDir: t.TempDir(), ServerVersion: version.Version})
 	if err != nil {
 		t.Fatal(err)
 	}

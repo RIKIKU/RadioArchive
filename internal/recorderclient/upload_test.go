@@ -151,8 +151,16 @@ func TestUploadOutcomes(t *testing.T) {
 			answer(201, cp.UploadResponse{Status: cp.StatusStored, CallID: "x", SHA256: "ours"})}, outStored, true, 1},
 		{"duplicate with our hash: the WAV is deleted", []func(cp.RecordingMetadata, string) (int, cp.UploadResponse){
 			answer(200, cp.UploadResponse{Status: cp.StatusDuplicate, SHA256: "ours"})}, outDuplicate, true, 1},
-		{"rejected: kept", []func(cp.RecordingMetadata, string) (int, cp.UploadResponse){
-			answer(200, cp.UploadResponse{Status: cp.StatusRejected, Reason: "not_attached"})}, outRejected, false, 1},
+		{"rejected not_attached: the WAV is deleted", []func(cp.RecordingMetadata, string) (int, cp.UploadResponse){
+			answer(200, cp.UploadResponse{Status: cp.StatusRejected, Reason: "not_attached"})}, outRejected, true, 1},
+		{"rejected unknown_talkgroup: the WAV is deleted", []func(cp.RecordingMetadata, string) (int, cp.UploadResponse){
+			answer(200, cp.UploadResponse{Status: cp.StatusRejected, Reason: "unknown_talkgroup"})}, outRejected, true, 1},
+		{"rejected ignored_talkgroup: the WAV is deleted", []func(cp.RecordingMetadata, string) (int, cp.UploadResponse){
+			answer(200, cp.UploadResponse{Status: cp.StatusRejected, Reason: "ignored_talkgroup"})}, outRejected, true, 1},
+		{"rejected for an unknown reason: kept", []func(cp.RecordingMetadata, string) (int, cp.UploadResponse){
+			answer(200, cp.UploadResponse{Status: cp.StatusRejected, Reason: "something_new"})}, outRejectedOther, false, 1},
+		{"404: not retried, kept", []func(cp.RecordingMetadata, string) (int, cp.UploadResponse){
+			answer(404, cp.UploadResponse{Error: "not_found"})}, outInvalid, false, 1},
 		{"conflict: kept", []func(cp.RecordingMetadata, string) (int, cp.UploadResponse){
 			answer(409, cp.UploadResponse{Error: "identity_conflict", SHA256: "other"})}, outConflict, false, 1},
 		{"400: not retried", []func(cp.RecordingMetadata, string) (int, cp.UploadResponse){

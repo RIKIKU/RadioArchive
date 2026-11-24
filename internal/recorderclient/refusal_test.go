@@ -78,35 +78,59 @@ func TestUploaderKeepsEntryWhileTooOld(t *testing.T) {
 	}
 }
 
-// TestUploaderPermanentRefusal: a rejected recording leaves the queue but
-// keeps its WAV, and is counted.
-func TestUploaderPermanentRefusal(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(cp.UploadResponse{Status: cp.StatusRejected, Reason: "not_attached"})
-	}))
-	defer hs.Close()
-	wav := writeWAV(t, t.TempDir(), "call.wav")
-	u := newTestUploader(t, hs.URL, hs.Client(), t.TempDir(), time.Now)
-	got := make(chan outcome, 1)
-	u.done = func(_ Recording, o outcome) { got <- o }
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go u.run(ctx)
-	u.Enqueue(rec(1, wav, time.Now()))
-	select {
-	case o := <-got:
-		if o != outRejected {
-			t.Fatalf("outcome %q, want rejected", o)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("no outcome")
-	}
-	if !exists(wav) || u.Queue().Count != 0 {
-		t.Error("want the entry gone and the WAV kept")
-	}
-	if n := u.m.Get(MetricQueueRefused, "result", "rejected"); n != 1 {
-		t.Errorf("refused{rejected} = %d, want 1", n)
+// TestUploaderRejections: a call the server refuses on purpose (ADR 0003)
+// leaves the queue with its WAV, counted by reason. An unexpected refusal
+// leaves the queue but keeps its WAV for investigation, and is counted.
+func TestUploaderRejections(t *testing.T) {
+	for _, tt := range []struct {
+		code      int
+		resp      cp.UploadResponse
+		want      outcome
+		keptWAV   bool
+		metric    string
+		label     string
+		labelName string
+	}{
+		{200, cp.UploadResponse{Status: cp.StatusRejected, Reason: "not_attached"}, outRejected, false, MetricQueueRejected, "reason", "not_attached"},
+		{200, cp.UploadResponse{Status: cp.StatusRejected, Reason: "unknown_talkgroup"}, outRejected, false, MetricQueueRejected, "reason", "unknown_talkgroup"},
+		{200, cp.UploadResponse{Status: cp.StatusRejected, Reason: "ignored_talkgroup"}, outRejected, false, MetricQueueRejected, "reason", "ignored_talkgroup"},
+		{200, cp.UploadResponse{Status: cp.StatusRejected, Reason: "something_new"}, outRejectedOther, true, MetricQueueRefused, "result", "rejected_unexpected"},
+		{409, cp.UploadResponse{Error: "identity_conflict", SHA256: "other"}, outConflict, true, MetricQueueRefused, "result", "conflict"},
+		{422, cp.UploadResponse{Error: "unprocessable"}, outInvalid, true, MetricQueueRefused, "result", "invalid"},
+	} {
+		t.Run(string(tt.want)+"/"+tt.labelName, func(t *testing.T) {
+			hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.WriteHeader(tt.code)
+				_ = json.NewEncoder(w).Encode(tt.resp)
+			}))
+			defer hs.Close()
+			dir := t.TempDir()
+			wav := writeWAV(t, t.TempDir(), "call.wav")
+			u := newTestUploader(t, hs.URL, hs.Client(), dir, time.Now)
+			got := make(chan outcome, 1)
+			u.done = func(_ Recording, o outcome) { got <- o }
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go u.run(ctx)
+			u.Enqueue(rec(1, wav, time.Now()))
+			select {
+			case o := <-got:
+				if o != tt.want {
+					t.Fatalf("outcome %q, want %q", o, tt.want)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("no outcome")
+			}
+			if exists(wav) != tt.keptWAV {
+				t.Errorf("WAV kept = %v, want %v", exists(wav), tt.keptWAV)
+			}
+			if files, _ := os.ReadDir(dir); len(files) != 0 || u.Queue().Count != 0 {
+				t.Errorf("entry left: %v", files)
+			}
+			if n := u.m.Get(tt.metric, tt.label, tt.labelName); n != 1 {
+				t.Errorf("%s{%s=%q} = %d, want 1", tt.metric, tt.label, tt.labelName, n)
+			}
+		})
 	}
 }

@@ -107,11 +107,12 @@ func (u *uploader) expire() {
 func (u *uploader) leave(e *entry, o outcome) {
 	log := u.log.With("sys_num", e.Meta.SysNum, "call_num", e.Meta.CallNum, "start_time", e.Meta.StartTime)
 	switch o {
-	case outStored, outDuplicate, outExpired:
-		// Acknowledged with our SHA-256, or given up: trunk-recorder's WAV
-		// has no further use (owner, issues #31 and #36). The WAV goes
-		// first, then the entry: an entry left without its WAV after a
-		// crash is known to be done.
+	case outStored, outDuplicate, outRejected, outExpired:
+		// Acknowledged with our SHA-256, refused on purpose (counted by
+		// reason in attempt), or given up: trunk-recorder's WAV has no
+		// further use (owner, issues #31 and #36). The WAV goes first, then
+		// the entry: an entry left without its WAV after a crash is known
+		// to be done.
 		if o == outExpired {
 			u.m.Inc(MetricQueueExpired)
 			log.Error("dropped a recording that waited longer than QUEUE_MAX_AGE, and deleted its WAV",
@@ -120,9 +121,9 @@ func (u *uploader) leave(e *entry, o outcome) {
 		if err := os.Remove(e.WAV); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Warn("couldn't delete the recording's WAV", "file", e.WAV, "error", err)
 		}
-	case outRejected, outConflict, outInvalid:
-		// Permanent, and rare: it means a bug. The WAV is kept for a
-		// person to look at.
+	case outRejectedOther, outConflict, outInvalid:
+		// An unexpected permanent refusal: rare, and it means a bug. The
+		// WAV is kept for a person to look at.
 		u.m.Inc(MetricQueueRefused, "result", string(o))
 		log.Error("the server permanently refused the recording; dropped its queue entry and kept its WAV for investigation",
 			"outcome", string(o), "file", e.WAV)
@@ -142,12 +143,14 @@ type outcome string
 const (
 	outStored    outcome = "stored"    // acknowledged; the WAV is deleted
 	outDuplicate outcome = "duplicate" // already stored; the WAV is deleted
-	outRejected  outcome = "rejected"  // refused by the server's rules (R12, R17, R18)
-	outConflict  outcome = "conflict"  // same identity stored with another file
-	outInvalid   outcome = "invalid"   // 400, 413, 415: retrying won't help
-	outNoFile    outcome = "unreadable"
-	outExpired   outcome = "expired"   // older than QUEUE_MAX_AGE
-	outCancelled outcome = "cancelled" // the client is stopping; the entry stays
+	outRejected  outcome = "rejected"  // refused on purpose (R12, R17, R18); the WAV is deleted
+	// rejected for a reason this client doesn't know: the WAV is kept
+	outRejectedOther outcome = "rejected_unexpected"
+	outConflict      outcome = "conflict" // same identity stored with another file
+	outInvalid       outcome = "invalid"  // 400, 413, 415: retrying won't help
+	outNoFile        outcome = "unreadable"
+	outExpired       outcome = "expired"   // older than QUEUE_MAX_AGE
+	outCancelled     outcome = "cancelled" // the client is stopping; the entry stays
 )
 
 // verdict is one attempt's result.
@@ -336,15 +339,32 @@ func (u *uploader) attempt(ctx context.Context, meta cp.RecordingMetadata, ogg [
 		}
 		return outDuplicate, vDone, nil
 	case resp.StatusCode == http.StatusOK && ur.Status == cp.StatusRejected:
-		return outRejected, vDone, status
+		if deliberateRejections[ur.Reason] {
+			u.m.Inc(MetricQueueRejected, "reason", ur.Reason)
+			return outRejected, vDone, status
+		}
+		return outRejectedOther, vDone, status
 	case resp.StatusCode == http.StatusConflict:
 		return outConflict, vDone, status
-	case resp.StatusCode == http.StatusBadRequest, resp.StatusCode == http.StatusRequestEntityTooLarge,
-		resp.StatusCode == http.StatusUnsupportedMediaType:
-		return outInvalid, vDone, status
 	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusUpgradeRequired:
+		// Key or version refused (client_too_old): the entry waits for
+		// the fix, until QUEUE_MAX_AGE.
 		return "", vPause, status
+	case resp.StatusCode == http.StatusRequestTimeout, resp.StatusCode == http.StatusTooManyRequests:
+		return "", vRetry, status
+	case resp.StatusCode >= 400 && resp.StatusCode < 500:
+		// 400, 413, 415 and any other 4xx: retrying won't help.
+		return outInvalid, vDone, status
 	default:
 		return "", vRetry, status
 	}
+}
+
+// deliberateRejections are the reasons the server refuses a call on
+// purpose: the recorder's shortName isn't attached to a system (R12), or the
+// talkgroup is unknown or ignored (R17, R18). See ADR 0003.
+var deliberateRejections = map[string]bool{
+	"not_attached":      true,
+	"unknown_talkgroup": true,
+	"ignored_talkgroup": true,
 }
