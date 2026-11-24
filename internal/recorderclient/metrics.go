@@ -24,6 +24,7 @@ const (
 	MetricQueueOldestAge = "radioarchive_client_queue_oldest_age_seconds" // gauge
 	MetricQueueExpired   = "radioarchive_client_queue_expired_total"      // dropped, older than QUEUE_MAX_AGE
 	MetricQueueErrors    = "radioarchive_client_queue_errors_total"       // {op}: read, write, remove
+	MetricQueueRefused   = "radioarchive_client_queue_refused_total"      // {result}: permanently refused, WAV kept
 )
 
 // Metrics are the client's counters and gauges, served in Prometheus text

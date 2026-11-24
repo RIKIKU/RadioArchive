@@ -51,7 +51,8 @@ func queueFiles(t *testing.T, dir string) []string {
 // recorded over an hour of the client's clock, then started again as a new
 // server on the same address and database. All 10 recordings arrive oldest
 // first through the disk queue and it empties; an entry queued a day
-// earlier is older than QUEUE_MAX_AGE, so it's dropped and counted.
+// earlier is older than QUEUE_MAX_AGE, so it's dropped and counted, and its
+// WAV deleted.
 func TestA28DiskQueue(t *testing.T) {
 	r := start(t)
 	r.serverDown(t)
@@ -111,8 +112,8 @@ func TestA28DiskQueue(t *testing.T) {
 			t.Errorf("call %d: WAV still there after the server acknowledged it", n)
 		}
 	}
-	if gone(oldWAV) {
-		t.Error("the expired call's WAV was deleted; the server never acknowledged it")
+	if !gone(oldWAV) {
+		t.Error("the expired call's WAV was kept; a given-up recording's WAV is deleted")
 	}
 	waitFor(t, "the queue directory to empty", 5*time.Second, func() bool { return len(queueFiles(t, r.queue)) == 0 })
 	if g := m.Gauge(recorderclient.MetricQueueEntries); g != 0 {

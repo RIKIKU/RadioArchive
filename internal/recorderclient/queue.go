@@ -24,11 +24,15 @@ import (
 // point:
 //
 //   - the WAV, once the server acknowledges the upload with our SHA-256
-//     (stored or duplicate). Nothing else deletes it: a recording the
-//     server refuses or that outlives QUEUE_MAX_AGE keeps its WAV, so it
-//     can still be recovered by hand;
-//   - the entry, after its WAV on an acknowledgement, or when the entry
-//     leaves the queue any other way (refused, unreadable, too old).
+//     (stored or duplicate), or when the entry outlives QUEUE_MAX_AGE and
+//     the recording is given up (there's no reason to keep WAVs, owner).
+//     A recording the server permanently refuses (rejected, conflict,
+//     400/413/415) keeps its WAV, logged with its path and counted, since
+//     that means a bug for a person to investigate. A client_too_old or
+//     invalid-key refusal (401, 426) removes nothing: the entry waits for
+//     the fix, until QUEUE_MAX_AGE;
+//   - the entry, after its WAV on an acknowledgement or expiry, or when
+//     the entry leaves the queue any other way (refused, unreadable).
 //
 // Crash safety. An entry is written to a temporary name, synced, renamed
 // into place and the directory synced, so after a crash an entry is either
@@ -42,8 +46,8 @@ import (
 //     number derived from the call's identity), so a recording the server
 //     already stored comes back "duplicate" and is cleared as acknowledged;
 //   - entry without WAV (a crash between the two deletions): the WAV is only
-//     ever deleted after an acknowledgement, so the entry is dropped as
-//     unreadable and nothing is lost;
+//     ever deleted after an acknowledgement or on expiry, so the entry is
+//     dropped as unreadable and nothing is lost;
 //   - neither: done.
 //
 // Entries leave the queue oldest first, by the time they were queued.

@@ -96,7 +96,8 @@ func (u *uploader) run(ctx context.Context) {
 }
 
 // expire drops the entries older than maxAge, wherever they are in the
-// queue. Their WAVs stay: the server never acknowledged them.
+// queue, with their WAVs: the recording is given up, and there's no reason
+// to keep trunk-recorder's files (owner).
 func (u *uploader) expire() {
 	for _, e := range u.q.expired(u.maxAge) {
 		u.leave(e, outExpired)
@@ -106,17 +107,25 @@ func (u *uploader) expire() {
 func (u *uploader) leave(e *entry, o outcome) {
 	log := u.log.With("sys_num", e.Meta.SysNum, "call_num", e.Meta.CallNum, "start_time", e.Meta.StartTime)
 	switch o {
-	case outStored, outDuplicate:
-		// Acknowledged with our SHA-256: trunk-recorder's WAV has done its
-		// job (owner, issue #31). The WAV goes first, then the entry: an
-		// entry left without its WAV after a crash is known to be done.
-		if err := os.Remove(e.WAV); err != nil && !errors.Is(err, os.ErrNotExist) {
-			log.Warn("recording uploaded but its WAV couldn't be deleted", "file", e.WAV, "error", err)
+	case outStored, outDuplicate, outExpired:
+		// Acknowledged with our SHA-256, or given up: trunk-recorder's WAV
+		// has no further use (owner, issues #31 and #36). The WAV goes
+		// first, then the entry: an entry left without its WAV after a
+		// crash is known to be done.
+		if o == outExpired {
+			u.m.Inc(MetricQueueExpired)
+			log.Error("dropped a recording that waited longer than QUEUE_MAX_AGE, and deleted its WAV",
+				"file", e.WAV, "queued", e.Queued, "max_age", u.maxAge)
 		}
-	case outExpired:
-		u.m.Inc(MetricQueueExpired)
-		log.Error("dropped a recording that waited longer than QUEUE_MAX_AGE; its WAV is kept",
-			"file", e.WAV, "queued", e.Queued, "max_age", u.maxAge)
+		if err := os.Remove(e.WAV); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Warn("couldn't delete the recording's WAV", "file", e.WAV, "error", err)
+		}
+	case outRejected, outConflict, outInvalid:
+		// Permanent, and rare: it means a bug. The WAV is kept for a
+		// person to look at.
+		u.m.Inc(MetricQueueRefused, "result", string(o))
+		log.Error("the server permanently refused the recording; dropped its queue entry and kept its WAV for investigation",
+			"outcome", string(o), "file", e.WAV)
 	}
 	u.q.remove(e)
 	if o != outExpired {
@@ -186,7 +195,7 @@ func (u *uploader) process(ctx context.Context, e *entry) outcome {
 		}
 		if v == vDone {
 			if o != outStored && o != outDuplicate {
-				log.Warn("the server refused the recording", "outcome", string(o), "error", err)
+				log.Warn("the server refused the recording", "outcome", string(o), "file", e.WAV, "error", err)
 			}
 			return o
 		}

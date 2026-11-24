@@ -178,7 +178,7 @@ func (s *orderServer) get() (order []int64, attempts []string) {
 // TestUploaderOutageOldestFirst is A28 at the unit level, on the real disk
 // queue with a test clock: while the server is down for an hour, recordings
 // queue up; when it's back they arrive oldest first, and an entry older
-// than QUEUE_MAX_AGE is dropped and counted, its WAV kept.
+// than QUEUE_MAX_AGE is dropped and counted, its WAV deleted.
 func TestUploaderOutageOldestFirst(t *testing.T) {
 	srv := &orderServer{down: true, stored: map[int64]string{}}
 	hs := httptest.NewServer(srv)
@@ -225,8 +225,8 @@ func TestUploaderOutageOldestFirst(t *testing.T) {
 	if n := u.m.Get(MetricQueueExpired); n != 1 {
 		t.Errorf("expired = %d, want 1", n)
 	}
-	if !exists(old) {
-		t.Error("the expired entry's WAV was deleted; it was never acknowledged")
+	if exists(old) {
+		t.Error("the expired entry's WAV was kept; a given-up recording's WAV is deleted")
 	}
 	for _, w := range wavs {
 		if exists(w) {
