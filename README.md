@@ -17,6 +17,25 @@ RADIOARCHIVE_TEST_DATABASE_URL='postgres://radioarchive:radioarchive@127.0.0.1:5
 
 `sqlc generate` regenerates `internal/store/db` from `internal/store/queries.sql`; CI fails if it's out of date.
 
+### The browser app
+
+`web/` is the browser app: Svelte 5, SvelteKit (`adapter-static`) and
+TypeScript on [ArchiveUx](https://github.com/RIKIKU/ArchiveUx)'s tokens. Its
+build is embedded in the binary (`web/web.go`) and served at `/` and every
+other path outside `/api`. Needs Node 24.
+
+```sh
+cd web && npm ci
+npm run check          # svelte-check, no warnings
+npm run check:tokens   # every style value is an ArchiveUx token (R80)
+npm run build          # into web/build, which go build embeds
+npx playwright install --with-deps   # once: Chromium, Firefox and WebKit
+cd .. && sh scripts/ci/e2e-web.sh    # build, start the binary on a fresh database, run web/tests
+```
+
+Until ArchiveUx has its frame and dock, the app uses a temporary one, kept in
+`web/src/lib/temporary-frame/` only.
+
 ## Recorders
 
 Recorders are managed only from the server shell (`SPEC.md` R10):

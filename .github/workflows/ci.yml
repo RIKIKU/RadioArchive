@@ -69,6 +69,69 @@ jobs:
       - name: Tests (unit, integration against PostgreSQL, and A1-A4 end to end in process)
         run: go test -count=1 -v ./...
 
+  # The browser app (issue #54): svelte-check, tokens only (R80), the build,
+  # and the browser tests in Chromium, Firefox and WebKit (A7) against the
+  # binary with the app in it and its database. As PagerArchive's: in
+  # Microsoft's Playwright image at the version web/package-lock.json locks
+  # (by digest), so the browsers and their libraries are already there, with
+  # the database as a service container.
+  web:
+    name: Browser app and browser tests (Chromium, Firefox, WebKit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
+      options: --ipc=host
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: test
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      RA_E2E_DATABASE_URL: postgres://postgres:test@postgres:5432/postgres?sslmode=disable
+      # Firefox won't start as root with a home folder owned by someone else.
+      HOME: /root
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      # The container runs as root and the checkout is the runner's: git (and
+      # so go build's version stamp) refuses a folder someone else owns.
+      - name: Let git read the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci --no-fund --no-audit
+      - name: Playwright is the image's version
+        working-directory: web
+        run: test "$(npx playwright --version)" = "Version 1.64.0"
+      - name: svelte-check (no warnings)
+        working-directory: web
+        run: npm run check
+      - name: Style tokens only (R80)
+        working-directory: web
+        run: npm run check:tokens
+      - name: Build, then the browser tests against the binary
+        id: e2e
+        timeout-minutes: 20
+        run: sh scripts/ci/e2e-web.sh
+      - name: Upload the Playwright report
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            web/playwright-report/
+            web/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # The recorder client's image, for both of the recorder host's
   # architectures (SPEC.md R3). The Dockerfile cross-compiles, so no
   # emulation is needed.
@@ -123,6 +186,11 @@ jobs:
             exit 1
           fi
           echo "ok: the check fails a cgo build"
+      - name: The binary serves the app built into it at /
+        run: |
+          curl --fail --silent --show-error http://127.0.0.1:8080/ | tee index.html
+          grep -q '_app/immutable' index.html
+          curl --fail --silent --show-error http://127.0.0.1:8080/robots.txt | grep -qx 'Disallow: /'
       - name: Migrations ran and /healthz answers
         run: |
           curl --fail --silent --show-error http://127.0.0.1:8080/healthz

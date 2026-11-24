@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	"github.com/RIKIKU/RadioArchive/internal/public"
@@ -21,8 +22,8 @@ import (
 // The A10 harness (SPEC.md A10, R32, ADR 0004): every public route,
 // exercised with a hidden talkgroup's calls.
 //
-// a10Probes holds, for each public route the server mounts, requests that
-// name one call. TestIntegrationA10 fails while any public route has no
+// a10Probes holds, for each public route and app route the server mounts,
+// requests that name one call. TestIntegrationA10 fails while any public route has no
 // probes, so a new surface (the catalogue, search, the live feed, zips) joins
 // the harness to exist. Surfaces that name no call (the catalogue, search)
 // add probes that ignore the ID; the leak check still applies to them.
@@ -38,6 +39,32 @@ var a10Probes = map[string][]a10Probe{
 		}},
 		{"HEAD", func(f *a10World, id string) *http.Request { return f.req("HEAD", public.RecordingURL(id), "") }},
 	},
+	// The app shell (web): its one page, sent for any path outside the API,
+	// a call's among them, and in the listener's saved look; its files; and
+	// robots.txt. None of it may depend on the call a path names.
+	"GET /": {
+		{"the Listen page", func(f *a10World, id string) *http.Request { return f.req("GET", "/", "") }},
+		{"a call's path", func(f *a10World, id string) *http.Request { return f.req("GET", "/calls/"+id, "") }},
+		{"a call's path, in a saved look", func(f *a10World, id string) *http.Request {
+			r := f.req("GET", "/calls/"+id+"?t="+id, "")
+			r.Header.Set("Cookie", "look=console; theme=dark")
+			return r
+		}},
+		{"a file of the app", func(f *a10World, id string) *http.Request { return f.req("GET", "/_app/immutable/start.js", "") }},
+	},
+	"GET /robots.txt": {
+		{"robots.txt", func(f *a10World, id string) *http.Request { return f.req("GET", "/robots.txt", "") }},
+	},
+}
+
+// appBuild stands in for the browser app's build (web/build) in the
+// server's tests, which don't build the frontend. The browser tests
+// (web/tests) and e2e-a10.sh run the real one, in the binary.
+var appBuild = fstest.MapFS{
+	"index.html": {Data: []byte(`<!doctype html>
+<html lang="en-AU"><head><title>RadioArchive</title><script type="module" src="/_app/immutable/start.js"></script></head>
+<body><div style="display: contents"></div></body></html>`)},
+	"_app/immutable/start.js": {Data: []byte("export {};\n")},
 }
 
 func callListProbes(method string) []a10Probe {
@@ -207,11 +234,11 @@ func (f *a10World) leaks(a answer) []string {
 func TestIntegrationA10(t *testing.T) {
 	f := newA10World(t)
 
-	// Every public route the server mounts is in the harness, and every
-	// route in the harness is mounted.
+	// Every public route and app route the server mounts is in the harness,
+	// and every route in the harness is mounted.
 	var mounted, probed []string
 	for _, r := range f.e.api.Routes() {
-		if r.Kind == server.PublicRoute {
+		if r.Kind == server.PublicRoute || r.Kind == server.AppRoute {
 			mounted = append(mounted, r.Pattern)
 		}
 	}
@@ -221,7 +248,7 @@ func TestIntegrationA10(t *testing.T) {
 	slices.Sort(mounted)
 	slices.Sort(probed)
 	if len(mounted) == 0 || !slices.Equal(mounted, probed) {
-		t.Fatalf("public routes %q, A10 probes %q: every public route needs probes", mounted, probed)
+		t.Fatalf("public and app routes %q, A10 probes %q: every public and app route needs probes", mounted, probed)
 	}
 
 	for _, route := range probed {

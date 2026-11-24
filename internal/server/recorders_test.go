@@ -31,6 +31,7 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/storetest"
+	"github.com/RIKIKU/RadioArchive/web"
 )
 
 // sink collects the live frames the server accepts, by call ID.
@@ -117,7 +118,7 @@ func newEnvAt(t *testing.T, serverVersion string) *env {
 	}
 	admin.WithRetention(e.job)
 	e.api = server.New(st, log, server.WithRecorders(e.rs), server.WithAdmin(admin),
-		server.WithPublic(public.New(gate.New(st, e.dir, log), log)))
+		server.WithPublic(public.New(gate.New(st, e.dir, log), log)), server.WithApp(web.Serve(appBuild)))
 	e.srv = httptest.NewServer(e.api)
 	t.Cleanup(func() {
 		e.srv.Close()

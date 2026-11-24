@@ -1,1 +1,9 @@
 .claude/
+# The browser app's build output (embedded by web/web.go; the folder stays
+# so a Go-only build compiles) and dependencies.
+web/build/*
+!web/build/.gitkeep
+web/node_modules/
+web/.svelte-kit/
+web/test-results/
+web/playwright-report/

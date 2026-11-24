@@ -5,3 +5,9 @@ docs
 *.md
 .env
 *.env
+# The browser app is built in the image's own stage.
+web/node_modules
+web/.svelte-kit
+web/build
+web/test-results
+web/playwright-report

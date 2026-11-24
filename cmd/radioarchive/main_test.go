@@ -14,6 +14,7 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/storetest"
 	"github.com/RIKIKU/RadioArchive/internal/version"
+	"github.com/RIKIKU/RadioArchive/web"
 )
 
 // TestRetentionSettings: RECORDINGS_MIN_FREE, RECORDINGS_EARLY_DELETE_FLOOR
@@ -91,5 +92,21 @@ func TestIntegrationNoAdminAPI(t *testing.T) {
 	slices.Sort(want)
 	if len(want) == 0 || !slices.Equal(got, want) {
 		t.Errorf("the binary's public routes are %q, want the public API's %q", got, want)
+	}
+
+	// And the browser app's routes, which the harness probes too.
+	got, want = nil, nil
+	for _, r := range api.Routes() {
+		if r.Kind == server.AppRoute {
+			got = append(got, r.Pattern)
+		}
+	}
+	for _, r := range web.New().Routes() {
+		want = append(want, r.Pattern)
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if len(want) == 0 || !slices.Equal(got, want) {
+		t.Errorf("the binary's app routes are %q, want the app's %q", got, want)
 	}
 }
