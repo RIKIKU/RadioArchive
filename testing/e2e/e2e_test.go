@@ -491,6 +491,12 @@ func TestA1ExactMatch(t *testing.T) {
 		cs = r.calls(t)
 		return len(cs) == 2 && cs[0].frames > 0 && cs[1].frames > 0
 	})
+	// The server stores the row before it answers, and the client deletes
+	// the WAV only once it has read that answer (issue #88): wait for the
+	// client to count both acknowledgements, which it does after deleting.
+	waitFor(t, "the client to handle both acknowledgements", 10*time.Second, func() bool {
+		return r.client.Metrics().Get(recorderclient.MetricUploads, "result", "stored") >= 2
+	})
 
 	if len(cs) != 2 || cs[0].callNum != 1 || cs[1].callNum != 2 {
 		t.Fatalf("calls = %+v, want call_num 1 and 2", cs)

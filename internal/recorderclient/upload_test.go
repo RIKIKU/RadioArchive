@@ -224,3 +224,49 @@ func TestUploadMissingWAV(t *testing.T) {
 		t.Errorf("malformed{sample_rate} = %d, want 1", n)
 	}
 }
+
+// ackThenCancel answers every upload "stored" with the request's own
+// SHA-256, and cancels the client's context just before the answer reaches
+// it: the client is stopping as the acknowledgement arrives.
+type ackThenCancel struct {
+	t      *testing.T
+	cancel context.CancelFunc
+}
+
+func (a ackThenCancel) RoundTrip(r *http.Request) (*http.Response, error) {
+	_, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	p, err := multipart.NewReader(r.Body, params["boundary"]).NextPart()
+	var meta cp.RecordingMetadata
+	if err != nil || json.NewDecoder(p).Decode(&meta) != nil {
+		a.t.Error("no metadata part")
+	}
+	b, _ := json.Marshal(cp.UploadResponse{Status: cp.StatusStored, SHA256: meta.SHA256})
+	a.cancel()
+	return &http.Response{StatusCode: http.StatusCreated, Status: "201 Created", Request: r,
+		Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(b))}, nil
+}
+
+// TestUploadAckDuringStop: an acknowledgement that arrives as the client
+// stops still deletes the WAV and the entry (issue #88). Before the fix the
+// cancelled context outranked the server's answer, and the acknowledged
+// WAV was kept.
+func TestUploadAckDuringStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	wav := writeWAV(t, t.TempDir(), "call.wav")
+	u := newTestUploader(t, "http://server.invalid", &http.Client{Transport: ackThenCancel{t, cancel}}, dir, time.Now)
+	var got []outcome
+	u.done = func(_ Recording, o outcome) { got = append(got, o) }
+	u.Enqueue(rec(1, wav, time.Now()))
+	u.run(ctx) // returns once ctx is cancelled
+	if len(got) != 1 || got[0] != outStored {
+		t.Errorf("outcomes %v, want [stored]", got)
+	}
+	if exists(wav) {
+		t.Error("WAV kept after the server acknowledged it")
+	}
+	if files, _ := os.ReadDir(dir); len(files) != 0 || u.Queue().Count != 0 {
+		t.Errorf("queue %d, files %v after the acknowledgement; want none", u.Queue().Count, files)
+	}
+}

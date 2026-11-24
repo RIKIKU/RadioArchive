@@ -193,7 +193,10 @@ func (u *uploader) process(ctx context.Context, e *entry) outcome {
 			return outExpired
 		}
 		o, v, err := u.attempt(ctx, meta, ogg)
-		if ctx.Err() != nil {
+		// A final answer counts even if ctx ended while it arrived: the
+		// server has acted on it, so dropping it would keep a WAV the
+		// server already acknowledged (issue #88).
+		if v != vDone && ctx.Err() != nil {
 			return outCancelled
 		}
 		if v == vDone {
