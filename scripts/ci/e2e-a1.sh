@@ -31,6 +31,15 @@ psql() { docker compose exec -T db psql -U radioarchive -d radioarchive -tAc "$1
 key=$(docker compose exec -T api radioarchive recorder add "$name" | grep -o 'rak_[A-Za-z0-9_-]*')
 test -n "$key"
 
+# The test fixture's system EX with talkgroup 1001, and the recorder's `ex`
+# attached to it (R11, R12). The admin API that does this in the Go tests
+# isn't served until admin sign-in exists, so the fixture goes straight in.
+psql "INSERT INTO systems (id, label, name) VALUES (1, 'EX', 'Example network') ON CONFLICT DO NOTHING;
+	INSERT INTO tags (name) VALUES ('dispatch') ON CONFLICT DO NOTHING;
+	INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id)
+	SELECT 1, 1001, 'DISP N', 'Dispatch North', id FROM tags WHERE name = 'dispatch' ON CONFLICT DO NOTHING;
+	INSERT INTO attachments (recorder_id, short_name, system_id) SELECT id, 'ex', 1 FROM recorders WHERE name = '$name';" >/dev/null
+
 # trunk-recorder's media directory: the fake recorder writes the WAVs here,
 # and the client deletes them once acknowledged, so it runs as their owner,
 # as it would beside trunk-recorder.
@@ -54,7 +63,9 @@ go run ./testing/fakerecorder/cmd/fakerecorder \
 
 calls="FROM calls c JOIN recorders r ON r.id = c.recorder_id WHERE r.name = '$name'"
 i=0
-until [ "$(psql "SELECT count(*) $calls AND c.recording_path IS NOT NULL")" = 2 ]; do
+# Both the recording and the live call's end (which records its frame count)
+# must have arrived: they come over separate connections.
+until [ "$(psql "SELECT count(*) $calls AND c.recording_path IS NOT NULL AND c.live_frames > 0")" = 2 ]; do
 	i=$((i + 1))
 	if [ "$i" -gt 300 ]; then echo "FAIL: the recordings never arrived" >&2; psql "SELECT * $calls"; exit 1; fi
 	sleep 0.1

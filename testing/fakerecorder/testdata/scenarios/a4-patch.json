@@ -1,0 +1,17 @@
+{
+  "boot_id": 305419899,
+  "epoch_ms": 1764000400000,
+  "calls": {
+    "with_public": {"sys_num": 0, "call_num": 9, "start_time": 1764000400, "short_name": "ex", "talkgroup": 1001, "freq": 851075000},
+    "with_hidden": {"sys_num": 0, "call_num": 10, "start_time": 1764000401, "short_name": "ex", "talkgroup": 1001, "freq": 851087500}
+  },
+  "events": [
+    {"at_ms": 0, "type": "transmission", "call": "with_public", "unit": 5001, "patched_talkgroups": [1002]},
+    {"at_ms": 0, "type": "audio", "call": "with_public", "unit": 5001, "pcm": "noise-bursts-500ms.pcm"},
+    {"at_ms": 600, "type": "call_end", "call": "with_public", "filename": "/app/media/ex/1001-1764000400_851075000.0-call_9.wav"},
+
+    {"at_ms": 1000, "type": "transmission", "call": "with_hidden", "unit": 5123, "patched_talkgroups": [1003]},
+    {"at_ms": 1000, "type": "audio", "call": "with_hidden", "unit": 5123, "pcm": "noise-bursts-500ms.pcm"},
+    {"at_ms": 1600, "type": "call_end", "call": "with_hidden", "filename": "/app/media/ex/1001-1764000401_851087500.0-call_10.wav"}
+  ]
+}

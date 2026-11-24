@@ -32,3 +32,13 @@ The recorder client (`cmd/radioarchive-client`, image from
 `recorder/client/Dockerfile`, amd64 and arm64) runs beside trunk-recorder with
 `SERVER_URL` and `CLIENT_KEY` set. `scripts/ci/e2e-a1.sh` runs the fake
 recorder through the client image into the compose stack.
+
+## Systems and attachments
+
+The server takes a call only when its recorder + `shortName` is attached to a
+system, and its talkgroup is in that system's list (or the system's
+auto-create is on) and isn't ignored (`SPEC.md` R11, R12, R16-R18, R21;
+`docs/adr/0003-systems-attachments-and-rejected-calls.md`). Systems,
+talkgroups and attachments are managed through the admin API
+(`/api/v1/admin`), which the binary serves once admin sign-in (Authentik)
+arrives; until then only the tests use it.
