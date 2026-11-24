@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/RIKIKU/RadioArchive/internal/public"
@@ -15,7 +16,24 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/version"
 )
 
-// TestIntegrationNoAdminAPI: the binary serves no admin API until admin
+// TestRetentionSettings: RECORDINGS_MIN_FREE and NIGHTLY_AT are checked
+// at start.
+func TestRetentionSettings(t *testing.T) {
+	log := slog.New(slog.DiscardHandler)
+	for _, c := range []struct{ minFree, at, want string }{
+		{"0", "", "RECORDINGS_MIN_FREE"},
+		{"100%", "", "RECORDINGS_MIN_FREE"},
+		{"5%", "25:00", "NIGHTLY_AT"},
+	} {
+		t.Setenv("RECORDINGS_MIN_FREE", c.minFree)
+		t.Setenv("NIGHTLY_AT", c.at)
+		if _, err := retentionJob(nil, log); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("RECORDINGS_MIN_FREE=%q NIGHTLY_AT=%q: %v, want an error naming %s", c.minFree, c.at, err, c.want)
+		}
+	}
+}
+
+// TestIntegrationNoAdminAPI:the binary serves no admin API until admin
 // sign-in exists, so the tests' stub sign-in can't be reached in production.
 // Its admin recording playback isn't served either.
 func TestIntegrationNoAdminAPI(t *testing.T) {
@@ -34,7 +52,9 @@ func TestIntegrationNoAdminAPI(t *testing.T) {
 	api := apiHandler(st, slog.New(slog.DiscardHandler), rs, dir)
 	srv := httptest.NewServer(api)
 	defer srv.Close()
-	for _, p := range []string{"/systems", "/attachments", "/rejections",
+	// Nor the retention setting; and nothing in the binary triggers a
+	// retention run but its schedule (the tests call the job directly).
+	for _, p := range []string{"/systems", "/attachments", "/rejections", "/retention",
 		"/calls/00000000-0000-4000-8000-000000000000/recording"} {
 		resp, err := http.Get(srv.URL + server.AdminPath + p)
 		if err != nil {

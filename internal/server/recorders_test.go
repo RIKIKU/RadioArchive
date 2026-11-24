@@ -27,6 +27,7 @@ import (
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/public"
+	"github.com/RIKIKU/RadioArchive/internal/retention"
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/storetest"
@@ -71,6 +72,11 @@ type env struct {
 	dir  string
 	sink *sink
 	sys  int64 // the test's fixture system, once recorder has made it
+	// The retention job, on the test's clock and free space. Nothing runs
+	// it on a schedule: tests trigger its runs.
+	job   *retention.Job
+	clock *testClock
+	disk  *testDisk
 }
 
 func newEnv(t *testing.T) *env {
@@ -103,6 +109,13 @@ func newEnvAt(t *testing.T, serverVersion string) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.clock, e.disk = &testClock{}, &testDisk{}
+	e.job, err = retention.New(retention.Config{Store: st, Dir: e.dir, Log: log, Now: e.clock.now,
+		FreeSpace: e.disk.space, Location: time.UTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin.WithRetention(e.job)
 	e.api = server.New(st, log, server.WithRecorders(e.rs), server.WithAdmin(admin),
 		server.WithPublic(public.New(gate.New(st, e.dir, log), log)))
 	e.srv = httptest.NewServer(e.api)

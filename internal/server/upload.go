@@ -20,11 +20,12 @@ import (
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	"github.com/RIKIKU/RadioArchive/internal/recordings"
+	"github.com/RIKIKU/RadioArchive/internal/retention"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/db"
 )
 
-const incomingDir = ".incoming"
+const incomingDir = retention.IncomingDir
 
 // uploadError is an answer other than stored or duplicate.
 type uploadError struct {

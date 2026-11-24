@@ -126,6 +126,18 @@ jobs:
           docker compose exec -T db psql -U radioarchive -d radioarchive -tAc \
             "SELECT max(version_id) FROM goose_db_version" | tee version.txt
           test "$(cat version.txt)" -ge 2
+      - name: The binary runs the nightly retention job (R88)
+        # A deployment that has never run it runs it at start, and records
+        # the run in the jobs table.
+        run: |
+          for i in $(seq 1 60); do
+            ok=$(docker compose exec -T db psql -U radioarchive -d radioarchive -tAc \
+              "SELECT ok FROM jobs WHERE name = 'nightly'")
+            if [ "$ok" = t ]; then echo "ok: the nightly run is recorded"; exit 0; fi
+            sleep 1
+          done
+          echo "FAIL: no successful nightly run recorded (got '$ok')" >&2
+          exit 1
       - name: A1 end to end (fake recorder, client image, API image, PostgreSQL)
         run: |
           docker build -f recorder/client/Dockerfile -t radioarchive-client:ci .

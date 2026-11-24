@@ -34,7 +34,11 @@ test -n "$key"
 # The test fixture's system EX with talkgroup 1001, and the recorder's `ex`
 # attached to it (R11, R12). The admin API that does this in the Go tests
 # isn't served until admin sign-in exists, so the fixture goes straight in.
-psql "INSERT INTO systems (id, label, name) VALUES (1, 'EX', 'Example network') ON CONFLICT DO NOTHING;
+# The fixture's calls are dated November 2025, so retention is set long
+# enough that a nightly run (R88) during the test keeps them.
+psql "INSERT INTO settings (key, value) VALUES ('retention_days', '3650')
+	ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+	INSERT INTO systems (id, label, name) VALUES (1, 'EX', 'Example network') ON CONFLICT DO NOTHING;
 	INSERT INTO tags (name) VALUES ('dispatch') ON CONFLICT DO NOTHING;
 	INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id)
 	SELECT 1, 1001, 'DISP N', 'Dispatch North', id FROM tags WHERE name = 'dispatch' ON CONFLICT DO NOTHING;

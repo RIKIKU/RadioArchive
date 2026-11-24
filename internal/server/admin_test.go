@@ -113,7 +113,7 @@ func TestIntegrationAdminSignIn(t *testing.T) {
 	e := newEnv(t)
 	for _, p := range []string{"GET /systems", "POST /systems", "GET /attachments", "GET /rejections",
 		"PUT /systems/1/talkgroups/1001", "PUT /recorders/x/attachments/ex", "DELETE /systems/1",
-		"GET /calls/00000000-0000-4000-8000-000000000000/recording"} {
+		"GET /calls/00000000-0000-4000-8000-000000000000/recording", "GET /retention", "PUT /retention"} {
 		method, path, _ := strings.Cut(p, " ")
 		code, b := e.adminReq(t, "", method, path, map[string]any{})
 		if code != 401 || !strings.Contains(string(b), `"admin_sign_in_required"`) {

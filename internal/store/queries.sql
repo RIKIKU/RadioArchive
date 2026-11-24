@@ -343,3 +343,61 @@ SELECT recording_path::text AS recording_path, recording_size::bigint AS recordi
        recording_at::timestamptz AS recording_at
 FROM calls
 WHERE id = sqlc.arg(id) AND recording_path IS NOT NULL;
+
+-- Settings (R84, R88).
+
+-- name: GetSetting :one
+SELECT value FROM settings WHERE key = sqlc.arg(key);
+
+-- name: SetSetting :exec
+INSERT INTO settings (key, value) VALUES (sqlc.arg(key), sqlc.arg(value))
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
+
+-- Retention (R88, P5, R35; ADR 0005). Calls go by when they started, hidden
+-- and ignored ones alike, and their transmissions with them.
+
+-- name: CountRecordingsBefore :one
+-- How many recordings a retention period ending at cutoff would delete.
+SELECT count(*) FROM calls
+WHERE started_at < sqlc.arg(cutoff) AND recording_path IS NOT NULL;
+
+-- name: DeleteCallsBefore :many
+-- A batch of the calls that started before cutoff, oldest first. Their
+-- recordings' files are the caller's to remove, after the commit.
+DELETE FROM calls
+WHERE id IN (SELECT c.id FROM calls c WHERE c.started_at < sqlc.arg(cutoff)
+             ORDER BY c.started_at, c.id LIMIT sqlc.arg(batch))
+RETURNING recording_path;
+
+-- name: DeleteOldestCall :one
+-- Low disk (R88): the oldest call goes first. No row: no calls left.
+DELETE FROM calls
+WHERE id = (SELECT c.id FROM calls c ORDER BY c.started_at, c.id LIMIT 1)
+RETURNING recording_path, started_at;
+
+-- name: OldestCallStart :one
+-- When the oldest call kept started: retention, once shortened.
+SELECT min(started_at)::timestamptz AS started_at FROM calls;
+
+-- name: PruneRejectedCalls :execrows
+-- Rejected calls are counted over the retention period (ADR 0003).
+DELETE FROM rejected_calls WHERE rejected_at < sqlc.arg(cutoff);
+
+-- name: StoredRecordingPaths :many
+-- The stored recordings among these calls': a file on the volume whose
+-- path isn't among them has no row.
+SELECT recording_path::text AS recording_path FROM calls
+WHERE id = ANY (sqlc.arg(ids)::uuid[]) AND recording_path IS NOT NULL;
+
+-- Background jobs' last runs (ADR 0005).
+
+-- name: GetJob :one
+SELECT name, ran_for, started_at, finished_at, ok, error, result FROM jobs WHERE name = sqlc.arg(name);
+
+-- name: SaveJob :exec
+INSERT INTO jobs (name, ran_for, started_at, finished_at, ok, error, result)
+VALUES (sqlc.arg(name), sqlc.arg(ran_for), sqlc.arg(started_at), sqlc.arg(finished_at),
+        sqlc.arg(ok), sqlc.arg(error), sqlc.arg(result))
+ON CONFLICT (name) DO UPDATE
+SET ran_for = EXCLUDED.ran_for, started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at,
+    ok = EXCLUDED.ok, error = EXCLUDED.error, result = EXCLUDED.result;
