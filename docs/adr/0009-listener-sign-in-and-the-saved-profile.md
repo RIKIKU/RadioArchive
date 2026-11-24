@@ -6,6 +6,8 @@ status: proposed
 
 Date: 2026-11-24
 
+> **Partly superseded by [ADR 0021](0021-the-saved-profile-lives-in-radioarchives-database.md) (2026-11-25).** The profile now lives in RadioArchive's database, keyed by the account's issuer and subject, and the API holds no Authentik token. The summary rows **Where the profile lives**, **How the server writes it** and **The token**, the section "Where the profile lives, and the token", and what follows from it (an account the token can't reach saving nothing, a switched-off user signed out at the next read, the first consequence for M4, **Migration: none**) are superseded. The rest stands. The text below is as it was decided.
+
 A listener signs in with Authentik, which RadioArchive uses as an OIDC client with PKCE, as PagerArchive does. Signing in only saves preferences. The listening set with its priority marks, the playback settings and the look are kept in one attribute of the listener's Authentik user, `radioarchive`, and nowhere else. The API writes that attribute with a standing Authentik API token. The token's role holds "view user" and "change user" only on the users of listeners who have signed in to the radio, as object permissions. The session is a sealed, host-only cookie, so the server stores nothing about any listener. Public routes are handed no cookie or credential, so being signed in can't change anything a listener hears. The owner chose the standing token and enrolment by emailed code in [the parent's open question 3](https://github.com/RIKIKU/RadioArchive/issues/53) (`SPEC.md` P3, P4, R41, R48, R82, R103, R110, R111, A33). The rest are the implementer's choices (spec "How to use this spec", item 6). Built in [Listener sign-in and the saved profile](https://github.com/RIKIKU/RadioArchive/issues/61).
 
 ## Summary
@@ -29,6 +31,8 @@ A listener signs in with Authentik, which RadioArchive uses as an OIDC client wi
 | **Migration** | None. The server keeps nothing new |
 
 ## Where the profile lives, and the token
+
+> **Superseded by [ADR 0021](0021-the-saved-profile-lives-in-radioarchives-database.md).**
 
 R110 puts a listener's settings in their Authentik profile and nowhere else. Authentik offers one place a client can write per user: the user's `attributes`. A user's OAuth access token can't write them, because the user API needs model permissions. So the owner approved a standing token on the server (question 3a, 2026-11-24).
 

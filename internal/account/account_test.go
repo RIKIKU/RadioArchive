@@ -3,11 +3,8 @@ package account
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,14 +15,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/go-jose/go-jose/v4"
-	"github.com/go-jose/go-jose/v4/jwt"
-
-	"github.com/RIKIKU/RadioArchive/internal/authentik"
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/oidcclient"
+	"github.com/RIKIKU/RadioArchive/internal/oidcclient/oidctest"
 )
 
 // A made-up listener, and secrets that must never reach a log.
@@ -37,141 +30,43 @@ const (
 	forwardedIP  = "198.51.100.77"
 )
 
-// provider is a made-up OIDC provider: discovery, keys, and a token
-// endpoint that checks the PKCE verifier against the challenge the
-// authorization request carried.
-type provider struct {
-	srv *httptest.Server
-	key *rsa.PrivateKey
-
-	mu        sync.Mutex
-	codes     map[string]grant
-	verifiers []string
-	nonce     string // when set, the ID token carries this nonce instead
+// profiles is a made-up store: saved profiles, in memory, by issuer and
+// subject.
+type profiles struct {
+	mu     sync.Mutex
+	rows   map[[2]string][]byte
+	refuse error // every call fails with this
+	writes int
 }
 
-type grant struct{ challenge, nonce string }
-
-func newProvider(t *testing.T) *provider {
-	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := &provider{key: key, codes: map[string]grant{}}
-	mux := http.NewServeMux()
-	p.srv = httptest.NewServer(mux)
-	t.Cleanup(p.srv.Close)
-	iss := p.srv.URL + "/application/o/radioarchive/"
-	mux.HandleFunc("GET /application/o/radioarchive/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"issuer": iss, "authorization_endpoint": p.srv.URL + "/authorize", "token_endpoint": p.srv.URL + "/token",
-			"jwks_uri": p.srv.URL + "/jwks", "end_session_endpoint": p.srv.URL + "/end-session",
-			"id_token_signing_alg_values_supported": []string{"RS256"},
-		})
-	})
-	mux.HandleFunc("GET /jwks", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "k", Algorithm: "RS256", Use: "sig"}}})
-	})
-	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		p.mu.Lock()
-		g, ok := p.codes[r.Form.Get("code")]
-		delete(p.codes, r.Form.Get("code"))
-		v := r.Form.Get("code_verifier")
-		p.verifiers = append(p.verifiers, v)
-		nonce := g.nonce
-		if p.nonce != "" {
-			nonce = p.nonce
-		}
-		p.mu.Unlock()
-		sum := sha256.Sum256([]byte(v))
-		id, secret, _ := r.BasicAuth()
-		if id == "" { // the client's credentials in the form instead
-			id, secret = r.Form.Get("client_id"), r.Form.Get("client_secret")
-		}
-		if !ok || base64.RawURLEncoding.EncodeToString(sum[:]) != g.challenge || id != "radioarchive" || secret != clientSecret {
-			t.Logf("token request refused: code %q of %d known %v, challenge %v, client %v", r.Form.Get("code"), len(p.codes), ok,
-				base64.RawURLEncoding.EncodeToString(sum[:]) == g.challenge, id == "radioarchive" && secret == clientSecret)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
-			return
-		}
-		signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: key}, (&jose.SignerOptions{}).WithHeader("kid", "k"))
-		if err != nil {
-			t.Errorf("signer: %v", err)
-			return
-		}
-		raw, err := jwt.Signed(signer).Claims(map[string]any{
-			"iss": iss, "aud": "radioarchive", "sub": subject, "nonce": nonce, "email": email, "name": "Made Up",
-			"iat": time.Now().Unix(), "exp": time.Now().Add(5 * time.Minute).Unix(),
-		}).Serialize()
-		if err != nil {
-			t.Errorf("sign: %v", err)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at", "token_type": "Bearer", "expires_in": 300, "id_token": raw})
-	})
-	return p
-}
-
-// grant answers an authorization request as Authentik would after the
-// person signed in: a code for its challenge and nonce.
-func (p *provider) grant(t *testing.T, authURL string) (code, state string) {
-	t.Helper()
-	u, err := url.Parse(authURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := u.Query()
-	if q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") == "" || q.Get("nonce") == "" || q.Get("state") == "" {
-		t.Fatalf("the authorization request has no PKCE S256 challenge, nonce or state: %s", authURL)
-	}
-	code = "code-" + q.Get("state")[:8]
-	p.mu.Lock()
-	p.codes[code] = grant{challenge: q.Get("code_challenge"), nonce: q.Get("nonce")}
-	p.mu.Unlock()
-	return code, q.Get("state")
-}
-
-// directory is a made-up Authentik: users' attributes, in memory.
-type directory struct {
-	mu       sync.Mutex
-	attrs    map[string]json.RawMessage
-	inactive bool
-	refuse   error // every call fails with this
-	writes   int
-}
-
-func (d *directory) Attribute(_ context.Context, sub, key string) (json.RawMessage, bool, error) {
+func (d *profiles) ListenerProfile(_ context.Context, iss, sub string) ([]byte, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.refuse != nil {
-		return nil, false, d.refuse
+		return nil, d.refuse
 	}
-	if sub != subject || key != Attribute {
-		return nil, false, authentik.ErrNoUser
-	}
-	return d.attrs[sub], !d.inactive, nil
+	return d.rows[[2]string{iss, sub}], nil
 }
 
-func (d *directory) SetAttribute(_ context.Context, sub, key string, v json.RawMessage) error {
+func (d *profiles) SaveListenerProfile(_ context.Context, iss, sub string, p []byte) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.refuse != nil {
 		return d.refuse
 	}
-	if sub != subject || key != Attribute {
-		return authentik.ErrNoUser
+	d.writes++
+	d.rows[[2]string{iss, sub}] = p
+	return nil
+}
+
+func (d *profiles) ClearListenerProfile(_ context.Context, iss, sub string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.refuse != nil {
+		return d.refuse
 	}
 	d.writes++
-	if v == nil {
-		delete(d.attrs, sub)
-	} else {
-		d.attrs[sub] = v
-	}
+	delete(d.rows, [2]string{iss, sub})
 	return nil
 }
 
@@ -186,16 +81,29 @@ func (catalogue) Catalogue(context.Context) (*gate.Catalogue, error) {
 }
 
 type world struct {
-	p    *provider
-	dir  *directory
+	p    *oidctest.Provider
+	db   *profiles
 	app  *httptest.Server
 	logs *bytes.Buffer
 	c    *http.Client // a browser: cookies, no redirects followed
+	svc  *Service
+}
+
+// key is the listener's row: this provider's issuer and their subject.
+func (w *world) key() [2]string { return [2]string{w.p.Issuer(), subject} }
+
+func mustURL(t *testing.T, s string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
-	w := &world{p: newProvider(t), dir: &directory{attrs: map[string]json.RawMessage{}}, logs: &bytes.Buffer{}}
+	w := &world{p: oidctest.New(t, clientSecret, subject, email, "Made Up"), db: &profiles{rows: map[[2]string][]byte{}}, logs: &bytes.Buffer{}}
 	mux := http.NewServeMux()
 	w.app = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		// Every request comes from a listener's address, through a proxy.
@@ -207,14 +115,15 @@ func newWorld(t *testing.T) *world {
 	appURL, _ := url.Parse(w.app.URL)
 	svc, err := New(Config{
 		AppURL: appURL,
-		OIDC: &oidcclient.Client{Issuer: w.p.srv.URL + "/application/o/radioarchive/", ClientID: "radioarchive",
+		OIDC: &oidcclient.Client{Issuer: w.p.Issuer(), ClientID: oidctest.ClientID,
 			ClientSecret: clientSecret, RedirectURL: w.app.URL + "/auth/callback", HTTP: http.DefaultClient},
-		Directory: w.dir, Catalogue: catalogue{}, Secret: []byte(clientSecret),
+		Profiles: w.db, Catalogue: catalogue{}, Secret: []byte(clientSecret),
 		Log: slog.New(slog.NewJSONHandler(w.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.svc = svc
 	for _, r := range svc.Routes() {
 		mux.Handle(r.Pattern, r.Handler)
 	}
@@ -260,7 +169,7 @@ func (w *world) signIn(t *testing.T, ret string) *http.Response {
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("GET /auth/signin = %d", resp.StatusCode)
 	}
-	code, state := w.p.grant(t, resp.Header.Get("Location"))
+	code, state := w.p.Grant(t, resp.Header.Get("Location"))
 	return w.do(t, "GET", "/auth/callback?code="+code+"&state="+state, "")
 }
 
@@ -310,8 +219,8 @@ func TestSignIn(t *testing.T) {
 	}
 	// The token request carried the verifier for the challenge (checked by
 	// the provider, which answered).
-	if len(w.p.verifiers) != 1 || len(w.p.verifiers[0]) < 43 {
-		t.Errorf("PKCE verifiers sent: %q", w.p.verifiers)
+	if v := w.p.Verifiers(); len(v) != 1 || len(v[0]) < 43 {
+		t.Errorf("PKCE verifiers sent: %q", v)
 	}
 	st := w.state(t)
 	if st.Account == nil || st.Account.ID != subject || st.Account.Email != email || st.Profile != nil || !st.Saves {
@@ -324,13 +233,13 @@ func TestSignIn(t *testing.T) {
 func TestSignInRefused(t *testing.T) {
 	w := newWorld(t)
 	resp := w.do(t, "GET", "/auth/signin", "")
-	code, _ := w.p.grant(t, resp.Header.Get("Location"))
+	code, _ := w.p.Grant(t, resp.Header.Get("Location"))
 	if resp := w.do(t, "GET", "/auth/callback?code="+code+"&state=someone-elses", ""); resp.Header.Get("Location") != signInFailed || cookieNamed(resp, sessionCookie) != nil {
 		t.Errorf("wrong state: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 
 	w = newWorld(t)
-	w.p.nonce = "not-the-one-sent"
+	w.p.SetNonce("not-the-one-sent")
 	if resp := w.signIn(t, "/"); resp.Header.Get("Location") != signInFailed || cookieNamed(resp, sessionCookie) != nil {
 		t.Errorf("wrong nonce: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
@@ -338,7 +247,7 @@ func TestSignInRefused(t *testing.T) {
 	// Authentik's refusal (the listener cancelled).
 	w = newWorld(t)
 	resp = w.do(t, "GET", "/auth/signin", "")
-	_, state := w.p.grant(t, resp.Header.Get("Location"))
+	_, state := w.p.Grant(t, resp.Header.Get("Location"))
 	if resp := w.do(t, "GET", "/auth/callback?error=access_denied&state="+state, ""); resp.Header.Get("Location") != signInFailed {
 		t.Errorf("refused: %q", resp.Header.Get("Location"))
 	}
@@ -368,7 +277,7 @@ func TestProfile(t *testing.T) {
 	}
 
 	// 1003 was saved while it was public, and is hidden now.
-	w.dir.attrs[subject] = json.RawMessage(`{"v":1,"talkgroups":[{"id":1001},{"id":1003,"priority":true}],"alerts":false}`)
+	w.db.rows[w.key()] = []byte(`{"v":1,"talkgroups":[{"id":1001},{"id":1003,"priority":true}],"alerts":false}`)
 	resp := w.do(t, "GET", AccountPath, "")
 	b, _ := io.ReadAll(resp.Body)
 	if strings.Contains(string(b), "1003") {
@@ -377,7 +286,7 @@ func TestProfile(t *testing.T) {
 	if resp := w.put(t, `{"v":1,"talkgroups":[{"id":1002}],"alerts":false}`); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("PUT = %d", resp.StatusCode)
 	}
-	if got := string(w.dir.attrs[subject]); !strings.Contains(got, `{"id":1003,"priority":true}`) || strings.Contains(got, `"id":1001`) {
+	if got := string(w.db.rows[w.key()]); !strings.Contains(got, `{"id":1003,"priority":true}`) || strings.Contains(got, `"id":1001`) {
 		t.Errorf("saved %s: want 1002, and hidden 1003 kept", got)
 	}
 
@@ -385,7 +294,7 @@ func TestProfile(t *testing.T) {
 	if resp := w.do(t, "DELETE", ProfilePath, "", "Origin", w.app.URL); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("DELETE = %d", resp.StatusCode)
 	}
-	if _, ok := w.dir.attrs[subject]; ok {
+	if _, ok := w.db.rows[w.key()]; ok {
 		t.Error("the profile is still there after clearing")
 	}
 	if st := w.state(t); st.Account == nil || st.Profile != nil {
@@ -427,14 +336,14 @@ func TestProfileBasket(t *testing.T) {
 	if resp := w.put(t, `{"v":1,"talkgroups":[{"id":1002}],"alerts":false}`); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("PUT = %d", resp.StatusCode)
 	}
-	if got := string(w.dir.attrs[subject]); !strings.Contains(got, `"Structure fire"`) || !strings.Contains(got, `"id":1002`) {
+	if got := string(w.db.rows[w.key()]); !strings.Contains(got, `"Structure fire"`) || !strings.Contains(got, `"id":1002`) {
 		t.Errorf("saved %s: want 1002 and the basket kept", got)
 	}
 	// An empty basket is the browser's to send.
 	if resp := w.put(t, `{"v":1,"talkgroups":[],"alerts":false,"basket":{"calls":[],"conversations":[]}}`); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("PUT = %d", resp.StatusCode)
 	}
-	if got := string(w.dir.attrs[subject]); strings.Contains(got, a) {
+	if got := string(w.db.rows[w.key()]); strings.Contains(got, a) {
 		t.Errorf("saved %s: want the basket emptied", got)
 	}
 
@@ -513,31 +422,66 @@ func TestProfileSameSite(t *testing.T) {
 			t.Errorf("DELETE with %q = %d, want 403", h, resp.StatusCode)
 		}
 	}
-	if w.dir.writes != 0 {
-		t.Errorf("%d writes from another site", w.dir.writes)
+	if w.db.writes != 0 {
+		t.Errorf("%d writes from another site", w.db.writes)
 	}
 }
 
-// An account the token can't reach is signed in with nothing saved; one
-// switched off in Authentik is signed out; Authentik down says so, and
-// signs no one out.
-func TestProfileDirectoryStates(t *testing.T) {
+// The database down says so, saves nothing and signs no one out; back up,
+// everything works again. Every signed-in account can save (ADR 0021).
+func TestProfileStoreDown(t *testing.T) {
 	w := newWorld(t)
 	w.signIn(t, "/")
-	w.dir.refuse = authentik.ErrNotPermitted
-	if st := w.state(t); st.Account == nil || st.Saves || st.Profile != nil {
-		t.Errorf("not permitted: %+v", st)
-	}
-	if resp := w.put(t, `{"v":1,"talkgroups":[]}`); resp.StatusCode != http.StatusForbidden {
-		t.Errorf("PUT, not permitted = %d", resp.StatusCode)
-	}
-	w.dir.refuse = &authentik.Error{Op: "read user", Status: 502}
+	w.db.refuse = errors.New("read the listener's profile: SQLSTATE 57P01")
 	if resp := w.do(t, "GET", AccountPath, ""); resp.StatusCode != http.StatusServiceUnavailable || cookieNamed(resp, sessionCookie) != nil {
-		t.Errorf("Authentik down: %d", resp.StatusCode)
+		t.Errorf("database down: GET = %d", resp.StatusCode)
 	}
-	w.dir.refuse, w.dir.inactive = nil, true
-	if st := w.state(t); st.Account != nil {
-		t.Errorf("switched off: %+v", st)
+	if resp := w.put(t, `{"v":1,"talkgroups":[]}`); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("database down: PUT = %d", resp.StatusCode)
+	}
+	if resp := w.do(t, "DELETE", ProfilePath, "", "Origin", w.app.URL); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("database down: DELETE = %d", resp.StatusCode)
+	}
+	w.db.refuse = nil
+	if st := w.state(t); st.Account == nil || !st.Saves {
+		t.Errorf("back up: %+v", st)
+	}
+}
+
+// The profile is the account's, by issuer and subject: another issuer's
+// listener with the same subject is someone else (ADR 0021), and a session
+// from another issuer than this deployment's isn't live.
+func TestProfileKeyedByIssuer(t *testing.T) {
+	w := newWorld(t)
+	w.signIn(t, "/")
+	w.db.rows[[2]string{"https://other.example.test/application/o/radioarchive/", subject}] = []byte(`{"v":1,"talkgroups":[{"id":1002}],"alerts":false}`)
+	if st := w.state(t); st.Account == nil || st.Profile != nil {
+		t.Fatalf("another issuer's profile was shown: %+v", st.Profile)
+	}
+	if resp := w.put(t, `{"v":1,"talkgroups":[{"id":1001}],"alerts":false}`); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("PUT = %d", resp.StatusCode)
+	}
+	if len(w.db.rows) != 2 || !strings.Contains(string(w.db.rows[w.key()]), `"id":1001`) {
+		t.Errorf("rows %q", w.db.rows)
+	}
+	// The same cookie, read by a deployment whose issuer has changed.
+	s := w.svc
+	cfg := s.cfg
+	cfg.OIDC = &oidcclient.Client{Issuer: "https://other.example.test/application/o/radioarchive/", ClientID: oidctest.ClientID,
+		ClientSecret: clientSecret, RedirectURL: w.app.URL + "/auth/callback", HTTP: http.DefaultClient}
+	s2, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("GET", AccountPath, nil)
+	for _, c := range w.c.Jar.Cookies(mustURL(t, w.app.URL)) {
+		r.AddCookie(c)
+	}
+	if _, ok := s2.current(r); ok {
+		t.Error("a session from another issuer is live")
+	}
+	if _, ok := s.current(r); !ok {
+		t.Error("the session isn't live where it was made")
 	}
 }
 
@@ -560,7 +504,7 @@ func TestSignOut(t *testing.T) {
 	}
 	resp = w.do(t, "GET", endSessionPath, "")
 	to, _ := url.Parse(resp.Header.Get("Location"))
-	if !strings.HasPrefix(to.String(), w.p.srv.URL+"/end-session?") || to.Query().Get("id_token_hint") == "" ||
+	if !strings.HasPrefix(to.String(), w.p.URL+"/end-session?") || to.Query().Get("id_token_hint") == "" ||
 		to.Query().Get("post_logout_redirect_uri") != w.app.URL+"/?signed_out=1" {
 		t.Fatalf("end-session went to %s", to)
 	}

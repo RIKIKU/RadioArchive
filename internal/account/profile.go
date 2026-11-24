@@ -12,10 +12,6 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 )
 
-// Attribute is the Authentik user attribute a listener's saved settings
-// live in (R110, ADR 0009).
-const Attribute = "radioarchive"
-
 // Profile is what a listener's account holds (R41, R48, R64, R110): the
 // listening set with its priority marks, the playback settings, the look
 // and the download basket with its conversations. Hold and talkgroups
@@ -67,8 +63,8 @@ type Conversation struct {
 }
 
 // How large a basket the profile holds (ADR 0018): far beyond what a
-// listener collects, and small enough that the attribute stays well under
-// a megabyte. Names and notes are bounded as a zip's are (ADR 0015).
+// listener collects, and small enough that a saved profile stays well
+// under a megabyte. Names and notes are bounded as a zip's are (ADR 0015).
 const (
 	MaxBasketCalls        = 1000
 	MaxConversations      = 50
@@ -86,8 +82,8 @@ type Entry struct {
 }
 
 // Limits on what a profile may hold, so an account can't be used to store
-// anything else in Authentik: a set as big as the deployment, and then
-// some.
+// anything else in RadioArchive's database: a set as big as the
+// deployment, and then some.
 const (
 	maxEntries = 5000
 	// The largest set and basket allowed fit with room to spare (ADR 0018).
@@ -106,7 +102,7 @@ func (e Entry) key() string {
 	return strconv.FormatInt(*e.System, 10) + "." + strconv.Itoa(int(e.ID))
 }
 
-// parseProfile reads a profile a browser sent, or one kept in Authentik,
+// parseProfile reads a profile a browser sent, or one kept in the database,
 // and refuses anything that isn't one.
 func parseProfile(b []byte) (Profile, error) {
 	var p Profile

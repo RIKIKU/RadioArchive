@@ -420,6 +420,20 @@ func (q *Queries) DeleteCallsBefore(ctx context.Context, arg DeleteCallsBeforePa
 	return items, nil
 }
 
+const deleteListenerProfile = `-- name: DeleteListenerProfile :exec
+DELETE FROM listener_profiles WHERE issuer = $1 AND subject = $2
+`
+
+type DeleteListenerProfileParams struct {
+	Issuer  string
+	Subject string
+}
+
+func (q *Queries) DeleteListenerProfile(ctx context.Context, arg DeleteListenerProfileParams) error {
+	_, err := q.db.Exec(ctx, deleteListenerProfile, arg.Issuer, arg.Subject)
+	return err
+}
+
 const deleteOldestCall = `-- name: DeleteOldestCall :one
 DELETE FROM calls
 WHERE id = (SELECT c.id FROM calls c WHERE c.started_at < $1
@@ -1060,6 +1074,25 @@ func (q *Queries) GetJob(ctx context.Context, name string) (Job, error) {
 		&i.Result,
 	)
 	return i, err
+}
+
+const getListenerProfile = `-- name: GetListenerProfile :one
+
+SELECT profile FROM listener_profiles WHERE issuer = $1 AND subject = $2
+`
+
+type GetListenerProfileParams struct {
+	Issuer  string
+	Subject string
+}
+
+// Signed-in listeners' saved profiles (SPEC.md R110, ADR 0021): one row an
+// account, keyed by its OIDC issuer and subject.
+func (q *Queries) GetListenerProfile(ctx context.Context, arg GetListenerProfileParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getListenerProfile, arg.Issuer, arg.Subject)
+	var profile []byte
+	err := row.Scan(&profile)
+	return profile, err
 }
 
 const getSetting = `-- name: GetSetting :one
@@ -2306,6 +2339,23 @@ func (q *Queries) UpdateTag(ctx context.Context, arg UpdateTagParams) (Tag, erro
 		&i.SortOrder,
 	)
 	return i, err
+}
+
+const upsertListenerProfile = `-- name: UpsertListenerProfile :exec
+INSERT INTO listener_profiles (issuer, subject, profile, updated_at)
+VALUES ($1, $2, $3, now())
+ON CONFLICT (issuer, subject) DO UPDATE SET profile = EXCLUDED.profile, updated_at = EXCLUDED.updated_at
+`
+
+type UpsertListenerProfileParams struct {
+	Issuer  string
+	Subject string
+	Profile []byte
+}
+
+func (q *Queries) UpsertListenerProfile(ctx context.Context, arg UpsertListenerProfileParams) error {
+	_, err := q.db.Exec(ctx, upsertListenerProfile, arg.Issuer, arg.Subject, arg.Profile)
+	return err
 }
 
 const upsertLiveCall = `-- name: UpsertLiveCall :one

@@ -147,6 +147,13 @@ type Job struct {
 	Result     []byte
 }
 
+type ListenerProfile struct {
+	Issuer    string
+	Subject   string
+	Profile   []byte
+	UpdatedAt pgtype.Timestamptz
+}
+
 type PublicCall struct {
 	ID                pgtype.UUID
 	SystemID          int64

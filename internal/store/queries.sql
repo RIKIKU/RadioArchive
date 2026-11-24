@@ -612,3 +612,17 @@ VALUES (sqlc.arg(name), sqlc.arg(ran_for), sqlc.arg(started_at), sqlc.arg(finish
 ON CONFLICT (name) DO UPDATE
 SET ran_for = EXCLUDED.ran_for, started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at,
     ok = EXCLUDED.ok, error = EXCLUDED.error, result = EXCLUDED.result;
+
+-- Signed-in listeners' saved profiles (SPEC.md R110, ADR 0021): one row an
+-- account, keyed by its OIDC issuer and subject.
+
+-- name: GetListenerProfile :one
+SELECT profile FROM listener_profiles WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject);
+
+-- name: UpsertListenerProfile :exec
+INSERT INTO listener_profiles (issuer, subject, profile, updated_at)
+VALUES (sqlc.arg(issuer), sqlc.arg(subject), sqlc.arg(profile), now())
+ON CONFLICT (issuer, subject) DO UPDATE SET profile = EXCLUDED.profile, updated_at = EXCLUDED.updated_at;
+
+-- name: DeleteListenerProfile :exec
+DELETE FROM listener_profiles WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject);

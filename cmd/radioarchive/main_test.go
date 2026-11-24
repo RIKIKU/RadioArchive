@@ -78,7 +78,7 @@ func TestIntegrationNoAdminAPI(t *testing.T) {
 	// route (R111, ADR 0009).
 	sc, err := signInFromEnv(environ{
 		"APP_URL": "http://radio.example.test", "AUTHENTIK_URL": "http://auth.example.test",
-		"OIDC_CLIENT_SECRET": "made-up-client-secret-0123456789", "AUTHENTIK_API_TOKEN": "made-up-token",
+		"OIDC_CLIENT_SECRET": "made-up-client-secret-0123456789",
 	}.get)
 	if err != nil || !sc.on() {
 		t.Fatalf("sign-in settings: %v, on %v", err, sc.on())
