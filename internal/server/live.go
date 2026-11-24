@@ -212,9 +212,7 @@ func (s *session) text(ctx context.Context, b []byte) error {
 	switch typ {
 	case cp.TypeCallStart, cp.TypeTransmission, cp.TypeCallEnd:
 	case cp.TypeHeartbeat:
-		// Relayed for R14, which records it (a later slice). Valid JSON is
-		// all that's checked today.
-		return nil
+		return s.heartbeat(b)
 	default:
 		s.rs.Stat.UnknownTypes.Add(1)
 		return nil
@@ -240,6 +238,38 @@ func (s *session) text(ctx context.Context, b []byte) error {
 	default:
 		return s.callEnd(ctx, id, e)
 	}
+}
+
+// maxHeartbeatSystems bounds the systems one heartbeat may relay.
+const maxHeartbeatSystems = 64
+
+// heartbeat takes the client's heartbeat (ADR 0002) for the recorder's
+// signals (R14): the plugin's systems and their decode rates, or none when
+// the plugin has gone silent. A system with a bad short_name is dropped and
+// counted; a heartbeat that isn't one closes the socket, as any bad event
+// does.
+func (s *session) heartbeat(b []byte) error {
+	var hb cp.Heartbeat
+	if err := json.Unmarshal(b, &hb); err != nil {
+		var te *json.UnmarshalTypeError
+		if errors.As(err, &te) {
+			return protoErr(policyViolation, "heartbeat: invalid field %s", te.Field)
+		}
+		return protoErr(invalidPayload, "heartbeat: %v", err)
+	}
+	if len(hb.Systems) > maxHeartbeatSystems {
+		return protoErr(policyViolation, "heartbeat: more than %d systems", maxHeartbeatSystems)
+	}
+	systems := make([]cp.SystemRate, 0, len(hb.Systems))
+	for _, sr := range hb.Systems {
+		if n := len(sr.ShortName); n < 1 || n > 64 || !utf8.ValidString(sr.ShortName) {
+			s.rs.Sig.BadHeartbeats.Add(1)
+			continue
+		}
+		systems = append(systems, sr)
+	}
+	s.rs.heartbeat(s, systems)
+	return nil
 }
 
 func firstMissing(present map[string]bool) string {
@@ -299,6 +329,7 @@ func (s *session) callStart(ctx context.Context, id cp.CallID, e event) error {
 		s.refused[id] = true
 		return nil
 	}
+	s.rs.touchCall(ctx, s.rec, *e.StartTimeMS)
 	c := &liveCall{id: callID, idText: uuidString(callID)}
 	s.calls[id] = c
 	if live := s.rs.cfg.Live; live != nil {

@@ -48,6 +48,15 @@ type RecordersConfig struct {
 	// ServerVersion is sent in the welcome, and clients are checked against
 	// it (R6). It must be MAJOR.MINOR.PATCH.
 	ServerVersion string
+	// Notice is told when the recorder notice goes on or off (R15).
+	// Optional.
+	Notice RecorderNotice
+	// NoticeAfter is RECORDER_NOTICE_AFTER: how long a recorder is
+	// disconnected or deaf before the notice goes on. Default
+	// DefaultNoticeAfter.
+	NoticeAfter time.Duration
+	// Now is the signals' clock (default time.Now). Tests control it.
+	Now func() time.Time
 }
 
 // Counters are the recorder endpoints' totals, for metrics (R90) and tests.
@@ -102,6 +111,9 @@ type Recorders struct {
 	log  *slog.Logger
 	cfg  RecordersConfig
 	Stat Counters
+	Sig  SignalCounters
+
+	sig *signals
 
 	mu       sync.Mutex
 	sessions map[int64]*session // by recorder ID: one connection per client key
@@ -122,17 +134,30 @@ func NewRecorders(st *store.Store, log *slog.Logger, cfg RecordersConfig) (*Reco
 	if err := os.MkdirAll(filepath.Join(cfg.RecordingsDir, incomingDir), 0o750); err != nil {
 		return nil, fmt.Errorf("recordings directory: %w", err)
 	}
-	return &Recorders{st: st, log: log, cfg: cfg, sessions: map[int64]*session{}, listening: make(chan struct{})}, nil
+	if cfg.NoticeAfter < 0 {
+		return nil, errors.New("the recorder notice's delay can't be negative")
+	}
+	if cfg.NoticeAfter == 0 {
+		cfg.NoticeAfter = DefaultNoticeAfter
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	return &Recorders{st: st, log: log, cfg: cfg, sessions: map[int64]*session{}, listening: make(chan struct{}),
+		sig: newSignals(cfg.Now, cfg.NoticeAfter)}, nil
 }
 
 // Listening is closed once Run is listening for key changes.
 func (rs *Recorders) Listening() <-chan struct{} { return rs.listening }
 
 // Run listens for key rotations and retirements (store.KeyChannel) and
-// closes the live socket of any recorder whose key is no longer current. It
-// returns when ctx ends. After every (re)connection it rechecks every open
-// socket, so a change made while it wasn't listening still takes effect.
+// closes the live socket of any recorder whose key is no longer current,
+// and watches the recorders' signals (R14, R15). It returns when ctx ends.
+// After every (re)connection to the database it rechecks every open
+// socket, so a key change made while it wasn't listening still takes
+// effect.
 func (rs *Recorders) Run(ctx context.Context) {
+	go rs.watch(ctx)
 	for ctx.Err() == nil {
 		err := rs.listen(ctx)
 		if ctx.Err() != nil {
@@ -211,6 +236,7 @@ func (rs *Recorders) register(s *session) {
 	rs.mu.Lock()
 	old := rs.sessions[s.rec.ID]
 	rs.sessions[s.rec.ID] = s
+	rs.sig.connected(s.rec.ID)
 	rs.mu.Unlock()
 	if old != nil {
 		rs.log.Warn("recorder opened a second connection; closing the older one", "recorder", s.rec.Name)
@@ -222,8 +248,19 @@ func (rs *Recorders) unregister(s *session) {
 	rs.mu.Lock()
 	if rs.sessions[s.rec.ID] == s {
 		delete(rs.sessions, s.rec.ID)
+		rs.sig.disconnected(s.rec.ID)
 	}
 	rs.mu.Unlock()
+}
+
+// heartbeat takes the client's heartbeat for the recorder's signals, if s
+// is still its socket.
+func (rs *Recorders) heartbeat(s *session, systems []cp.SystemRate) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.sessions[s.rec.ID] == s {
+		rs.sig.heartbeat(s.rec.ID, systems)
+	}
 }
 
 // authenticate checks the bearer key and the protocol header, as the live

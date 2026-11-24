@@ -111,7 +111,10 @@ type rig struct {
 	api   string // the server's base URL
 	log   *slog.Logger
 	clock *clock
-	queue string // the client's queue directory, kept across its restarts
+	// srvClock is the server's clock for the recorder signals (R14, R15),
+	// moved on apart from the client's.
+	srvClock *clock
+	queue    string // the client's queue directory, kept across its restarts
 
 	serverVersion string
 	addr          string // the server's address, the same across its restarts
@@ -231,7 +234,13 @@ func start(t *testing.T) *rig {
 // newRig makes the database, the recorder and its key; nothing runs yet.
 func newRig(t *testing.T, serverVersion string) *rig {
 	t.Helper()
-	st, err := store.Open(context.Background(), storetest.URL(t))
+	return newRigOn(t, serverVersion, storetest.URL(t))
+}
+
+// newRigOn is newRig on the database at url.
+func newRigOn(t *testing.T, serverVersion, url string) *rig {
+	t.Helper()
+	st, err := store.Open(context.Background(), url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,6 +248,7 @@ func newRig(t *testing.T, serverVersion string) *rig {
 		name:          fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano()),
 		log:           slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
 		clock:         &clock{},
+		srvClock:      &clock{},
 		serverVersion: serverVersion, addr: "127.0.0.1:0"}
 	// Cleanups run last first: the client stops, then the server, then the
 	// pool closes.
@@ -260,7 +270,8 @@ func (r *rig) serverUp(t *testing.T) {
 	g := gate.New(r.st, r.dir, r.log)
 	go g.Live().Run(ctx)
 	rs, err := server.NewRecorders(r.st, r.log, server.RecordersConfig{RecordingsDir: r.dir,
-		Live: tee{r.sink, g.Live()}, ServerVersion: r.serverVersion})
+		Live: tee{r.sink, g.Live()}, ServerVersion: r.serverVersion,
+		Notice: g.Live(), Now: r.srvClock.now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,6 +281,7 @@ func (r *rig) serverUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	admin.WithRecorders(rs)
 	var ln net.Listener
 	for i := 0; ; i++ {
 		if ln, err = net.Listen("tcp", r.addr); err == nil {

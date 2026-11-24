@@ -33,7 +33,7 @@ Each listener opens one WebSocket, `GET /api/v1/live`, with no sign-in, and send
 - `{"id": T}` is that talkgroup ID in any system. With one system, which is every deployment whose catalogue gives no `system` (R15, ADR 0006), that's simply the talkgroup. `{"system": S, "id": T}` names one system's talkgroup, for a deployment with several; the catalogue gives each talkgroup's `system` then. A bare number `T` is taken as `{"id": T}`, for a client that has no more to say.
 - `last_event_id` is read only in the first `set` of a socket. Later ones change the set and nothing else.
 - The server answers every `set` with `{"type": "listening"}` once it has taken it, after any replay, so a client knows that what follows is by the new set.
-- A listener sends `set` after the welcome; until then it gets nothing. Sending `{"type": "set", "talkgroups": []}` is valid and hears nothing.
+- A listener sends `set` after the welcome; until then it gets nothing but feed notices. Sending `{"type": "set", "talkgroups": []}` is valid and hears nothing.
 - A bad message closes the socket, as the recorder protocol does for a broken client (ADR 0002): binary `1003`, not a JSON object `1007`, an invalid `set` `1008` with the reason.
 
 A set is a filter **after** the gate (R36): a call reaches a listener once if any talkgroup in its patch is in the set (R16), but only a call the gate has passed. Naming 1003 in a set changes nothing for a hidden 1003.
@@ -65,7 +65,7 @@ When a set newly names a call that is live, the listener is sent that call's `ca
 
 **`replay`** ends a resume: `{"type": "replay", "complete": true}` when every event after the given ID is still held; `false` when some have gone, because they're older than 5 minutes or from before the server started. A client that gets `false` may have missed calls (recent calls, M3, shows them).
 
-**`notice`** is a feed notice: `{"type": "notice", "notice": "recorders" | "radio_full", "active": bool}`. The type is reserved here; the recorder notice (R15) and "the radio is full" (R71) are later slices'.
+**`notice`** is a feed notice: `{"type": "notice", "notice": "recorders" | "radio_full", "active": bool}`. Notices aren't by listening set and aren't replayed: they're sent to every listener from the welcome on, and one that's on when a listener connects is sent straight after its welcome. A new socket starts with every notice off. The recorder notice (R15) is ADR 0010's; "the radio is full" (R71) is a later slice's.
 
 **Binary: one Opus frame**, little-endian:
 
@@ -135,5 +135,5 @@ The A10 harness probes the live route with listeners (`a10_live_test.go`), not H
 - `server.LiveSink` gets the call's start, transmissions and end besides its frames, each after the row is written; `gate.Live` is the sink in the binary.
 - `gate.New` takes options; `gate.WithClock` is the clock for delays and the replay window.
 - The player (#58) opens the socket, sends what `sendListeningSet` is handed as the `set` message above, keeps the highest event ID, resends `set` with it after a reconnect, and ignores message types it doesn't know.
-- Limits on listener sockets (R71) and the feed notices are M5's and a later slice's; they attach to this route and the `notice` type.
+- Limits on listener sockets (R71) and "the radio is full" are M5's; they attach to this route and the `notice` type. The recorder notice is sent by `gate.Live.RecorderNotice` (ADR 0010).
 - The live delay metric (R38, R90) can be measured from `live_first_pcm_at` to the frame's send; not built here.

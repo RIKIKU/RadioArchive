@@ -56,8 +56,8 @@ const KindLiveFrame = 0x01
 // frame's sequence number (uint32, little-endian).
 const LiveFrameHeader = 24
 
-// Feed notices (R15, R71): the message type exists, and the notices are
-// later slices'.
+// Feed notices (R15, R71). The recorder notice is sent by RecorderNotice;
+// "the radio is full" is a later slice's.
 const (
 	NoticeRecorders = "recorders" // "Some talkgroups aren't being received right now"
 	NoticeRadioFull = "radio_full"
@@ -159,7 +159,36 @@ type Live struct {
 	nextID  int64
 	pruned  int64 // the highest event ID no longer in the ring
 	gen     int64 // the catalogue generation every held call was checked at
+	notice  bool  // the recorder notice (R15) is on
 	running atomic.Bool
+}
+
+// The recorder notice's two messages. They're the same bytes whichever
+// recorder or system caused them, and name neither (R15).
+var (
+	recorderNoticeOn, _  = json.Marshal(noticeMsg{Type: TypeNotice, Notice: NoticeRecorders, Active: true})
+	recorderNoticeOff, _ = json.Marshal(noticeMsg{Type: TypeNotice, Notice: NoticeRecorders, Active: false})
+)
+
+// RecorderNotice turns the recorder notice (R15) on or off for every
+// listener: "Some talkgroups aren't being received right now". It isn't by
+// listening set, nor replayed: a listener who connects while it's on is
+// sent it at once, after the welcome, and one who connects while it's off
+// is sent nothing.
+func (l *Live) RecorderNotice(active bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.notice == active {
+		return
+	}
+	l.notice = active
+	msg := recorderNoticeOff
+	if active {
+		msg = recorderNoticeOn
+	}
+	for s := range l.subs {
+		s.event(msg)
+	}
 }
 
 func newLive(g *Gate) *Live {
@@ -657,6 +686,9 @@ func (l *Live) Subscribe() *Subscription {
 	l.mu.Lock()
 	l.subs[s] = struct{}{}
 	last := l.nextID
+	if l.notice {
+		s.event(recorderNoticeOn)
+	}
 	l.mu.Unlock()
 	s.welcome, _ = json.Marshal(welcome{Type: TypeWelcome, Protocol: LiveProtocol, LastEventID: last})
 	return s
@@ -865,6 +897,12 @@ type withdrawnEvent struct {
 	Type    string `json:"type"`
 	EventID int64  `json:"event_id"`
 	CallID  string `json:"call_id"`
+}
+
+type noticeMsg struct {
+	Type   string `json:"type"`
+	Notice string `json:"notice"`
+	Active bool   `json:"active"`
 }
 
 type replayDone struct {

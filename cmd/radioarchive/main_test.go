@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/public"
@@ -36,6 +37,23 @@ func TestRetentionSettings(t *testing.T) {
 		if _, err := retentionJob(nil, log); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("RECORDINGS_MIN_FREE=%q RECORDINGS_EARLY_DELETE_FLOOR=%q NIGHTLY_AT=%q: %v, want an error naming %s",
 				c.minFree, c.floor, c.at, err, c.want)
+		}
+	}
+}
+
+// TestRecorderNoticeAfter: RECORDER_NOTICE_AFTER defaults to 2 min (R15),
+// and a bad one stops the server at start.
+func TestRecorderNoticeAfter(t *testing.T) {
+	for v, want := range map[string]time.Duration{"": 2 * time.Minute, "90s": 90 * time.Second} {
+		t.Setenv("RECORDER_NOTICE_AFTER", v)
+		if got, err := recorderNoticeAfter(); err != nil || got != want {
+			t.Errorf("RECORDER_NOTICE_AFTER=%q: %v, %v; want %v", v, got, err, want)
+		}
+	}
+	for _, v := range []string{"2", "0s", "-1m", "soon"} {
+		t.Setenv("RECORDER_NOTICE_AFTER", v)
+		if _, err := recorderNoticeAfter(); err == nil || !strings.Contains(err.Error(), "RECORDER_NOTICE_AFTER") {
+			t.Errorf("RECORDER_NOTICE_AFTER=%q: %v, want an error naming it", v, err)
 		}
 	}
 }

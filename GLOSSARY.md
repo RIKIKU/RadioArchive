@@ -114,6 +114,14 @@ _Avoid_: Uploader, agent, feeder
 The small part of RadioArchive that runs inside trunk-recorder and hands each call to the recorder client.
 _Avoid_: Streamer, simplestream
 
+**Recorder signal**:
+One of three ways the server notices a recorder has stopped: disconnected (its client's connection has dropped), deaf (trunk-recorder is down, or an attached system's control channel is lost) and quiet (no calls for an admin-set time).
+_Avoid_: Alarm, health check, status
+
+**Recorder notice**:
+What every listener sees once a recorder has been disconnected or deaf for a while: "Some talkgroups aren't being received right now". It names no recorder or talkgroup, and quiet never raises it.
+_Avoid_: Outage banner, recorder alert
+
 **Attachment**:
 An admin's link from one recorder's system, as trunk-recorder names it (its `shortName`), to the system its calls are filed under.
 _Avoid_: Mapping, binding, assignment
