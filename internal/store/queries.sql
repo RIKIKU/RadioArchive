@@ -310,11 +310,16 @@ SET live_first_pcm_at = COALESCE(calls.live_first_pcm_at, EXCLUDED.live_first_pc
 RETURNING id;
 
 -- name: AddLiveTransmission :exec
--- Ignored once the recording has stored the call's transmissions.
+-- Ignored once the recording has stored the call's transmissions. The
+-- call's row is locked before the row is inserted, as the recording's
+-- upload locks it before storing its transmissions: so one coming during
+-- an upload waits for it, then finds the recording and adds nothing, where
+-- inserting first deadlocked with the upload (issue #85).
 INSERT INTO transmissions (call_id, offset_ms, unit)
 SELECT c.id, sqlc.arg(offset_ms), sqlc.arg(unit)
 FROM calls c
 WHERE c.id = sqlc.arg(call_id) AND c.recording_path IS NULL
+FOR KEY SHARE OF c
 ON CONFLICT DO NOTHING;
 
 -- name: ExtendLivePatch :one
