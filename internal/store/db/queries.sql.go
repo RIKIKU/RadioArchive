@@ -30,6 +30,7 @@ INSERT INTO transmissions (call_id, offset_ms, unit)
 SELECT c.id, $1, $2
 FROM calls c
 WHERE c.id = $3 AND c.recording_path IS NULL
+FOR KEY SHARE OF c
 ON CONFLICT DO NOTHING
 `
 
@@ -39,7 +40,11 @@ type AddLiveTransmissionParams struct {
 	CallID   pgtype.UUID
 }
 
-// Ignored once the recording has stored the call's transmissions.
+// Ignored once the recording has stored the call's transmissions. The
+// call's row is locked before the row is inserted, as the recording's
+// upload locks it before storing its transmissions: so one coming during
+// an upload waits for it, then finds the recording and adds nothing, where
+// inserting first deadlocked with the upload (issue #85).
 func (q *Queries) AddLiveTransmission(ctx context.Context, arg AddLiveTransmissionParams) error {
 	_, err := q.db.Exec(ctx, addLiveTransmission, arg.OffsetMs, arg.Unit, arg.CallID)
 	return err
