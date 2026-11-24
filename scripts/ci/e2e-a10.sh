@@ -225,7 +225,7 @@ done
 # public call is listed and none of 1003's; a filter naming 1003 answers
 # byte for byte as one naming a talkgroup that doesn't exist, and so does a
 # range holding only 1003's calls as an empty one.
-iso() { psql "SELECT to_char($1 AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') $calls"; }
+iso() { psql "SELECT to_char(($1) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') $calls"; }
 from=$(iso "date_trunc('second', min(c.started_at))")
 to=$(iso "date_trunc('second', max(c.started_at)) + interval '2 s'")
 window="from=$from&to=$to"
