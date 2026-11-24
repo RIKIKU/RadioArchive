@@ -1,0 +1,23 @@
+{
+  "boot_id": 305419896,
+  "epoch_ms": 1764000000000,
+  "calls": {
+    "a": {"sys_num": 0, "call_num": 1, "start_time": 1764000000, "short_name": "ex", "talkgroup": 1001, "freq": 851012500},
+    "b": {"sys_num": 0, "call_num": 2, "start_time": 1764000000, "short_name": "ex", "talkgroup": 1001, "freq": 851025000}
+  },
+  "events": [
+    {"at_ms": 0, "type": "heartbeat", "systems": [
+      {"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 38.5}
+    ]},
+
+    {"at_ms": 0, "type": "transmission", "call": "a", "unit": 5001},
+    {"at_ms": 0, "type": "audio", "call": "a", "unit": 5001, "pcm": "tone-440hz-1s.pcm"},
+    {"at_ms": 1000, "type": "transmission", "call": "a", "unit": 5123},
+    {"at_ms": 1000, "type": "audio", "call": "a", "unit": 5123, "pcm": "noise-bursts-500ms.pcm"},
+    {"at_ms": 1600, "type": "call_end", "call": "a", "filename": "/app/media/ex/1001-1764000000_851012500.0-call_1.wav"},
+
+    {"at_ms": 500, "type": "transmission", "call": "b", "unit": 5100},
+    {"at_ms": 500, "type": "audio", "call": "b", "unit": 5100, "pcm": "tone-880hz-1500ms.pcm", "chunk_samples": 1600},
+    {"at_ms": 2200, "type": "call_end", "call": "b", "filename": "/app/media/ex/1001-1764000000_851025000.0-call_2.wav"}
+  ]
+}

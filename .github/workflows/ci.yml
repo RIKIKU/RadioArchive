@@ -1,9 +1,9 @@
 name: CI
 
-# Build, vet and test the server (issue #30), as PagerArchive's CI does:
-# actions pinned to commit SHAs, least-privilege permissions, and a time
-# limit on every job well above its usual time, so a hang fails in minutes
-# rather than after GitHub's 6 hours.
+# Build, vet and test the server and the recorder client (issues #30, #32),
+# as PagerArchive's CI does: actions pinned to commit SHAs, least-privilege
+# permissions, and a time limit on every job well above its usual time, so a
+# hang fails in minutes rather than after GitHub's 6 hours.
 
 on:
   push:
@@ -46,6 +46,9 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+      # The recorder client's Opus encoder (internal/opus) is cgo + libopus.
+      - name: libopus
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libopus-dev pkg-config
       - name: gofmt
         run: test -z "$(gofmt -l . | tee /dev/stderr)"
       - name: go vet
@@ -54,14 +57,35 @@ jobs:
         run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 diff
       - name: Build
         run: CGO_ENABLED=0 go build ./...
-      - name: Tests (unit and integration against PostgreSQL)
+      - name: The API doesn't depend on this repo's cgo packages
+        # A38 keeps the API cgo-free; only the recorder client uses libopus.
+        run: |
+          cgo=$(go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./cmd/radioarchive | grep '^github.com/RIKIKU/' || true)
+          if [ -n "$cgo" ]; then echo "FAIL: the API imports cgo packages: $cgo" >&2; exit 1; fi
+          echo "ok: the API imports none of this repo's cgo packages"
+      - name: Tests (unit, integration against PostgreSQL, and A1 end to end in process)
         run: go test -count=1 -v ./...
+
+  # The recorder client's image, for both of the recorder host's
+  # architectures (SPEC.md R3). The Dockerfile cross-compiles, so no
+  # emulation is needed.
+  client-image:
+    name: Recorder client image (amd64 + arm64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build for linux/amd64 and linux/arm64 with buildx
+        run: |
+          docker buildx create --name multi --driver docker-container --use
+          docker buildx build --platform linux/amd64,linux/arm64 -f recorder/client/Dockerfile .
 
   # A38 (SPEC.md section 8): the API is built with CGO_ENABLED=0 on
   # distroless static, and the check fails otherwise. Then the compose stack
-  # runs: the API applies its migrations and /healthz answers.
+  # runs: the API applies its migrations and /healthz answers, and A1 runs
+  # end to end through the real images.
   image:
-    name: Image (A38) and compose stack
+    name: Image (A38), compose stack and A1 end to end
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -101,7 +125,11 @@ jobs:
           curl --fail --silent --show-error http://127.0.0.1:8080/healthz
           docker compose exec -T db psql -U radioarchive -d radioarchive -tAc \
             "SELECT max(version_id) FROM goose_db_version" | tee version.txt
-          test "$(cat version.txt)" -ge 1
+          test "$(cat version.txt)" -ge 2
+      - name: A1 end to end (fake recorder, client image, API image, PostgreSQL)
+        run: |
+          docker build -f recorder/client/Dockerfile -t radioarchive-client:ci .
+          sh scripts/ci/e2e-a1.sh radioarchive-client:ci
       - name: Logs
         if: always()
         run: docker compose logs

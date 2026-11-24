@@ -3,3 +3,49 @@
 //   sqlc v1.31.1
 
 package db
+
+import (
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+type Call struct {
+	ID                pgtype.UUID
+	RecorderID        int64
+	SysNum            int32
+	CallNum           int64
+	StartTime         int64
+	SystemID          int64
+	ShortName         string
+	Talkgroup         int32
+	PatchedTalkgroups []int32
+	StartedAt         pgtype.Timestamptz
+	EndedAt           pgtype.Timestamptz
+	LiveFirstPcmAt    pgtype.Timestamptz
+	LiveFrames        int64
+	RecordingPath     *string
+	RecordingSize     *int64
+	RecordingSha256   []byte
+	RecordingAt       pgtype.Timestamptz
+}
+
+type Recorder struct {
+	ID           int64
+	Name         string
+	KeyHash      []byte
+	CreatedAt    pgtype.Timestamptz
+	KeyRotatedAt pgtype.Timestamptz
+	RetiredAt    pgtype.Timestamptz
+}
+
+type System struct {
+	ID        int64
+	Name      string
+	CreatedAt pgtype.Timestamptz
+}
+
+type Transmission struct {
+	CallID     pgtype.UUID
+	OffsetMs   int32
+	Unit       int64
+	DurationMs *int32
+}
