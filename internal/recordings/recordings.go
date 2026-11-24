@@ -52,6 +52,9 @@ func Open(dir, rel string, modTime time.Time) (*File, error) {
 // Close closes the file.
 func (f *File) Close() error { return f.f.Close() }
 
+// ReadAt reads the file at off (io.ReaderAt), as a zip streams it (R65).
+func (f *File) ReadAt(p []byte, off int64) (int, error) { return f.f.ReadAt(p, off) }
+
 // Serve answers r with the file, with range requests (http.ServeContent),
 // as audio/ogg with this Cache-Control.
 func (f *File) Serve(w http.ResponseWriter, r *http.Request, cacheControl string) {

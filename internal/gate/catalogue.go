@@ -73,6 +73,12 @@ func (c *Catalogue) talkgroup(system int64, talkgroup int32) (CatalogueTalkgroup
 	return c.Talkgroups[i], true
 }
 
+// Talkgroup finds a public talkgroup in the catalogue: a zip's index gives
+// its groups (R65).
+func (c *Catalogue) Talkgroup(system int64, talkgroup int32) (CatalogueTalkgroup, bool) {
+	return c.talkgroup(system, talkgroup)
+}
+
 // delayOf is the delay of a call on talkgroup patched with patched (R23):
 // the longest in its patch, since the call is heard on each of them. A
 // patched ID the system doesn't list has none, as it has no state.

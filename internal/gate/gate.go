@@ -357,5 +357,9 @@ func (r *Recording) Serve(w http.ResponseWriter, req *http.Request) {
 	r.f.Serve(w, req, CacheControl)
 }
 
+// ReadAt reads the recording at off (io.ReaderAt), for a zip to stream it
+// (R65).
+func (r *Recording) ReadAt(p []byte, off int64) (int, error) { return r.f.ReadAt(p, off) }
+
 // Close closes the recording.
 func (r *Recording) Close() error { return r.f.Close() }
