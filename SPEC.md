@@ -92,7 +92,7 @@ Decided in [What can trunk-recorder send while a call is still in progress?](htt
 - **R3. Recorder client.** Go with cgo and libopus, beside trunk-recorder (container or systemd; amd64 + arm64). It:
   - encodes live PCM to Opus as it arrives (R4) and forwards the frames at once;
   - on `call_end`, reads the finished recording and encodes it to Opus/Ogg (R4), then uploads it;
-  - holds **one authenticated connection** to the server using its own **client key** (R10);
+  - uses **one client identity**, its own **client key** (R10), for its live WebSocket and its recording uploads (ADR 0002);
   - relays the plugin's heartbeat;
   - de-duplicates the copies trunk-recorder sends of a patched call, so each call is sent once (R16).
 - **R4. Encoding.** 12 kbit/s VBR, narrowband, `OPUS_APPLICATION_VOIP`, 20 ms frames, for both live frames and recordings. Recordings are Ogg/Opus with no comment padding.
