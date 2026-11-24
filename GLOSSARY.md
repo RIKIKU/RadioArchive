@@ -86,8 +86,12 @@ _Avoid_: Cart, queue, playlist
 RadioArchive and PagerArchive deployed together so a user moves between them as if they were one app, while each remains deployable on its own.
 _Avoid_: Suite, merged app
 
+**System**:
+One trunked radio network whose talkgroups and units are numbered together; recorders feed calls into it.
+_Avoid_: Site, network
+
 **Recorder**:
-One trunk-recorder installation capturing a radio system; a deployment may have several, each hearing different calls.
+One trunk-recorder installation capturing one or more systems; a deployment may have several, each hearing different calls.
 _Avoid_: Scanner, receiver, site
 
 **Recorder client**:
