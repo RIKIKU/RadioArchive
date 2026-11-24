@@ -82,6 +82,8 @@ trunk-recorder ──(recorder plugin)──UDP localhost──▶ recorder clie
 
 Decided in [What can trunk-recorder send while a call is still in progress?](https://github.com/RIKIKU/RadioArchive/issues/2), [Which technology stack does RadioArchive use?](https://github.com/RIKIKU/RadioArchive/issues/7), [How much disk does a month of recordings need?](https://github.com/RIKIKU/RadioArchive/issues/21) and [How is RadioArchive deployed, upgraded, backed up and monitored?](https://github.com/RIKIKU/RadioArchive/issues/24).
 
+v1 supports P25 systems only; analog systems are ignored (owner, 2026-11-24).
+
 - **R1. Recorder plugin.** A thin C++ trunk-recorder plugin in this repo (`recorder/plugin/`), built in CI against a **pinned trunk-recorder release** (v5.2.1 at the time of writing). For each call it sends, to UDP on localhost only:
   - the PCM audio as trunk-recorder decodes it, tagged with `sys_num`, `call_num`, `start_time`, the system's `shortName`, talkgroup, patched talkgroups and the transmitting unit;
   - a transmission boundary whenever the unit talking changes;

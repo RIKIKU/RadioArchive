@@ -1,0 +1,36 @@
+{
+  "ver": 2,
+  "captureDir": "/app/media",
+  "tempDir": "/app/tmp",
+  "logLevel": "info",
+  "audioStreaming": true,
+  "callTimeout": 3,
+  "sources": [
+    {
+      "driver": "osmosdr",
+      "device": "file=/app/fixture/fixture.sigmf-data,rate=240000,freq=851000000,repeat=false,throttle=true",
+      "center": 851000000,
+      "rate": 240000,
+      "gain": 0,
+      "digitalRecorders": 2
+    }
+  ],
+  "systems": [
+    {
+      "shortName": "ex",
+      "type": "p25",
+      "control_channels": [850950000],
+      "modulation": "fsk4",
+      "audioArchive": true,
+      "callLog": true,
+      "minDuration": 0
+    }
+  ],
+  "plugins": [
+    {
+      "name": "radioarchive",
+      "library": "libradioarchive.so",
+      "port": 9850
+    }
+  ]
+}
