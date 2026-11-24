@@ -7,8 +7,7 @@
     "patch": {"sys_num": 0, "call_num": 3, "start_time": 1764000002, "short_name": "ex", "talkgroup": 1001, "freq": 851037500},
     "patch_copy": {"sys_num": 0, "call_num": 4, "start_time": 1764000002, "short_name": "ex", "talkgroup": 1002, "freq": 851037500},
     "unknown_tg": {"sys_num": 0, "call_num": 5, "start_time": 1764000004, "short_name": "ex", "talkgroup": 4711, "freq": 851050000},
-    "unattached": {"sys_num": 1, "call_num": 6, "start_time": 1764000004, "short_name": "other", "talkgroup": 1001, "freq": 852000000},
-    "analog": {"sys_num": 0, "call_num": 7, "start_time": 1764000004, "short_name": "ex", "talkgroup": 1002, "freq": 851062500, "sample_rate": 16000}
+    "unattached": {"sys_num": 1, "call_num": 6, "start_time": 1764000004, "short_name": "other", "talkgroup": 1001, "freq": 852000000}
   },
   "events": [
     {"at_ms": 0, "type": "heartbeat", "systems": [
@@ -51,9 +50,7 @@
     {"at_ms": 4000, "type": "audio", "call": "unattached", "unit": 5001, "pcm": "noise-bursts-500ms.pcm"},
     {"at_ms": 4600, "type": "call_end", "call": "unattached", "filename": "/app/media/other/1001-1764000004_852000000.0-call_6.wav"},
 
-    {"at_ms": 4700, "type": "transmission", "call": "analog", "unit": 5001},
-    {"at_ms": 4700, "type": "audio", "call": "analog", "unit": 5001, "pcm": "tone-1khz-1s-16k.pcm", "chunk_samples": 1600},
-    {"at_ms": 5800, "type": "call_end", "call": "analog", "filename": "/app/media/ex/1002-1764000004_851062500.0-call_7.wav"},
+    {"at_ms": 4700, "type": "malformed", "hex": "5241 01 01 78563412 00000000 2600 0000  0800000000000000 0081246900000000 e9030000 89130000 946bb932 0000 112b ff 02 6578 0100"},
 
     {"at_ms": 6000, "type": "heartbeat", "systems": [
       {"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 0},

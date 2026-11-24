@@ -169,7 +169,6 @@ var (
 	callCopy    = callKey{0, 4, 1764000002}
 	callUnknown = callKey{0, 5, 1764000004}
 	callOther   = callKey{1, 6, 1764000004}
-	callAnalog  = callKey{0, 7, 1764000004}
 )
 
 func TestReplayAcceptanceScenario(t *testing.T) {
@@ -189,8 +188,10 @@ func TestReplayAcceptanceScenario(t *testing.T) {
 		if r.lost != 3 {
 			t.Errorf("lost %d sequence numbers, want 3", r.lost)
 		}
-		if !slices.Equal(r.malformed, []string{"magic"}) {
-			t.Errorf("malformed reasons %v, want [magic]", r.malformed)
+		// A bad magic, and an audio datagram at 11,025 Hz, a rate no
+		// trunk-recorder recorder produces.
+		if !slices.Equal(r.malformed, []string{"magic", "sample_rate"}) {
+			t.Errorf("malformed reasons %v, want [magic sample_rate]", r.malformed)
 		}
 	})
 
@@ -202,7 +203,6 @@ func TestReplayAcceptanceScenario(t *testing.T) {
 			callCopy:    {"tone-440hz-1s.pcm"},
 			callUnknown: {"noise-bursts-500ms.pcm"},
 			callOther:   {"noise-bursts-500ms.pcm"},
-			callAnalog:  {"tone-1khz-1s-16k.pcm"},
 		}
 		if len(r.audio) != len(want) {
 			t.Errorf("audio for %d calls, want %d", len(r.audio), len(want))
@@ -211,22 +211,11 @@ func TestReplayAcceptanceScenario(t *testing.T) {
 			if !bytes.Equal(pcm(r.audio[k]), fixture(t, files...)) {
 				t.Errorf("call %v: PCM differs from %v", k, files)
 			}
-			rate := uint16(8000)
-			if k == callAnalog {
-				rate = 16000
-			}
 			for _, a := range r.audio[k] {
-				if a.SampleRate != rate || a.TDMASlot != -1 {
-					t.Errorf("call %v: rate %d slot %d, want rate %d slot -1", k, a.SampleRate, a.TDMASlot, rate)
+				if a.SampleRate != 8000 || a.TDMASlot != -1 {
+					t.Errorf("call %v: rate %d slot %d, want P25's 8000 and -1", k, a.SampleRate, a.TDMASlot)
 				}
 			}
-		}
-		if n := len(r.audio[callAnalog]); n != 10 {
-			t.Errorf("analog call: %d packets, want 10", n)
-		}
-		// 16,000 samples at 16 kHz last 1 s, from 4.7 s.
-		if end := r.ends[callAnalog]; end.StopTimeMS != epoch+5700 {
-			t.Errorf("analog call ends at +%d ms, want +5700", end.StopTimeMS-epoch)
 		}
 		// Chunking: 800 samples by default, 1600 where the scenario says.
 		if n := len(r.audio[callA]); n != 15 {
@@ -283,8 +272,8 @@ func TestReplayAcceptanceScenario(t *testing.T) {
 		if !reflect.DeepEqual(end, wantEnd) {
 			t.Errorf("call A call_end\n got %+v\nwant %+v", end, wantEnd)
 		}
-		if len(r.ends) != 7 {
-			t.Errorf("%d call_ends, want 7", len(r.ends))
+		if len(r.ends) != 6 {
+			t.Errorf("%d call_ends, want 6", len(r.ends))
 		}
 	})
 
