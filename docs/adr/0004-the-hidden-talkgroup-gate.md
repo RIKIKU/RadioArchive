@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-24, by the owner)
 ---
 
 # 4. The hidden-talkgroup gate
