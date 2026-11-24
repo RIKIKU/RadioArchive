@@ -1,0 +1,63 @@
+{
+  "boot_id": 305419896,
+  "epoch_ms": 1764000000000,
+  "calls": {
+    "a": {"sys_num": 0, "call_num": 1, "start_time": 1764000000, "short_name": "ex", "talkgroup": 1001, "freq": 851012500},
+    "b": {"sys_num": 0, "call_num": 2, "start_time": 1764000000, "short_name": "ex", "talkgroup": 1001, "freq": 851025000},
+    "patch": {"sys_num": 0, "call_num": 3, "start_time": 1764000002, "short_name": "ex", "talkgroup": 1001, "freq": 851037500},
+    "patch_copy": {"sys_num": 0, "call_num": 4, "start_time": 1764000002, "short_name": "ex", "talkgroup": 1002, "freq": 851037500},
+    "unknown_tg": {"sys_num": 0, "call_num": 5, "start_time": 1764000004, "short_name": "ex", "talkgroup": 4711, "freq": 851050000},
+    "unattached": {"sys_num": 1, "call_num": 6, "start_time": 1764000004, "short_name": "other", "talkgroup": 1001, "freq": 852000000},
+    "analog": {"sys_num": 0, "call_num": 7, "start_time": 1764000004, "short_name": "ex", "talkgroup": 1002, "freq": 851062500, "sample_rate": 16000}
+  },
+  "events": [
+    {"at_ms": 0, "type": "heartbeat", "systems": [
+      {"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 38.5},
+      {"sys_num": 1, "short_name": "other", "system_type": "p25", "decode_rate": 40}
+    ]},
+
+    {"at_ms": 0, "type": "transmission", "call": "a", "unit": 5001},
+    {"at_ms": 0, "type": "audio", "call": "a", "unit": 5001, "pcm": "tone-440hz-1s.pcm"},
+    {"at_ms": 1000, "type": "transmission", "call": "a", "unit": 5123},
+    {"at_ms": 1000, "type": "audio", "call": "a", "unit": 5123, "pcm": "noise-bursts-500ms.pcm"},
+    {"at_ms": 1600, "type": "call_end", "call": "a", "filename": "/app/media/ex/1001-1764000000_851012500.0-call_1.wav"},
+
+    {"at_ms": 500, "type": "transmission", "call": "b", "unit": 5100},
+    {"at_ms": 500, "type": "audio", "call": "b", "unit": 5100, "pcm": "tone-880hz-1500ms.pcm", "chunk_samples": 1600},
+    {"at_ms": 2200, "type": "call_end", "call": "b", "filename": "/app/media/ex/1001-1764000000_851025000.0-call_2.wav"},
+
+    {"at_ms": 2000, "type": "gap", "count": 3},
+
+    {"at_ms": 2000, "type": "transmission", "call": "patch", "unit": 5001, "patched_talkgroups": [1002]},
+    {"at_ms": 2000, "type": "audio", "call": "patch", "unit": 5001, "pcm": "tone-440hz-1s.pcm"},
+    {"at_ms": 3200, "type": "call_end", "call": "patch", "filename": "/app/media/ex/1001-1764000002_851037500.0-call_3.wav"},
+
+    {"at_ms": 2100, "type": "transmission", "call": "patch_copy", "unit": 5001, "patched_talkgroups": [1001]},
+    {"at_ms": 2100, "type": "audio", "call": "patch_copy", "unit": 5001, "pcm": "tone-440hz-1s.pcm"},
+    {"at_ms": 3300, "type": "call_end", "call": "patch_copy", "filename": "/app/media/ex/1002-1764000002_851037500.0-call_4.wav"},
+
+    {"at_ms": 3000, "type": "heartbeat", "systems": [
+      {"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 0},
+      {"sys_num": 1, "short_name": "other", "system_type": "p25", "decode_rate": 40}
+    ]},
+
+    {"at_ms": 3400, "type": "malformed", "hex": "5858 01 01 00000000 00000000 0000 0000"},
+
+    {"at_ms": 4000, "type": "transmission", "call": "unknown_tg", "unit": 5150},
+    {"at_ms": 4000, "type": "audio", "call": "unknown_tg", "unit": 5150, "pcm": "noise-bursts-500ms.pcm"},
+    {"at_ms": 4600, "type": "call_end", "call": "unknown_tg", "filename": "/app/media/ex/4711-1764000004_851050000.0-call_5.wav"},
+
+    {"at_ms": 4000, "type": "transmission", "call": "unattached", "unit": 5001},
+    {"at_ms": 4000, "type": "audio", "call": "unattached", "unit": 5001, "pcm": "noise-bursts-500ms.pcm"},
+    {"at_ms": 4600, "type": "call_end", "call": "unattached", "filename": "/app/media/other/1001-1764000004_852000000.0-call_6.wav"},
+
+    {"at_ms": 4700, "type": "transmission", "call": "analog", "unit": 5001},
+    {"at_ms": 4700, "type": "audio", "call": "analog", "unit": 5001, "pcm": "tone-1khz-1s-16k.pcm", "chunk_samples": 1600},
+    {"at_ms": 5800, "type": "call_end", "call": "analog", "filename": "/app/media/ex/1002-1764000004_851062500.0-call_7.wav"},
+
+    {"at_ms": 6000, "type": "heartbeat", "systems": [
+      {"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 0},
+      {"sys_num": 1, "short_name": "other", "system_type": "p25", "decode_rate": 39}
+    ]}
+  ]
+}
