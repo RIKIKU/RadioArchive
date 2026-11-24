@@ -15,8 +15,12 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://radioarchive:${POSTGRES_PASSWORD:-radioarchive}@db:5432/radioarchive?sslmode=disable
+      RECORDINGS_DIR: /var/lib/radioarchive/recordings
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    volumes:
+      # Recordings are files on a volume, never in the database (R20).
+      - recordings:/var/lib/radioarchive/recordings
     depends_on:
       db:
         condition: service_healthy
@@ -37,7 +41,7 @@ services:
       POSTGRES_DB: radioarchive
     # For the Go tests on the host (README.md).
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       # postgres:18 keeps its data in a versioned folder under this one.
       - db:/var/lib/postgresql
@@ -51,3 +55,4 @@ services:
 
 volumes:
   db:
+  recordings:

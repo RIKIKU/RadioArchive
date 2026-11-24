@@ -7,7 +7,241 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const addLiveFrames = `-- name: AddLiveFrames :exec
+UPDATE calls SET live_frames = live_frames + $1 WHERE id = $2
+`
+
+type AddLiveFramesParams struct {
+	Frames int64
+	ID     pgtype.UUID
+}
+
+func (q *Queries) AddLiveFrames(ctx context.Context, arg AddLiveFramesParams) error {
+	_, err := q.db.Exec(ctx, addLiveFrames, arg.Frames, arg.ID)
+	return err
+}
+
+const addLiveTransmission = `-- name: AddLiveTransmission :exec
+INSERT INTO transmissions (call_id, offset_ms, unit)
+SELECT c.id, $1, $2
+FROM calls c
+WHERE c.id = $3 AND c.recording_path IS NULL
+ON CONFLICT DO NOTHING
+`
+
+type AddLiveTransmissionParams struct {
+	OffsetMs int32
+	Unit     int64
+	CallID   pgtype.UUID
+}
+
+// Ignored once the recording has stored the call's transmissions.
+func (q *Queries) AddLiveTransmission(ctx context.Context, arg AddLiveTransmissionParams) error {
+	_, err := q.db.Exec(ctx, addLiveTransmission, arg.OffsetMs, arg.Unit, arg.CallID)
+	return err
+}
+
+const addTransmission = `-- name: AddTransmission :exec
+INSERT INTO transmissions (call_id, offset_ms, unit, duration_ms)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (call_id, offset_ms) DO UPDATE
+SET unit = EXCLUDED.unit, duration_ms = EXCLUDED.duration_ms
+`
+
+type AddTransmissionParams struct {
+	CallID     pgtype.UUID
+	OffsetMs   int32
+	Unit       int64
+	DurationMs *int32
+}
+
+func (q *Queries) AddTransmission(ctx context.Context, arg AddTransmissionParams) error {
+	_, err := q.db.Exec(ctx, addTransmission,
+		arg.CallID,
+		arg.OffsetMs,
+		arg.Unit,
+		arg.DurationMs,
+	)
+	return err
+}
+
+const createRecorder = `-- name: CreateRecorder :one
+
+INSERT INTO recorders (name, key_hash)
+VALUES ($1, $2)
+RETURNING id
+`
+
+type CreateRecorderParams struct {
+	Name    string
+	KeyHash []byte
+}
+
+// Recorders (SPEC.md R10). Keys are stored as their SHA-256 only.
+func (q *Queries) CreateRecorder(ctx context.Context, arg CreateRecorderParams) (int64, error) {
+	row := q.db.QueryRow(ctx, createRecorder, arg.Name, arg.KeyHash)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const deleteTransmissions = `-- name: DeleteTransmissions :exec
+DELETE FROM transmissions WHERE call_id = $1
+`
+
+func (q *Queries) DeleteTransmissions(ctx context.Context, callID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteTransmissions, callID)
+	return err
+}
+
+const endLiveCall = `-- name: EndLiveCall :exec
+UPDATE calls
+SET ended_at = CASE WHEN recording_path IS NULL THEN $1 ELSE ended_at END,
+    patched_talkgroups = CASE WHEN recording_path IS NULL THEN $2::integer[]
+                              ELSE patched_talkgroups END,
+    live_frames = live_frames + $3
+WHERE id = $4
+`
+
+type EndLiveCallParams struct {
+	EndedAt           pgtype.Timestamptz
+	PatchedTalkgroups []int32
+	Frames            int64
+	ID                pgtype.UUID
+}
+
+// The recording's end time and patched talkgroups win over the live ones.
+func (q *Queries) EndLiveCall(ctx context.Context, arg EndLiveCallParams) error {
+	_, err := q.db.Exec(ctx, endLiveCall,
+		arg.EndedAt,
+		arg.PatchedTalkgroups,
+		arg.Frames,
+		arg.ID,
+	)
+	return err
+}
+
+const ensureSystem = `-- name: EnsureSystem :one
+
+INSERT INTO systems (name) VALUES ($1)
+ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+RETURNING id
+`
+
+// Systems: one, for now (issue #34 brings attachments).
+func (q *Queries) EnsureSystem(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRow(ctx, ensureSystem, name)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const listRecorders = `-- name: ListRecorders :many
+SELECT id, name, created_at, key_rotated_at, retired_at
+FROM recorders
+ORDER BY name
+`
+
+type ListRecordersRow struct {
+	ID           int64
+	Name         string
+	CreatedAt    pgtype.Timestamptz
+	KeyRotatedAt pgtype.Timestamptz
+	RetiredAt    pgtype.Timestamptz
+}
+
+func (q *Queries) ListRecorders(ctx context.Context) ([]ListRecordersRow, error) {
+	rows, err := q.db.Query(ctx, listRecorders)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecordersRow
+	for rows.Next() {
+		var i ListRecordersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.KeyRotatedAt,
+			&i.RetiredAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockCallForRecording = `-- name: LockCallForRecording :one
+
+INSERT INTO calls (recorder_id, sys_num, call_num, start_time, system_id, short_name,
+                   talkgroup, patched_talkgroups, started_at, ended_at)
+VALUES ($1, $2, $3, $4,
+        $5, $6, $7,
+        $8::integer[], $9, $10)
+ON CONFLICT (recorder_id, sys_num, call_num, start_time) DO UPDATE
+SET recorder_id = calls.recorder_id
+RETURNING id, recording_sha256
+`
+
+type LockCallForRecordingParams struct {
+	RecorderID        int64
+	SysNum            int32
+	CallNum           int64
+	StartTime         int64
+	SystemID          int64
+	ShortName         string
+	Talkgroup         int32
+	PatchedTalkgroups []int32
+	StartedAt         pgtype.Timestamptz
+	EndedAt           pgtype.Timestamptz
+}
+
+type LockCallForRecordingRow struct {
+	ID              pgtype.UUID
+	RecordingSha256 []byte
+}
+
+// Recordings (R19, R20). In one transaction: lock or create the call, then
+// store the recording on it once.
+// Creates the call if the live call never reached the server, and locks
+// its row either way.
+func (q *Queries) LockCallForRecording(ctx context.Context, arg LockCallForRecordingParams) (LockCallForRecordingRow, error) {
+	row := q.db.QueryRow(ctx, lockCallForRecording,
+		arg.RecorderID,
+		arg.SysNum,
+		arg.CallNum,
+		arg.StartTime,
+		arg.SystemID,
+		arg.ShortName,
+		arg.Talkgroup,
+		arg.PatchedTalkgroups,
+		arg.StartedAt,
+		arg.EndedAt,
+	)
+	var i LockCallForRecordingRow
+	err := row.Scan(&i.ID, &i.RecordingSha256)
+	return i, err
+}
+
+const notifyRecorderKeyChanged = `-- name: NotifyRecorderKeyChanged :exec
+SELECT pg_notify('radioarchive_recorder_key', $1::bigint::text)
+`
+
+// Tells every running API, at commit, to recheck this recorder's live
+// connections (the old key stops at once).
+func (q *Queries) NotifyRecorderKeyChanged(ctx context.Context, recorderID int64) error {
+	_, err := q.db.Exec(ctx, notifyRecorderKeyChanged, recorderID)
+	return err
+}
 
 const ping = `-- name: Ping :one
 SELECT 1::int AS ok
@@ -19,4 +253,165 @@ func (q *Queries) Ping(ctx context.Context) (int32, error) {
 	var ok int32
 	err := row.Scan(&ok)
 	return ok, err
+}
+
+const recorderByKeyHash = `-- name: RecorderByKeyHash :one
+SELECT id, name
+FROM recorders
+WHERE key_hash = $1 AND retired_at IS NULL
+`
+
+type RecorderByKeyHashRow struct {
+	ID   int64
+	Name string
+}
+
+func (q *Queries) RecorderByKeyHash(ctx context.Context, keyHash []byte) (RecorderByKeyHashRow, error) {
+	row := q.db.QueryRow(ctx, recorderByKeyHash, keyHash)
+	var i RecorderByKeyHashRow
+	err := row.Scan(&i.ID, &i.Name)
+	return i, err
+}
+
+const recorderKeyIsCurrent = `-- name: RecorderKeyIsCurrent :one
+SELECT EXISTS (
+    SELECT 1 FROM recorders
+    WHERE id = $1 AND key_hash = $2 AND retired_at IS NULL
+) AS current
+`
+
+type RecorderKeyIsCurrentParams struct {
+	ID      int64
+	KeyHash []byte
+}
+
+func (q *Queries) RecorderKeyIsCurrent(ctx context.Context, arg RecorderKeyIsCurrentParams) (bool, error) {
+	row := q.db.QueryRow(ctx, recorderKeyIsCurrent, arg.ID, arg.KeyHash)
+	var current bool
+	err := row.Scan(&current)
+	return current, err
+}
+
+const retireRecorder = `-- name: RetireRecorder :one
+UPDATE recorders
+SET key_hash = NULL, retired_at = now()
+WHERE name = $1 AND retired_at IS NULL
+RETURNING id
+`
+
+// No row: unknown or already retired.
+func (q *Queries) RetireRecorder(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRow(ctx, retireRecorder, name)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const setCallRecording = `-- name: SetCallRecording :exec
+UPDATE calls
+SET system_id = $1,
+    short_name = $2,
+    talkgroup = $3,
+    patched_talkgroups = $4::integer[],
+    started_at = $5,
+    ended_at = $6,
+    recording_path = $7,
+    recording_size = $8,
+    recording_sha256 = $9,
+    recording_at = now()
+WHERE id = $10
+`
+
+type SetCallRecordingParams struct {
+	SystemID          int64
+	ShortName         string
+	Talkgroup         int32
+	PatchedTalkgroups []int32
+	StartedAt         pgtype.Timestamptz
+	EndedAt           pgtype.Timestamptz
+	RecordingPath     *string
+	RecordingSize     *int64
+	RecordingSha256   []byte
+	ID                pgtype.UUID
+}
+
+func (q *Queries) SetCallRecording(ctx context.Context, arg SetCallRecordingParams) error {
+	_, err := q.db.Exec(ctx, setCallRecording,
+		arg.SystemID,
+		arg.ShortName,
+		arg.Talkgroup,
+		arg.PatchedTalkgroups,
+		arg.StartedAt,
+		arg.EndedAt,
+		arg.RecordingPath,
+		arg.RecordingSize,
+		arg.RecordingSha256,
+		arg.ID,
+	)
+	return err
+}
+
+const setRecorderKey = `-- name: SetRecorderKey :one
+UPDATE recorders
+SET key_hash = $1, key_rotated_at = now()
+WHERE name = $2 AND retired_at IS NULL
+RETURNING id
+`
+
+type SetRecorderKeyParams struct {
+	KeyHash []byte
+	Name    string
+}
+
+// Rotates an active recorder's key. No row: unknown or retired.
+func (q *Queries) SetRecorderKey(ctx context.Context, arg SetRecorderKeyParams) (int64, error) {
+	row := q.db.QueryRow(ctx, setRecorderKey, arg.KeyHash, arg.Name)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const upsertLiveCall = `-- name: UpsertLiveCall :one
+
+INSERT INTO calls (recorder_id, sys_num, call_num, start_time, system_id, short_name,
+                   talkgroup, patched_talkgroups, started_at, live_first_pcm_at)
+VALUES ($1, $2, $3, $4,
+        $5, $6, $7,
+        $8::integer[], $9, $10)
+ON CONFLICT (recorder_id, sys_num, call_num, start_time) DO UPDATE
+SET live_first_pcm_at = COALESCE(calls.live_first_pcm_at, EXCLUDED.live_first_pcm_at)
+RETURNING id
+`
+
+type UpsertLiveCallParams struct {
+	RecorderID        int64
+	SysNum            int32
+	CallNum           int64
+	StartTime         int64
+	SystemID          int64
+	ShortName         string
+	Talkgroup         int32
+	PatchedTalkgroups []int32
+	StartedAt         pgtype.Timestamptz
+	LiveFirstPcmAt    pgtype.Timestamptz
+}
+
+// Live calls. A call_start creates the call, or finds the one its recording
+// already created; it never overwrites what a recording stored.
+func (q *Queries) UpsertLiveCall(ctx context.Context, arg UpsertLiveCallParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, upsertLiveCall,
+		arg.RecorderID,
+		arg.SysNum,
+		arg.CallNum,
+		arg.StartTime,
+		arg.SystemID,
+		arg.ShortName,
+		arg.Talkgroup,
+		arg.PatchedTalkgroups,
+		arg.StartedAt,
+		arg.LiveFirstPcmAt,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }

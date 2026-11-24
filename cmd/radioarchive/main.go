@@ -1,18 +1,24 @@
 // Command radioarchive is the RadioArchive server.
 //
-//	radioarchive [serve]     run the API (the default)
-//	radioarchive healthcheck GET /healthz on the local API; exit 0 if it answers ok
+//	radioarchive [serve]                    run the API (the default)
+//	radioarchive healthcheck                GET /healthz on the local API; exit 0 if it answers ok
+//	radioarchive recorder add "<name>"      create a recorder and print its client key once
+//	radioarchive recorder list              list recorders
+//	radioarchive recorder rotate-key <name> give a recorder a new key; the old one stops at once
+//	radioarchive recorder retire <name>     revoke a recorder's key for good; its calls stay
 //
 // Settings come from the environment:
 //
-//	DATABASE_URL  PostgreSQL connection URL (required by serve)
-//	LISTEN_ADDR   address to listen on (default :8080)
+//	DATABASE_URL    PostgreSQL connection URL (required by serve and recorder)
+//	LISTEN_ADDR     address to listen on (default :8080)
+//	RECORDINGS_DIR  the recordings volume (default /var/lib/radioarchive/recordings)
 package main
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -23,6 +29,7 @@ import (
 
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
+	"github.com/RIKIKU/RadioArchive/internal/version"
 )
 
 func main() {
@@ -37,8 +44,15 @@ func main() {
 		err = serve(log)
 	case "healthcheck":
 		err = healthcheck()
+	case "recorder":
+		err = recorderMain(os.Args[2:], os.Stdout)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "radioarchive recorder:", err)
+			os.Exit(1)
+		}
+		return
 	default:
-		err = fmt.Errorf("unknown command %q (want serve or healthcheck)", cmd)
+		err = fmt.Errorf("unknown command %q (want serve, healthcheck or recorder)", cmd)
 	}
 	if err != nil {
 		log.Error(cmd+" failed", "error", err)
@@ -53,31 +67,51 @@ func listenAddr() string {
 	return ":8080"
 }
 
+func recordingsDir() string {
+	if d := os.Getenv("RECORDINGS_DIR"); d != "" {
+		return d
+	}
+	return "/var/lib/radioarchive/recordings"
+}
+
+func openStore(ctx context.Context) (*store.Store, error) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		return nil, errors.New("DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	return store.Open(ctx, url)
+}
+
 func serve(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
-		return errors.New("DATABASE_URL is not set")
-	}
-	startCtx, cancel := context.WithTimeout(ctx, time.Minute)
-	st, err := store.Open(startCtx, url)
-	cancel()
+	st, err := openStore(ctx)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
 	log.Info("migrations applied")
 
+	rs, err := server.NewRecorders(st, log, server.RecordersConfig{
+		RecordingsDir: recordingsDir(),
+		ServerVersion: version.Version,
+	})
+	if err != nil {
+		return err
+	}
+	go rs.Run(ctx)
+
 	srv := &http.Server{
 		Addr:              listenAddr(),
-		Handler:           server.New(st, log),
+		Handler:           server.New(st, log, server.WithRecorders(rs)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	log.Info("listening", "addr", srv.Addr)
+	log.Info("listening", "addr", srv.Addr, "version", version.Version)
 
 	select {
 	case err := <-errc:
@@ -88,6 +122,17 @@ func serve(log *slog.Logger) error {
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutCtx)
+}
+
+func recorderMain(args []string, out io.Writer) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	st, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	return recorderCommand(ctx, st, args, out)
 }
 
 // healthcheck is for the container's health check: the image is distroless
