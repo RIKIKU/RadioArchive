@@ -1,6 +1,6 @@
 {
 	"extends": "$app/tsconfig",
-	"include": ["src", "tests", "*"],
+	"include": ["src", "tests", "signin-tests", "*"],
 	"compilerOptions": {
 		"allowJs": true,
 		"checkJs": true,

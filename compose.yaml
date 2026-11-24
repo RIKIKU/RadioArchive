@@ -1,11 +1,74 @@
 # RadioArchive for development and tests: the API, built from this checkout,
-# and its own PostgreSQL. Not the release's compose file (SPEC.md R85).
+# its own PostgreSQL, Authentik for listeners' sign-in (ADR 0009) and a mail
+# catcher in place of a mail server. Not the release's compose file
+# (SPEC.md R85).
 #
+#   sh scripts/dev-env.sh > .env      # made-up secrets, once
 #   docker compose up --build --wait
 #   curl http://127.0.0.1:8080/healthz
 #
-# The API applies its migrations at start, then answers /healthz.
+# The API applies its migrations at start, then answers /healthz. It doesn't
+# wait for Authentik, which takes a minute or two on its first start:
+# listening never needs it (P3).
 name: radioarchive
+
+x-authentik: &authentik
+  image: ghcr.io/goauthentik/server:2026.8
+  restart: unless-stopped
+  # TCP keepalives, so a database connection that died without being closed
+  # fails within about a minute and Authentik reconnects, as PagerArchive's.
+  sysctls:
+    net.ipv4.tcp_keepalive_time: 30
+    net.ipv4.tcp_keepalive_intvl: 10
+    net.ipv4.tcp_keepalive_probes: 3
+    net.ipv4.tcp_retries2: 7
+  # A hash of the files mounted below. Compose doesn't notice a changed file,
+  # but a changed label makes `docker compose up -d` recreate the container,
+  # so changed blueprints take effect, as PagerArchive's. A test
+  # (deploy/compose_test.go) checks it and prints the right value.
+  labels:
+    radioarchive.config: "4d7778a4371d493b"
+  environment:
+    AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?set AUTHENTIK_SECRET_KEY in .env}
+    AUTHENTIK_POSTGRESQL__HOST: db
+    AUTHENTIK_POSTGRESQL__NAME: authentik
+    AUTHENTIK_POSTGRESQL__USER: authentik
+    AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_DB_PASSWORD:?set AUTHENTIK_DB_PASSWORD in .env}
+    # The address browsers reach Authentik at, scheme and host only.
+    AUTHENTIK_WEB__BASE_URL: ${AUTHENTIK_URL:?set AUTHENTIK_URL in .env}
+    AUTHENTIK_EMAIL__HOST: ${SMTP_HOST:-mailpit}
+    AUTHENTIK_EMAIL__PORT: ${SMTP_PORT:-1025}
+    AUTHENTIK_EMAIL__USERNAME: ${SMTP_USERNAME:-}
+    AUTHENTIK_EMAIL__PASSWORD: ${SMTP_PASSWORD:-}
+    AUTHENTIK_EMAIL__USE_TLS: ${SMTP_USE_TLS:-false}
+    AUTHENTIK_EMAIL__USE_SSL: ${SMTP_USE_SSL:-false}
+    AUTHENTIK_EMAIL__FROM: ${SMTP_FROM:-radioarchive@example.test}
+    # Authentik's own administrator (akadmin), for the deployment's operator.
+    AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_ADMIN_EMAIL:?set AUTHENTIK_ADMIN_EMAIL in .env}
+    AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_ADMIN_PASSWORD:?set AUTHENTIK_ADMIN_PASSWORD in .env}
+    # Nothing leaves the deployment: no avatars from third parties, no
+    # analytics, error reports or update checks.
+    AUTHENTIK_AVATARS: initials
+    AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    AUTHENTIK_DISABLE_STARTUP_ANALYTICS: "true"
+    AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+    # Read by the blueprints in deploy/authentik/blueprints.
+    RA_APP_URL: ${APP_URL:?set APP_URL in .env}
+    RA_OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?set OIDC_CLIENT_SECRET in .env}
+    RA_AUTHENTIK_API_TOKEN: ${AUTHENTIK_API_TOKEN:?set AUTHENTIK_API_TOKEN in .env}
+    # Listeners may enrol themselves by emailed code (R103): true or false.
+    RA_LISTENER_SIGNUP: ${LISTENER_SIGNUP:-true}
+  # File by file: a file that's dropped can't stay in use because it's
+  # still in the folder.
+  volumes:
+    - ./deploy/authentik/blueprints/radioarchive.yaml:/blueprints/radioarchive/radioarchive.yaml:ro
+    - ./deploy/authentik/blueprints/radioarchive-standalone.yaml:/blueprints/radioarchive/radioarchive-standalone.yaml:ro
+    - ./deploy/authentik/templates/radioarchive/code.html:/templates/radioarchive/code.html:ro
+    - ./deploy/authentik/templates/radioarchive/code.txt:/templates/radioarchive/code.txt:ro
+  depends_on:
+    db:
+      condition: service_healthy
+      restart: true
 
 services:
   api:
@@ -16,6 +79,13 @@ services:
     environment:
       DATABASE_URL: postgres://radioarchive:${POSTGRES_PASSWORD:-radioarchive}@db:5432/radioarchive?sslmode=disable
       RECORDINGS_DIR: /var/lib/radioarchive/recordings
+      # Listeners' sign-in (ADR 0009). The token and the secret are read here
+      # and never logged.
+      APP_URL: ${APP_URL}
+      AUTHENTIK_URL: ${AUTHENTIK_URL}
+      AUTHENTIK_INTERNAL_URL: http://authentik-server:9000
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      AUTHENTIK_API_TOKEN: ${AUTHENTIK_API_TOKEN}
     ports:
       - "127.0.0.1:${API_PORT:-8080}:8080"
     volumes:
@@ -39,12 +109,15 @@ services:
       POSTGRES_USER: radioarchive
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-radioarchive}
       POSTGRES_DB: radioarchive
+      AUTHENTIK_DB_PASSWORD: ${AUTHENTIK_DB_PASSWORD:?set AUTHENTIK_DB_PASSWORD in .env}
     # For the Go tests on the host (README.md).
     ports:
       - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       # postgres:18 keeps its data in a versioned folder under this one.
       - db:/var/lib/postgresql
+      # Run once, when the volume is new, so it has no label.
+      - ./deploy/postgres/10-authentik.sh:/docker-entrypoint-initdb.d/10-authentik.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U radioarchive -d radioarchive"]
       interval: 10s
@@ -52,6 +125,28 @@ services:
       start_period: 30s
       start_interval: 1s
       retries: 5
+
+  authentik-server:
+    <<: *authentik
+    command: server
+    ports:
+      - "127.0.0.1:${AUTHENTIK_PORT:-9000}:9000"
+
+  authentik-worker:
+    <<: *authentik
+    command: worker
+
+  # Development and tests only: catches every email Authentik sends (the
+  # sign-up codes), shown at http://127.0.0.1:8025 and read by the browser
+  # tests through its API.
+  mailpit:
+    image: axllent/mailpit:v1.31.5
+    restart: unless-stopped
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports:
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
 
 volumes:
   db:

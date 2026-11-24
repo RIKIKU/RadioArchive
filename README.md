@@ -8,12 +8,21 @@ tests also need cgo and libopus (`apt install libopus-dev pkg-config`); the API
 doesn't, and stays cgo-free.
 
 ```sh
-docker compose up --build --wait   # the API and PostgreSQL 18; migrations run at start
+sh scripts/dev-env.sh > .env       # once: made-up secrets for the development stack
+docker compose up --build --wait   # the API, PostgreSQL 18, Authentik and Mailpit; migrations run at start
 curl http://127.0.0.1:8080/healthz # ok
 
 # The database tests skip unless RADIOARCHIVE_TEST_DATABASE_URL is set.
-RADIOARCHIVE_TEST_DATABASE_URL='postgres://radioarchive:radioarchive@127.0.0.1:5432/radioarchive?sslmode=disable' go test ./...
+. ./.env && RADIOARCHIVE_TEST_DATABASE_URL="postgres://radioarchive:$POSTGRES_PASSWORD@127.0.0.1:5432/radioarchive?sslmode=disable" go test ./...
 ```
+
+Listeners sign in with Authentik, only to save their preferences
+(`docs/adr/0009-listener-sign-in-and-the-saved-profile.md`). In the
+development stack, Authentik is at http://localhost:9000 and the sign-up codes
+it emails are at http://127.0.0.1:8025 (Mailpit). A database volume from
+before Authentik was added needs dropping once: `docker compose down --volumes`.
+`sh scripts/ci/e2e-signin.sh` runs the sign-in browser tests (`web/signin-tests`)
+against the whole stack.
 
 `sqlc generate` regenerates `internal/store/db` from `internal/store/queries.sql`; CI fails if it's out of date.
 

@@ -74,7 +74,19 @@ func TestIntegrationNoAdminAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	api := apiHandler(st, slog.New(slog.DiscardHandler), rs, gate.New(st, dir, slog.New(slog.DiscardHandler)))
+	// With listeners' sign-in on, as a deployment has it: it opens no admin
+	// route (R111, ADR 0009).
+	sc, err := signInFromEnv(environ{
+		"APP_URL": "http://radio.example.test", "AUTHENTIK_URL": "http://auth.example.test",
+		"OIDC_CLIENT_SECRET": "made-up-client-secret-0123456789", "AUTHENTIK_API_TOKEN": "made-up-token",
+	}.get)
+	if err != nil || !sc.on() {
+		t.Fatalf("sign-in settings: %v, on %v", err, sc.on())
+	}
+	api, err := apiHandler(st, slog.New(slog.DiscardHandler), rs, gate.New(st, dir, slog.New(slog.DiscardHandler)), sc)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewServer(api)
 	defer srv.Close()
 	// Nor the retention setting; and nothing in the binary triggers a

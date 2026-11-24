@@ -7,3 +7,5 @@ web/node_modules/
 web/.svelte-kit/
 web/test-results/
 web/playwright-report/
+# The development and test stack's made-up settings (scripts/dev-env.sh).
+.env

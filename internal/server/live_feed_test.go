@@ -83,9 +83,16 @@ func (e *env) liveURL() string {
 // last event ID it had).
 func (e *env) listen(t *testing.T, set []any, resume *int64) *listener {
 	t.Helper()
+	return e.listenWith(t, set, resume, nil)
+}
+
+// listenWith is listen with the upgrade request's headers (a signed-in
+// listener's cookie, ADR 0009).
+func (e *env) listenWith(t *testing.T, set []any, resume *int64, h http.Header) *listener {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, _, err := websocket.Dial(ctx, e.liveURL(), nil)
+	c, _, err := websocket.Dial(ctx, e.liveURL(), &websocket.DialOptions{HTTPHeader: h})
 	if err != nil {
 		t.Fatal(err)
 	}
