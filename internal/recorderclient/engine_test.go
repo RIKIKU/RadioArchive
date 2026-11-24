@@ -71,11 +71,14 @@ type rig struct {
 	up   *fakeUploader
 	m    *Metrics
 	now  time.Time
+
+	removed []string // files the engine deleted
 }
 
 func newRig() *rig {
 	r := &rig{live: &fakeLive{}, up: &fakeUploader{}, m: NewMetrics(), now: time.UnixMilli(1764000000000)}
 	r.e = newEngine(slog.New(slog.DiscardHandler), r.m, r.live, r.up, newFake, func() time.Time { return r.now })
+	r.e.remove = func(p string) error { r.removed = append(r.removed, p); return nil }
 	return r
 }
 
@@ -205,6 +208,11 @@ func TestEngineAcceptanceScenario(t *testing.T) {
 				t.Errorf("call 3 patched = %v, want [1002]", rec.Meta.PatchedTalkgroups)
 			}
 		}
+	}
+	// The copy's WAV is deleted when its call_end arrives, and only its:
+	// the others are deleted by the uploader once acknowledged.
+	if want := []string{"/app/media/ex/1002-1764000002_851037500.0-call_4.wav"}; !slices.Equal(r.removed, want) {
+		t.Errorf("engine deleted %v, want %v", r.removed, want)
 	}
 	if len(r.e.calls) != 0 || len(r.e.copies) != 0 {
 		t.Errorf("%d calls and %d copies still tracked", len(r.e.calls), len(r.e.copies))

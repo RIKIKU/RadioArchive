@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"log/slog"
+	"os"
 	"slices"
 	"time"
 
@@ -100,6 +101,7 @@ type engine struct {
 	up     Uploader
 	newEnc NewEncoder
 	now    func() time.Time
+	remove func(string) error // os.Remove; deletes a dropped copy's WAV
 
 	calls   map[rp.Identity]*call
 	copies  map[rp.Identity]time.Time // dropped patch copies, by last packet
@@ -114,7 +116,7 @@ type engine struct {
 }
 
 func newEngine(log *slog.Logger, m *Metrics, live Live, up Uploader, newEnc NewEncoder, now func() time.Time) *engine {
-	return &engine{log: log, m: m, live: live, up: up, newEnc: newEnc, now: now,
+	return &engine{log: log, m: m, live: live, up: up, newEnc: newEnc, now: now, remove: os.Remove,
 		calls: map[rp.Identity]*call{}, copies: map[rp.Identity]time.Time{}, logged: map[string]time.Time{}}
 }
 
@@ -341,14 +343,27 @@ func (e *engine) finish(c *call) {
 	delete(e.calls, c.id)
 }
 
+// dropCopy ends a patch copy. Its recording is never sent, and its WAV is
+// deleted: the kept call's recording holds the same audio, and there's no
+// reason to keep trunk-recorder's files (owner, issue #31).
+func (e *engine) dropCopy(ce *rp.CallEnd) {
+	delete(e.copies, ce.Identity)
+	if ce.Filename == "" {
+		return
+	}
+	if err := e.remove(ce.Filename); err != nil && !errors.Is(err, os.ErrNotExist) {
+		e.log.Warn("couldn't delete a patch copy's WAV", "file", ce.Filename, "error", err)
+	}
+}
+
 func (e *engine) callEnd(ce *rp.CallEnd) {
 	if _, ok := e.copies[ce.Identity]; ok {
-		delete(e.copies, ce.Identity) // its recording is never sent
+		e.dropCopy(ce)
 		return
 	}
 	c := e.find(ce.Identity, ce.Talkgroup, ce.Freq, ce.TDMASlot, ce.PatchedTalkgroups)
 	if c == nil {
-		delete(e.copies, ce.Identity)
+		e.dropCopy(ce)
 		return
 	}
 	c.addPatched(ce.PatchedTalkgroups)

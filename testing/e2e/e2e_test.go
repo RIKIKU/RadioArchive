@@ -264,8 +264,21 @@ func TestA1ExactMatch(t *testing.T) {
 // copy never reaches the server, and malformed input changes nothing else.
 func TestAcceptanceScenario(t *testing.T) {
 	r := start(t)
-	r.replay(t, "acceptance.json")
+	wavs := r.replay(t, "acceptance.json")
 	cs := r.waitRecordings(t, 5)
+	// Every WAV is gone: the stored calls' once acknowledged, and the
+	// dropped copy's (call 4) when its call_end arrived.
+	waitFor(t, "every WAV to be deleted", 10*time.Second, func() bool {
+		for _, p := range wavs {
+			if _, err := os.Stat(p); !os.IsNotExist(err) {
+				return false
+			}
+		}
+		return true
+	})
+	if _, ok := wavs[4]; !ok {
+		t.Fatal("the scenario has no WAV for the copy")
+	}
 	var nums []int64
 	for _, c := range cs {
 		nums = append(nums, c.callNum)
