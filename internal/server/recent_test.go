@@ -376,3 +376,51 @@ func TestIntegrationRecentCallsTimeout(t *testing.T) {
 		t.Errorf("a search out of time: %s", a)
 	}
 }
+
+// TestIntegrationRecentCallsBusyUnit: a unit heard on more calls than the
+// gate reads as a list (ADR 0013) is filtered call by call, with the same
+// answer: every page full, each call once.
+func TestIntegrationRecentCallsBusyUnit(t *testing.T) {
+	e := newEnv(t)
+	name, _ := e.recorder(t)
+	t0 := fixtureTime
+	if _, err := e.st.Pool.Exec(context.Background(), `
+		WITH c AS (
+			INSERT INTO calls (recorder_id, sys_num, call_num, start_time, system_id, short_name, talkgroup, started_at, ended_at)
+			SELECT r.id, 0, n, 0, $2, 'ex', 1001, $3::timestamptz + n * interval '1 s', $3::timestamptz + interval '2 h'
+			FROM recorders r, generate_series(0, 2099) n WHERE r.name = $1
+			RETURNING id, call_num)
+		INSERT INTO transmissions (call_id, offset_ms, unit)
+		SELECT id, 0, CASE WHEN call_num = 7 THEN 9200 ELSE 9100 END FROM c`, name, e.sys, t0); err != nil {
+		t.Fatal(err)
+	}
+	q := url.Values{"from": {t0.Format(time.RFC3339)}, "to": {t0.Add(time.Hour).Format(time.RFC3339)}, "unit": {"9100"}}
+	seen := map[string]bool{}
+	for {
+		p := e.recent(t, q)
+		for _, c := range p.Calls {
+			if seen[c.ID] || len(c.Transmissions) != 1 || c.Transmissions[0].Unit != 9100 {
+				t.Fatalf("unit 9100: %+v (seen before: %v)", c, seen[c.ID])
+			}
+			seen[c.ID] = true
+		}
+		if p.Next == nil {
+			if len(p.Calls) == 0 {
+				t.Fatal("an empty last page")
+			}
+			break
+		}
+		if len(p.Calls) != 100 {
+			t.Fatalf("a page of %d before the last", len(p.Calls))
+		}
+		q.Set("cursor", *p.Next)
+	}
+	if len(seen) != 2099 {
+		t.Errorf("unit 9100 is on %d calls, want 2099", len(seen))
+	}
+	q.Del("cursor")
+	q.Set("unit", "9200")
+	if got := e.recent(t, q); len(got.Calls) != 1 || got.Next != nil {
+		t.Errorf("unit 9200: %d calls", len(got.Calls))
+	}
+}

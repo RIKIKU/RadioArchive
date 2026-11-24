@@ -446,14 +446,21 @@ JOIN talkgroups t ON t.system_id = c.system_id AND t.talkgroup_id = c.talkgroup
 LEFT JOIN tags g ON g.id = t.tag_id
 WHERE c.id = ANY (sqlc.arg(ids)::uuid[]);
 
+-- name: GateUnitCalls :many
+-- The calls a radio ID was heard on, up to row_limit, for a search's unit
+-- filter. It reads only the transmissions_unit index.
+SELECT DISTINCT call_id FROM transmissions WHERE unit = sqlc.arg(unit) LIMIT sqlc.arg(row_limit);
+
 -- name: GateRecentCallsNewest :many
 -- Recent calls and search (R46, R73; ADR 0013), newest first: the public
 -- calls that started in [started_from, started_to) and come after the
 -- cursor (before it in time; with no cursor the gate passes started_to and
 -- the smallest ID). talkgroups, when given, are a superset of the filter's
 -- public talkgroups by ID, matched against the call's own or its patch's
--- (R16); the gate checks each row's system. unit, when given, is a radio ID
--- heard on the call, in unit_system when that's given. The gate runs it
+-- (R16); the gate checks each row's system. A unit filter (in unit_system
+-- when that's given) comes as call_ids, the calls the unit was heard on
+-- (GateUnitCalls), or, for a unit heard on more calls than that list
+-- takes, as unit, a radio ID heard on the call (ADR 0013). The gate runs it
 -- with custom plans, so a NULL filter costs nothing. It joins no talkgroup
 -- or system: the gate names them from the catalogue, which every listed
 -- call's talkgroup must be in, and the joins' estimates made the planner
@@ -470,7 +477,8 @@ WHERE c.started_at >= sqlc.arg(started_from) AND c.started_at < sqlc.arg(started
        OR c.talkgroup = ANY (sqlc.narg(talkgroups)::integer[])
        OR c.patched_talkgroups && sqlc.narg(talkgroups)::integer[])
   AND (sqlc.narg(unit)::bigint IS NULL
-       OR c.id = ANY (ARRAY(SELECT u.call_id FROM transmissions u WHERE u.unit = sqlc.narg(unit)::bigint)))
+       OR EXISTS (SELECT 1 FROM transmissions u WHERE u.call_id = c.id AND u.unit = sqlc.narg(unit)::bigint))
+  AND (sqlc.narg(call_ids)::uuid[] IS NULL OR c.id = ANY (sqlc.narg(call_ids)::uuid[]))
   AND (sqlc.narg(unit_system)::bigint IS NULL OR c.system_id = sqlc.narg(unit_system)::bigint)
 ORDER BY c.started_at DESC, c.id DESC
 LIMIT sqlc.arg(row_limit);
@@ -489,7 +497,8 @@ WHERE c.started_at >= sqlc.arg(started_from) AND c.started_at < sqlc.arg(started
        OR c.talkgroup = ANY (sqlc.narg(talkgroups)::integer[])
        OR c.patched_talkgroups && sqlc.narg(talkgroups)::integer[])
   AND (sqlc.narg(unit)::bigint IS NULL
-       OR c.id = ANY (ARRAY(SELECT u.call_id FROM transmissions u WHERE u.unit = sqlc.narg(unit)::bigint)))
+       OR EXISTS (SELECT 1 FROM transmissions u WHERE u.call_id = c.id AND u.unit = sqlc.narg(unit)::bigint))
+  AND (sqlc.narg(call_ids)::uuid[] IS NULL OR c.id = ANY (sqlc.narg(call_ids)::uuid[]))
   AND (sqlc.narg(unit_system)::bigint IS NULL OR c.system_id = sqlc.narg(unit_system)::bigint)
 ORDER BY c.started_at, c.id
 LIMIT sqlc.arg(row_limit);

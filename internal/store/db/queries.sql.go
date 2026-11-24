@@ -844,10 +844,11 @@ WHERE c.started_at >= $1 AND c.started_at < $2
        OR c.talkgroup = ANY ($5::integer[])
        OR c.patched_talkgroups && $5::integer[])
   AND ($6::bigint IS NULL
-       OR c.id = ANY (ARRAY(SELECT u.call_id FROM transmissions u WHERE u.unit = $6::bigint)))
-  AND ($7::bigint IS NULL OR c.system_id = $7::bigint)
+       OR EXISTS (SELECT 1 FROM transmissions u WHERE u.call_id = c.id AND u.unit = $6::bigint))
+  AND ($7::uuid[] IS NULL OR c.id = ANY ($7::uuid[]))
+  AND ($8::bigint IS NULL OR c.system_id = $8::bigint)
 ORDER BY c.started_at DESC, c.id DESC
-LIMIT $8
+LIMIT $9
 `
 
 type GateRecentCallsNewestParams struct {
@@ -857,6 +858,7 @@ type GateRecentCallsNewestParams struct {
 	CursorID    pgtype.UUID
 	Talkgroups  []int32
 	Unit        *int64
+	CallIds     []pgtype.UUID
 	UnitSystem  *int64
 	RowLimit    int32
 }
@@ -877,8 +879,10 @@ type GateRecentCallsNewestRow struct {
 // cursor (before it in time; with no cursor the gate passes started_to and
 // the smallest ID). talkgroups, when given, are a superset of the filter's
 // public talkgroups by ID, matched against the call's own or its patch's
-// (R16); the gate checks each row's system. unit, when given, is a radio ID
-// heard on the call, in unit_system when that's given. The gate runs it
+// (R16); the gate checks each row's system. A unit filter (in unit_system
+// when that's given) comes as call_ids, the calls the unit was heard on
+// (GateUnitCalls), or, for a unit heard on more calls than that list
+// takes, as unit, a radio ID heard on the call (ADR 0013). The gate runs it
 // with custom plans, so a NULL filter costs nothing. It joins no talkgroup
 // or system: the gate names them from the catalogue, which every listed
 // call's talkgroup must be in, and the joins' estimates made the planner
@@ -892,6 +896,7 @@ func (q *Queries) GateRecentCallsNewest(ctx context.Context, arg GateRecentCalls
 		arg.CursorID,
 		arg.Talkgroups,
 		arg.Unit,
+		arg.CallIds,
 		arg.UnitSystem,
 		arg.RowLimit,
 	)
@@ -934,10 +939,11 @@ WHERE c.started_at >= $1 AND c.started_at < $2
        OR c.talkgroup = ANY ($5::integer[])
        OR c.patched_talkgroups && $5::integer[])
   AND ($6::bigint IS NULL
-       OR c.id = ANY (ARRAY(SELECT u.call_id FROM transmissions u WHERE u.unit = $6::bigint)))
-  AND ($7::bigint IS NULL OR c.system_id = $7::bigint)
+       OR EXISTS (SELECT 1 FROM transmissions u WHERE u.call_id = c.id AND u.unit = $6::bigint))
+  AND ($7::uuid[] IS NULL OR c.id = ANY ($7::uuid[]))
+  AND ($8::bigint IS NULL OR c.system_id = $8::bigint)
 ORDER BY c.started_at, c.id
-LIMIT $8
+LIMIT $9
 `
 
 type GateRecentCallsOldestParams struct {
@@ -947,6 +953,7 @@ type GateRecentCallsOldestParams struct {
 	CursorID    pgtype.UUID
 	Talkgroups  []int32
 	Unit        *int64
+	CallIds     []pgtype.UUID
 	UnitSystem  *int64
 	RowLimit    int32
 }
@@ -972,6 +979,7 @@ func (q *Queries) GateRecentCallsOldest(ctx context.Context, arg GateRecentCalls
 		arg.CursorID,
 		arg.Talkgroups,
 		arg.Unit,
+		arg.CallIds,
 		arg.UnitSystem,
 		arg.RowLimit,
 	)
@@ -995,6 +1003,37 @@ func (q *Queries) GateRecentCallsOldest(ctx context.Context, arg GateRecentCalls
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const gateUnitCalls = `-- name: GateUnitCalls :many
+SELECT DISTINCT call_id FROM transmissions WHERE unit = $1 LIMIT $2
+`
+
+type GateUnitCallsParams struct {
+	Unit     int64
+	RowLimit int32
+}
+
+// The calls a radio ID was heard on, up to row_limit, for a search's unit
+// filter. It reads only the transmissions_unit index.
+func (q *Queries) GateUnitCalls(ctx context.Context, arg GateUnitCallsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, gateUnitCalls, arg.Unit, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var call_id pgtype.UUID
+		if err := rows.Scan(&call_id); err != nil {
+			return nil, err
+		}
+		items = append(items, call_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

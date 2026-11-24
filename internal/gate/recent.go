@@ -28,6 +28,10 @@ const (
 	MaxRange = 31 * 24 * time.Hour
 	// MaxPage is the most calls one page holds.
 	MaxPage = 100
+
+	// maxUnitCalls is the most calls a unit filter reads as a list of
+	// call IDs; a unit heard on more is filtered call by call.
+	maxUnitCalls = 2000
 )
 
 // ErrTooSlow is a search that ran out of its time (R73's 5 s).
@@ -167,9 +171,26 @@ func (g *Gate) recentCalls(ctx context.Context, s Search, from, to time.Time, li
 		// started_at < to.
 		cursorAt = to
 	}
+	// A unit filter is the unit's calls, read first from the index, when
+	// they're few: the search then costs what the unit has, cold or warm.
+	// A unit heard on more than maxUnitCalls is common enough that reading
+	// the range newest (or oldest) first finds a page soon, so it's asked
+	// call by call instead (ADR 0013).
 	var unit, unitSystem *int64
+	var callIDs []pgtype.UUID
 	if s.Unit != nil {
-		unit, unitSystem = &s.Unit.ID, s.Unit.System
+		unitSystem = s.Unit.System
+		ids, err := q.GateUnitCalls(ctx, db.GateUnitCallsParams{Unit: s.Unit.ID, RowLimit: maxUnitCalls + 1})
+		if err != nil {
+			return Page{}, fmt.Errorf("recent calls: %s", store.SafeError(err))
+		}
+		// A unit never heard still runs the search, with no IDs, so it
+		// costs what a unit heard only on hidden calls costs.
+		if len(ids) <= maxUnitCalls {
+			callIDs = append([]pgtype.UUID{}, ids...)
+		} else {
+			unit = &s.Unit.ID
+		}
 	}
 	var tgs []int32
 	if s.Talkgroups != nil {
@@ -179,7 +200,7 @@ func (g *Gate) recentCalls(ctx context.Context, s Search, from, to time.Time, li
 	out := Page{Calls: make([]Call, 0, limit)}
 	batch := int32(limit + 1)
 	for {
-		rows, err := g.searchBatch(ctx, q, s.Oldest, from, to, cursorAt, cursorID, tgs, unit, unitSystem, batch)
+		rows, err := g.searchBatch(ctx, q, s.Oldest, from, to, cursorAt, cursorID, tgs, callIDs, unit, unitSystem, batch)
 		if err != nil {
 			return Page{}, err
 		}
@@ -224,13 +245,13 @@ func deadline(ctx context.Context) time.Time {
 }
 
 func (g *Gate) searchBatch(ctx context.Context, q *db.Queries, oldest bool, from, to, cursorAt time.Time,
-	cursorID [16]byte, tgs []int32, unit, unitSystem *int64, limit int32) ([]db.GatePublicCallsRow, error) {
+	cursorID [16]byte, tgs []int32, callIDs []pgtype.UUID, unit, unitSystem *int64, limit int32) ([]db.GatePublicCallsRow, error) {
 	ts := func(t time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: t, Valid: true} }
 	id := pgtype.UUID{Bytes: cursorID, Valid: true}
 	var out []db.GatePublicCallsRow
 	if oldest {
 		rows, err := q.GateRecentCallsOldest(ctx, db.GateRecentCallsOldestParams{StartedFrom: ts(from), StartedTo: ts(to),
-			CursorAt: ts(cursorAt), CursorID: id, Talkgroups: tgs, Unit: unit, UnitSystem: unitSystem, RowLimit: limit})
+			CursorAt: ts(cursorAt), CursorID: id, Talkgroups: tgs, Unit: unit, CallIds: callIDs, UnitSystem: unitSystem, RowLimit: limit})
 		if err != nil {
 			return nil, fmt.Errorf("recent calls: %s", store.SafeError(err))
 		}
@@ -240,7 +261,7 @@ func (g *Gate) searchBatch(ctx context.Context, q *db.Queries, oldest bool, from
 		return out, nil
 	}
 	rows, err := q.GateRecentCallsNewest(ctx, db.GateRecentCallsNewestParams{StartedFrom: ts(from), StartedTo: ts(to),
-		CursorAt: ts(cursorAt), CursorID: id, Talkgroups: tgs, Unit: unit, UnitSystem: unitSystem, RowLimit: limit})
+		CursorAt: ts(cursorAt), CursorID: id, Talkgroups: tgs, Unit: unit, CallIds: callIDs, UnitSystem: unitSystem, RowLimit: limit})
 	if err != nil {
 		return nil, fmt.Errorf("recent calls: %s", store.SafeError(err))
 	}

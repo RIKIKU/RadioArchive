@@ -8,11 +8,11 @@
 -- talkgroup of its patch is listed as anything but public, which is when
 -- the strictest state in its patch is public. call_state is a SQL function
 -- the planner can't inline, so the view called it once a call, a query of
--- its own each time: about 90 µs, or 80 s for a month's 600,000 calls when
+-- its own each time: 50-130 µs, or 28 s for a month's 600,000 calls when
 -- a search reads them all. Written as two NOT EXISTS, the call's own
--- talkgroup is a hash anti-join over the few non-public talkgroups and the
+-- talkgroup is an anti-join over the few non-public talkgroups and the
 -- patch is one index probe, only for a patched call; the month reads in
--- 0.2 s. The planner can also estimate it, which it couldn't for a
+-- under a second. The planner can also estimate it, which it couldn't for a
 -- function's result, so a newest-first page reads a hundred rows of the
 -- started_at index and stops. It's still the one definition every public
 -- read goes through; a store test checks it agrees with call_state for
@@ -43,8 +43,9 @@ DROP INDEX calls_started_at;
 CREATE INDEX calls_talkgroup_started_at ON calls (talkgroup, started_at);
 CREATE INDEX calls_patched_talkgroups ON calls USING gin (patched_talkgroups);
 
--- A unit filter (R46): the calls a radio ID was heard on.
-CREATE INDEX transmissions_unit ON transmissions (unit);
+-- A unit filter (R46): the calls a radio ID was heard on, read from the
+-- index alone.
+CREATE INDEX transmissions_unit ON transmissions (unit, call_id);
 
 -- +goose Down
 DROP INDEX transmissions_unit;
