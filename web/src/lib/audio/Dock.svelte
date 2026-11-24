@@ -17,7 +17,8 @@
 	//
 	// A call replayed from recent calls (R46; ADR 0016) shows first, with
 	// its own Stop and Share, whether live listening is paused or never
-	// started.
+	// started. Several played in turn (Play all, play from here: ADR 0023)
+	// show which call of them is playing, and when it started.
 	import { Icon, LiveBadge } from 'archiveux/components';
 	import type { Player, CallInfo } from './player.svelte.ts';
 	import { dockIcons } from './icons.ts';
@@ -48,7 +49,8 @@
 			<p class="meta np-unit">
 				<span class="unit">{unitOf(r)}</span>{#if r.system}<span class="sep" aria-hidden="true">·</span><span class="system">{r.system.name}</span>{/if}
 				<span class="sep" aria-hidden="true">·</span><span class="elapsed"><span class="visually-hidden">{'Played '}</span>{clock(player.replay.elapsed)}</span>
-				{#if player.replay.list}{@const l = player.replay.list}<span class="sep" aria-hidden="true">·</span><span class="list">{l.name}: call {l.at} of {l.of}</span>{/if}
+				{#if player.replay.list}{@const l = player.replay.list}<span class="sep" aria-hidden="true">·</span><span class="list">{l.name}: call {l.at} of {l.more ? `at least ${l.of}` : l.of}</span
+					>{#if l.when}<span class="sep" aria-hidden="true">·</span><span class="when"><span class="visually-hidden">{'Started '}</span>{l.when}</span>{/if}{/if}
 			</p>
 		</div>
 		<div class="controls" role="group" aria-label="Replay controls">

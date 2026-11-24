@@ -109,8 +109,12 @@ A listener's temporary narrowing to only the talkgroup of the call playing now, 
 _Avoid_: Lock, pin, solo
 
 **Replay**:
-Playing a call from the archive because a listener chose it, apart from live listening, which waits meanwhile.
+Playing a call from the archive because a listener chose it, apart from live listening, which waits meanwhile and carries on by itself afterwards.
 _Avoid_: Playback (that's any call's audio), rewind, catch-up
+
+**Play from here**:
+A replay of a call and then the calls that started after it, in time order, until the moment it was pressed.
+_Avoid_: Play next, autoplay, continue
 
 **Download basket**:
 The calls a listener has marked, and the conversations they've grouped them into, kept to download later.

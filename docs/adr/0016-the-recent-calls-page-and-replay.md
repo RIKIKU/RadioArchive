@@ -6,6 +6,8 @@ status: accepted (2026-11-25, by the owner)
 
 Date: 2026-11-25
 
+> **Amended 2026-11-25 by the owner's answer** to #75's question 3 (#92): when a replay is over, played to its end or stopped with Stop replay, live listening resumes by itself, if the replay was what paused it. Where this ADR says live listening stays paused until Resume, that no longer holds; the rest stands. [ADR 0023](0023-play-from-here-and-live-listening-after-a-replay.md) has the rule and play from here.
+
 The Recent calls page lists the listening set's calls, with the talkgroups added for this session, newest first, on ADR 0013's route. Its filters live in its address as the listener chose them, never as the talkgroups they expand to. A search whose talkgroups make a URL too long for a default nginx goes as a `POST` (or `QUERY`) body to the same route, through the same code. The catalogue names the deployment's time zone, so the page shows times on its clock. Pressing a call replays its recording in the dock through an output of its own, pausing live listening, which stays paused once the replay ends until the listener resumes it. Play from here waits on #75's open question 3. These are the implementer's choices where `SPEC.md` R23, R24, R33, R46, R47, R62, R63, R73, R83, R85 and section 13 leave room (spec "How to use this spec", item 6). Built in [Recent calls page: list, filters, play and play from here](https://github.com/RIKIKU/RadioArchive/issues/79).
 
 ## Summary
@@ -44,7 +46,7 @@ Section 13 shows times in `TZ`. The browser can't learn it on its own, and the a
 
 R46: "Replaying pauses live listening; live calls keep queuing meanwhile." ADR 0012's pause is `AudioContext.suspend()`, which stops the clock everything live is scheduled on, so the replay can't share that context: it has its own, made from the press (browsers start audio only from a gesture), with the same decoder. Live listening is paused with the player's own Pause, so the queue, its order, priority and hold are untouched and calls keep queuing; the dock says "Paused. Calls keep queuing." beside the replay. Nothing replays over live audio: Resume, Jump to live and Start listening stop the replay first. A replay works with live listening never started, too.
 
-When the replay ends, live listening stays paused until the listener presses Resume. That's the half of #75's open question 3 this page meets first: carrying on by itself would start whatever queued meanwhile, at once and possibly loud, after a call the listener chose. The follow-up issue for play from here carries the question, and this choice may change with its answer.
+When the replay ends, live listening stays paused until the listener presses Resume. That's the half of #75's open question 3 this page meets first: carrying on by itself would start whatever queued meanwhile, at once and possibly loud, after a call the listener chose. The follow-up issue for play from here carries the question, and this choice may change with its answer. (It did: see the amendment above and ADR 0023.)
 
 The replay announces `radioarchive:first-frame`, `radioarchive:played` and `radioarchive:ended` (`how: "stopped"`) with `replay: true`, through a meter of its own, so the browser tests measure what reached the speakers as they do for live calls.
 
@@ -65,4 +67,4 @@ The replay announces `radioarchive:first-frame`, `radioarchive:played` and `radi
 - The browser tests' archive is made up by the fixture's command (`webfixture calls`), stored as Bench's with silent Ogg/Opus recordings, and the API in `e2e-web.sh` runs in `TZ=Australia/Melbourne`.
 - #80 puts `RecentList` under the call card with a search for the call's talkgroup from its time, oldest first, and adds Share through `actions`; #81 adds Add to basket there too.
 - #83 adds unit aliases to the rows and unit search to the filters. (Built: ADR 0019.)
-- Play from here is the follow-up issue's, blocked on #75's open question 3.
+- Play from here is the follow-up issue's, blocked on #75's open question 3. (Since built: ADR 0023.)

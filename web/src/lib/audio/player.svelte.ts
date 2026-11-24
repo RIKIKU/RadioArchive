@@ -34,7 +34,7 @@ import { decoding, type Decoding, type DecodePath, type OpusStream, type Pcm } f
 import { readOggOpus } from './ogg.ts';
 import { heldThrough, nextIndex, type TalkgroupKey } from './queue.ts';
 import { playAlert } from './alerts.ts';
-import { Replay } from './replay.svelte.ts';
+import { Replay, type MoreCalls, type ReplayItem } from './replay.svelte.ts';
 import { LIVE_WITHIN } from 'archiveux/live.js';
 
 export type Source = 'live' | 'recording';
@@ -151,8 +151,16 @@ export class Player {
 	/** Calls that have left (played, skipped, cleared, withdrawn or held out), and when. */
 	#gone = new Map<string, number>();
 
+	/** Live listening was paused by a replay, not by the listener: it resumes when the replay is over (ADR 0023). */
+	#pausedForReplay = false;
+
 	constructor(opts: PlayerOptions = {}) {
 		this.#opts = opts;
+		this.replay.onend = () => {
+			if (!this.#pausedForReplay) return;
+			this.#pausedForReplay = false;
+			void this.resume();
+		};
 	}
 
 	/**
@@ -226,6 +234,7 @@ export class Player {
 		this.queued = 0;
 		this.heldBack = 0;
 		this.paused = false;
+		this.#pausedForReplay = false;
 		this.hold = undefined;
 		this.notices = { recorders: false, radio_full: false };
 		this.connected = false;
@@ -277,6 +286,7 @@ export class Player {
 	/** Resume: carries on where it paused, then through the queue. A call being replayed stops. */
 	async resume() {
 		if (!this.paused) return;
+		this.#pausedForReplay = false;
 		this.replay.stop();
 		this.paused = false;
 		await this.#ctx?.resume().catch(() => undefined);
@@ -303,11 +313,12 @@ export class Player {
 	/**
 	 * Replays a call from recent calls (R46), from its recording: call it
 	 * from the press. Live listening pauses, so live calls keep queuing,
-	 * and stays paused once the call has played, until the listener
-	 * resumes it (ADR 0016; #75's open question 3 may change that).
+	 * and resumes by itself once the call has played or Stop replay is
+	 * pressed (ADR 0016 as amended, ADR 0023). Paused by the listener
+	 * before, it stays paused.
 	 */
 	replayCall(info: CallInfo, recording: string) {
-		if (this.phase !== 'stopped' && !this.paused) void this.pause();
+		this.#pauseForReplay();
 		this.replay.play(info, recording);
 	}
 
@@ -315,10 +326,26 @@ export class Player {
 	 * Replays calls in order, one after another: a basket conversation's
 	 * Play all (R64; ADR 0018). Live listening pauses as for one call.
 	 */
-	replayAll(name: string, calls: { info: CallInfo; url: string }[]) {
+	replayAll(name: string, calls: ReplayItem[]) {
 		if (!calls.length) return;
-		if (this.phase !== 'stopped' && !this.paused) void this.pause();
+		this.#pauseForReplay();
 		this.replay.playAll(name, calls);
+	}
+
+	/**
+	 * Play from here (R46; ADR 0023): first, then the calls after it in
+	 * time order, as more fetches them. Live listening pauses as for one
+	 * call, and resumes when the run is over.
+	 */
+	replayRun(name: string, first: ReplayItem, more: MoreCalls) {
+		this.#pauseForReplay();
+		this.replay.playRun(name, first, more);
+	}
+
+	#pauseForReplay() {
+		if (this.phase !== 'listening' || this.paused) return;
+		this.#pausedForReplay = true;
+		void this.pause();
 	}
 
 	/** Plays a finished call again, from its recording (R20), after the one playing. */
