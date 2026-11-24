@@ -77,6 +77,11 @@ type Event struct {
 type Send struct {
 	At       time.Duration
 	Datagram []byte
+	// Call is the scenario's name for the call the datagram is about, if
+	// any, and FirstPCM marks the call's first audio datagram: where the
+	// delay budget starts (R38, A6).
+	Call     string
+	FirstPCM bool
 }
 
 // LoadScenario reads and checks a scenario.
@@ -110,6 +115,8 @@ type pending struct {
 	build func(seq uint32) ([]byte, error)
 	gap   uint32 // sequence numbers skipped instead of a datagram
 	raw   []byte // sent as is, using no sequence number
+	call  string // the call it's about, if any
+	pcm   bool   // an audio datagram
 }
 
 type callState struct {
@@ -168,7 +175,7 @@ func Plan(s *Scenario, fixtures fs.FS) ([]Send, error) {
 			cs.patched = union(cs.patched, e.PatchedTalkgroups)
 			t := rp.Transmission{Identity: id, Talkgroup: c.Talkgroup, Unit: e.Unit, TimeMS: s.EpochMS + e.AtMS,
 				Freq: c.Freq, TDMASlot: slot, PatchedTalkgroups: nonNil(e.PatchedTalkgroups)}
-			ps = append(ps, pending{at: e.AtMS, order: order, build: control(s.BootID, t)})
+			ps = append(ps, pending{at: e.AtMS, order: order, build: control(s.BootID, t), call: e.Call})
 		case EventAudio:
 			pcm, err := fs.ReadFile(fixtures, e.PCM)
 			if err != nil {
@@ -190,7 +197,7 @@ func Plan(s *Scenario, fixtures fs.FS) ([]Send, error) {
 				at := e.AtMS + int64(off/2)*1000/int64(rate)
 				a := rp.Audio{Identity: id, Talkgroup: c.Talkgroup, Unit: e.Unit, Freq: c.Freq,
 					SampleRate: rate, TDMASlot: slot, PCM: part}
-				ps = append(ps, pending{at: at, order: order, build: func(seq uint32) ([]byte, error) {
+				ps = append(ps, pending{at: at, order: order, call: e.Call, pcm: true, build: func(seq uint32) ([]byte, error) {
 					return rp.EncodeAudio(s.BootID, seq, a)
 				}})
 				order++
@@ -208,7 +215,7 @@ func Plan(s *Scenario, fixtures fs.FS) ([]Send, error) {
 				Freq: c.Freq, TDMASlot: slot,
 				PatchedTalkgroups: nonNil(union(cs.patched, e.PatchedTalkgroups)),
 				Filename:          e.Filename, Transmissions: nonNilTx(txs)}
-			ps = append(ps, pending{at: e.AtMS, order: order, build: control(s.BootID, ce)})
+			ps = append(ps, pending{at: e.AtMS, order: order, build: control(s.BootID, ce), call: e.Call})
 		case EventHeartbeat:
 			hb := rp.Heartbeat{TimeMS: s.EpochMS + e.AtMS, PluginVersion: "fake", Systems: e.Systems}
 			if hb.Systems == nil {
@@ -237,6 +244,7 @@ func Plan(s *Scenario, fixtures fs.FS) ([]Send, error) {
 	})
 	var out []Send
 	var seq uint32
+	heard := map[string]bool{} // calls with an audio datagram planned
 	for _, p := range ps {
 		at := time.Duration(p.at) * time.Millisecond
 		switch {
@@ -250,7 +258,11 @@ func Plan(s *Scenario, fixtures fs.FS) ([]Send, error) {
 				return nil, err
 			}
 			seq++
-			out = append(out, Send{At: at, Datagram: b})
+			first := p.pcm && !heard[p.call]
+			if p.pcm {
+				heard[p.call] = true
+			}
+			out = append(out, Send{At: at, Datagram: b, Call: p.call, FirstPCM: first})
 		}
 	}
 	return out, nil

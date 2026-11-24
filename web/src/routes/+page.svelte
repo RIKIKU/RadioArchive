@@ -12,8 +12,13 @@
 	//   shows one "This channel isn't available", names nothing and adds
 	//   nothing.
 	// - Start listening (R44): browsers need a user gesture before audio
-	//   plays, and nothing queues before it's pressed. The player is #60's.
-	import { onMount } from 'svelte';
+	//   plays, and nothing queues before it's pressed. Then the live feed
+	//   plays, one call at a time (R39, #58), with what's playing, Play
+	//   again for the last call heard (from its recording) and Stop
+	//   listening. The queue's controls and the dock are #60's.
+	import { onDestroy, onMount } from 'svelte';
+	import { LiveBadge } from 'archiveux/components';
+	import { Player, type CallInfo } from '#lib/audio/player.svelte.ts';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
 	import Picker from '#lib/listening/Picker.svelte';
@@ -136,7 +141,10 @@
 		}
 	}
 
-	function start() {}
+	const player = new Player();
+	onDestroy(() => player.stop());
+
+	const unitOf = (c: CallInfo) => (c.unit ? `Unit ${c.unit.name}` : 'Unit unknown');
 
 	onMount(async () => {
 		const params = page.url.searchParams;
@@ -168,7 +176,48 @@
 	</p>
 {/if}
 
-<button type="button" class="start" onclick={start}>Start listening</button>
+{#if player.phase === 'stopped'}
+	<button type="button" class="start" onclick={() => player.start()}>Start listening</button>
+	{#if player.failure}<p class="error" role="alert">{player.failure}</p>{/if}
+{:else}
+	<section class="player" aria-labelledby="player-heading" data-decoder={player.path ?? ''}>
+		<h2 id="player-heading" class="visually-hidden">Player</h2>
+		<div class="now" aria-live="polite">
+			{#if player.playing}
+				{@const c = player.playing}
+				{#if c.talkgroup.led_colour}<span class="led" data-led={c.talkgroup.led_colour} aria-hidden="true"></span>{/if}
+				<div class="what">
+					<p class="np-name">{c.talkgroup.name}</p>
+					<p class="meta">{[c.talkgroup.groups?.[0], unitOf(c)].filter(Boolean).join(' · ')}</p>
+				</div>
+				{#if c.source === 'live'}
+					<LiveBadge />
+				{:else if c.delayMinutes}
+					<LiveBadge delay={c.delayMinutes} />
+				{:else}
+					<span class="meta">From its recording</span>
+				{/if}
+			{:else if player.phase === 'starting' || !player.connected}
+				<p class="status">Connecting…</p>
+			{:else}
+				<p class="status">Listening. Calls play here as they come in.</p>
+			{/if}
+		</div>
+		{#if player.waiting}
+			<p class="meta">{plural(player.waiting, 'call')} waiting</p>
+		{/if}
+		<div class="actions">
+			{#if player.last}
+				{@const l = player.last}
+				<button type="button" class="secondary" aria-label="Play again: {l.talkgroup.name}" onclick={() => player.playAgain(l)}>Play again</button>
+			{/if}
+			<button type="button" class="secondary" onclick={() => player.stop()}>Stop listening</button>
+		</div>
+		{#if player.last}
+			<p class="meta last">Last call: {player.last.talkgroup.name}, {unitOf(player.last)}</p>
+		{/if}
+	</section>
+{/if}
 
 {#if offer && offered.length}
 	<section class="offer" aria-labelledby="offer-heading">
@@ -254,6 +303,41 @@
 <style>
 	.start {
 		margin: var(--space-lg) 0 var(--space-sm);
+	}
+	.player {
+		margin-top: var(--space-lg);
+		padding: var(--space-lg);
+		background: var(--surface);
+		border: var(--border-width) solid var(--border);
+		border-radius: var(--radius);
+	}
+	.now {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-sm) var(--space-md);
+		min-height: var(--target);
+	}
+	.now .status {
+		margin: 0;
+	}
+	.what {
+		flex: 1 1 12rem;
+		min-width: 0;
+	}
+	.what p {
+		margin: 0;
+	}
+	.np-name {
+		font-size: var(--text-lg);
+		font-weight: var(--weight-strong);
+		overflow-wrap: anywhere;
+	}
+	.player .actions {
+		margin-top: var(--space-md);
+	}
+	.last {
+		margin: var(--space-sm) 0 0;
 	}
 	section {
 		margin-top: var(--space-2xl);

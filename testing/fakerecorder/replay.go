@@ -24,6 +24,12 @@ func Dial(addr string) (*net.UDPConn, error) {
 // the scenario's timing, with speed 10 it runs ten times faster, and with
 // speed 0 it sends as fast as it can.
 func Replay(ctx context.Context, conn net.Conn, plan []Send, speed float64) error {
+	return ReplayFunc(ctx, conn, plan, speed, nil)
+}
+
+// ReplayFunc is Replay, calling sent, if it isn't nil, with each datagram
+// and the time it was written.
+func ReplayFunc(ctx context.Context, conn net.Conn, plan []Send, speed float64, sent func(Send, time.Time)) error {
 	start := time.Now()
 	for _, s := range plan {
 		if speed > 0 {
@@ -43,6 +49,9 @@ func Replay(ctx context.Context, conn net.Conn, plan []Send, speed float64) erro
 		}
 		if _, err := conn.Write(s.Datagram); err != nil {
 			return fmt.Errorf("fakerecorder: send: %w", err)
+		}
+		if sent != nil {
+			sent(s, time.Now())
 		}
 	}
 	return nil
