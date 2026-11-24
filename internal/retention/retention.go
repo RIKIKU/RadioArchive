@@ -53,6 +53,10 @@ const (
 	WarnFree       = 0.15
 )
 
+// DefaultEarlyDeleteFloor is RECORDINGS_EARLY_DELETE_FLOOR's default: a
+// call that started within it is never deleted early for low disk (R88).
+const DefaultEarlyDeleteFloor = 24 * time.Hour
+
 // DefaultOrphanGrace is how long a recording file with no row is kept
 // before the nightly job removes it, and the same for a file in the
 // upload directory. It's far longer than an upload takes: an upload writes
@@ -111,6 +115,9 @@ type Config struct {
 	FreeSpace FreeSpaceFunc
 	// MinFree is RECORDINGS_MIN_FREE as a fraction (default 0.05).
 	MinFree float64
+	// EarlyDeleteFloor is RECORDINGS_EARLY_DELETE_FLOOR (default 24 h):
+	// low disk never deletes a call that started within it of now.
+	EarlyDeleteFloor time.Duration
 	// At is when the nightly job runs, since midnight in Location
 	// (default 03:00 in time.Local, which TZ sets).
 	At       time.Duration
@@ -127,6 +134,7 @@ type Counters struct {
 	Expired   atomic.Uint64 // recordings deleted by the nightly job
 	Orphans   atomic.Uint64 // files with no row removed by the nightly job
 	Shortened atomic.Uint64 // recordings deleted early for low disk: "retention shortened"
+	Full      atomic.Uint64 // times "recordings volume full" was raised
 }
 
 // Job is the retention job.
@@ -136,6 +144,9 @@ type Job struct {
 
 	mu      sync.Mutex
 	diskErr string // the last free-space error logged, so it's logged once
+	// full: a low-disk check stopped at the floor, still below MinFree.
+	// It clears once the free space is back at MinFree.
+	full bool
 }
 
 // New returns the job. Call Run to run it on its schedule.
@@ -154,6 +165,12 @@ func New(cfg Config) (*Job, error) {
 	}
 	if cfg.MinFree <= 0 || cfg.MinFree >= 1 {
 		return nil, errors.New("RECORDINGS_MIN_FREE must be above 0 % and below 100 %")
+	}
+	if cfg.EarlyDeleteFloor == 0 {
+		cfg.EarlyDeleteFloor = DefaultEarlyDeleteFloor
+	}
+	if cfg.EarlyDeleteFloor < 0 {
+		return nil, errors.New("RECORDINGS_EARLY_DELETE_FLOOR can't be negative")
 	}
 	if cfg.At == 0 {
 		cfg.At = 3 * time.Hour
@@ -245,6 +262,9 @@ const (
 	DiskOK      DiskState = "ok"
 	DiskWarning DiskState = "warning" // below WarnFree: admins are warned
 	DiskLow     DiskState = "low"     // below MinFree: retention is being shortened
+	// DiskFull is below MinFree with only calls within the early-delete
+	// floor left: nothing more is deleted early, "recordings volume full".
+	DiskFull DiskState = "full"
 )
 
 // Disk is the recordings volume as admins see it.
@@ -253,6 +273,8 @@ type Disk struct {
 	State    DiskState
 	MinFree  float64
 	WarnFree float64
+	// Floor is the early-delete floor.
+	Floor time.Duration
 }
 
 // Disk measures the recordings volume now.
@@ -261,8 +283,13 @@ func (j *Job) Disk() (Disk, error) {
 	if err != nil {
 		return Disk{}, err
 	}
-	d := Disk{Space: sp, State: DiskOK, MinFree: j.cfg.MinFree, WarnFree: WarnFree}
+	d := Disk{Space: sp, State: DiskOK, MinFree: j.cfg.MinFree, WarnFree: WarnFree, Floor: j.cfg.EarlyDeleteFloor}
+	j.mu.Lock()
+	full := j.full
+	j.mu.Unlock()
 	switch f := sp.FreeFraction(); {
+	case f < j.cfg.MinFree && full:
+		d.State = DiskFull
 	case f < j.cfg.MinFree:
 		d.State = DiskLow
 	case f < WarnFree:
@@ -639,12 +666,17 @@ type ShortenResult struct {
 	// shortened.
 	OldestKept *time.Time `json:"oldest_kept,omitempty"`
 	FileErrors int64      `json:"file_errors"`
+	// Full: still below MinFree with only calls within the floor left.
+	Full bool `json:"full"`
 }
 
 // CheckDisk measures the recordings volume and, below MinFree, deletes
-// the oldest calls, hidden ones alike, one at a time until it isn't, or
-// none is left: "retention shortened" (R88). It's the low-disk run the
-// schedule does every DiskEvery, and how tests trigger it.
+// the oldest calls, hidden ones alike, one at a time until it isn't:
+// "retention shortened" (R88). It never deletes a call that started within
+// the early-delete floor: with only those left and the volume still below
+// MinFree, it stops and raises "recordings volume full", which clears once
+// the free space is back at MinFree. It's the low-disk run the schedule
+// does every DiskEvery, and how tests trigger it.
 func (j *Job) CheckDisk(ctx context.Context) (ShortenResult, error) {
 	var res ShortenResult
 	d, err := j.Disk()
@@ -661,7 +693,8 @@ func (j *Job) CheckDisk(ctx context.Context) (ShortenResult, error) {
 	j.mu.Lock()
 	j.diskErr = ""
 	j.mu.Unlock()
-	if d.State != DiskLow {
+	if !d.below() {
+		j.setFull(false, d)
 		return res, nil
 	}
 	err = j.locked(ctx, func() error {
@@ -691,13 +724,13 @@ func (j *Job) shorten(ctx context.Context) (ShortenResult, error) {
 		j.cfg.Log.Warn("retention shortened: recordings deleted early for low disk",
 			"recordings", res.Recordings, "calls", res.Calls,
 			"free_before", res.FreeBefore, "free_after", res.FreeAfter, "min_free", j.cfg.MinFree,
-			"oldest_kept", res.OldestKept)
+			"oldest_kept", res.OldestKept, "full", res.Full)
 	}()
-	for d.State == DiskLow {
-		row, err := j.cfg.Store.DeleteOldestCall(ctx)
+	cutoff := tstz(j.Now().Add(-j.cfg.EarlyDeleteFloor))
+	for d.below() {
+		row, err := j.cfg.Store.DeleteOldestCall(ctx, cutoff)
 		if errors.Is(err, pgx.ErrNoRows) {
-			j.cfg.Log.Error("the recordings volume is still low on space with no recordings left to delete",
-				"free", d.FreeFraction(), "min_free", j.cfg.MinFree)
+			res.Full = true
 			break
 		}
 		if err != nil {
@@ -716,6 +749,7 @@ func (j *Job) shorten(ctx context.Context) (ShortenResult, error) {
 		}
 		res.FreeAfter = d.FreeFraction()
 	}
+	j.setFull(res.Full, d)
 	if res.Calls > 0 {
 		oldest, err := j.cfg.Store.OldestCallStart(ctx)
 		if err == nil && oldest.Valid {
@@ -724,6 +758,26 @@ func (j *Job) shorten(ctx context.Context) (ShortenResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// below is free space below MinFree: low, or full.
+func (d Disk) below() bool { return d.FreeFraction() < d.MinFree }
+
+// setFull raises or clears "recordings volume full", logging and counting
+// it when it's raised and logging when it clears.
+func (j *Job) setFull(full bool, d Disk) {
+	j.mu.Lock()
+	was := j.full
+	j.full = full
+	j.mu.Unlock()
+	switch {
+	case full && !was:
+		j.Stat.Full.Add(1)
+		j.cfg.Log.Error("recordings volume full: still low on space with only recordings within the early-delete floor left, which aren't deleted early",
+			"free", d.FreeFraction(), "min_free", j.cfg.MinFree, "floor", j.cfg.EarlyDeleteFloor)
+	case !full && was:
+		j.cfg.Log.Info("recordings volume full cleared", "free", d.FreeFraction(), "min_free", j.cfg.MinFree)
+	}
 }
 
 func tstz(t time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: t, Valid: true} }

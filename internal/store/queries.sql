@@ -370,9 +370,11 @@ WHERE id IN (SELECT c.id FROM calls c WHERE c.started_at < sqlc.arg(cutoff)
 RETURNING recording_path;
 
 -- name: DeleteOldestCall :one
--- Low disk (R88): the oldest call goes first. No row: no calls left.
+-- Low disk (R88): the oldest call goes first, if it started before the
+-- cut-off (the early-delete floor). No row: none is left before it.
 DELETE FROM calls
-WHERE id = (SELECT c.id FROM calls c ORDER BY c.started_at, c.id LIMIT 1)
+WHERE id = (SELECT c.id FROM calls c WHERE c.started_at < sqlc.arg(cutoff)
+            ORDER BY c.started_at, c.id LIMIT 1)
 RETURNING recording_path, started_at;
 
 -- name: OldestCallStart :one

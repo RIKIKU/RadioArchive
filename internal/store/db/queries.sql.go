@@ -340,7 +340,8 @@ func (q *Queries) DeleteCallsBefore(ctx context.Context, arg DeleteCallsBeforePa
 
 const deleteOldestCall = `-- name: DeleteOldestCall :one
 DELETE FROM calls
-WHERE id = (SELECT c.id FROM calls c ORDER BY c.started_at, c.id LIMIT 1)
+WHERE id = (SELECT c.id FROM calls c WHERE c.started_at < $1
+            ORDER BY c.started_at, c.id LIMIT 1)
 RETURNING recording_path, started_at
 `
 
@@ -349,9 +350,10 @@ type DeleteOldestCallRow struct {
 	StartedAt     pgtype.Timestamptz
 }
 
-// Low disk (R88): the oldest call goes first. No row: no calls left.
-func (q *Queries) DeleteOldestCall(ctx context.Context) (DeleteOldestCallRow, error) {
-	row := q.db.QueryRow(ctx, deleteOldestCall)
+// Low disk (R88): the oldest call goes first, if it started before the
+// cut-off (the early-delete floor). No row: none is left before it.
+func (q *Queries) DeleteOldestCall(ctx context.Context, cutoff pgtype.Timestamptz) (DeleteOldestCallRow, error) {
+	row := q.db.QueryRow(ctx, deleteOldestCall, cutoff)
 	var i DeleteOldestCallRow
 	err := row.Scan(&i.RecordingPath, &i.StartedAt)
 	return i, err

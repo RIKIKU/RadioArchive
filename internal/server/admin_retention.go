@@ -34,8 +34,13 @@ type RetentionDisk struct {
 	FreePercent        float64 `json:"free_percent"`
 	MinFreePercent     float64 `json:"min_free_percent"`
 	WarningFreePercent float64 `json:"warning_free_percent"`
-	// State is ok, warning (below the warning level) or low (below
-	// RECORDINGS_MIN_FREE: the oldest recordings are being deleted early).
+	// EarlyDeleteFloorHours is RECORDINGS_EARLY_DELETE_FLOOR: calls
+	// that started within it are never deleted early.
+	EarlyDeleteFloorHours float64 `json:"early_delete_floor_hours"`
+	// State is ok, warning (below the warning level), low (below
+	// RECORDINGS_MIN_FREE: the oldest recordings are being deleted early)
+	// or full (below it with only recordings within the floor left:
+	// "recordings volume full").
 	State   string `json:"state"`
 	Message string `json:"message,omitempty"`
 }
@@ -52,7 +57,8 @@ func (a *Admin) retentionState(r *http.Request) (Retention, error) {
 		MaxDays: retention.MaxDays, NextRun: a.ret.NextRun(a.ret.Now()).UTC()}
 	if d, err := a.ret.Disk(); err == nil {
 		rd := &RetentionDisk{FreeBytes: d.Free, TotalBytes: d.Total, FreePercent: percent(d.FreeFraction()),
-			MinFreePercent: percent(d.MinFree), WarningFreePercent: percent(d.WarnFree), State: string(d.State)}
+			MinFreePercent: percent(d.MinFree), WarningFreePercent: percent(d.WarnFree),
+			EarlyDeleteFloorHours: d.Floor.Hours(), State: string(d.State)}
 		switch d.State {
 		case retention.DiskWarning:
 			rd.Message = fmt.Sprintf("The recordings volume has %g %% free. Below %g %%, the oldest recordings are deleted early.",
@@ -60,6 +66,9 @@ func (a *Admin) retentionState(r *http.Request) (Retention, error) {
 		case retention.DiskLow:
 			rd.Message = fmt.Sprintf("The recordings volume has %g %% free, below %g %%: the oldest recordings are being deleted early (retention shortened).",
 				rd.FreePercent, rd.MinFreePercent)
+		case retention.DiskFull:
+			rd.Message = fmt.Sprintf("The recordings volume has %g %% free, below %g %%, and only recordings from the last %g hours are left, which aren't deleted early: recordings volume full.",
+				rd.FreePercent, rd.MinFreePercent, rd.EarlyDeleteFloorHours)
 		}
 		out.Disk = rd
 	}

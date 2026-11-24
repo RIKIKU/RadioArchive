@@ -14,6 +14,8 @@
 //	RECORDINGS_DIR  the recordings volume (default /var/lib/radioarchive/recordings)
 //	RECORDINGS_MIN_FREE  below this much free on the recordings volume, the
 //	                oldest recordings are deleted early (default 5%)
+//	RECORDINGS_EARLY_DELETE_FLOOR  calls that started within this are never
+//	                deleted early, as a Go duration (default 24h)
 //	NIGHTLY_AT      local time of the nightly retention run, HH:MM (default 03:00, in TZ)
 package main
 
@@ -158,6 +160,13 @@ func retentionJob(st *store.Store, log *slog.Logger) (*retention.Job, error) {
 			return nil, fmt.Errorf("RECORDINGS_MIN_FREE: %w", err)
 		}
 		cfg.MinFree = f
+	}
+	if v := os.Getenv("RECORDINGS_EARLY_DELETE_FLOOR"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("RECORDINGS_EARLY_DELETE_FLOOR: %q isn't a duration above 0, like 24h", v)
+		}
+		cfg.EarlyDeleteFloor = d
 	}
 	if v := os.Getenv("NIGHTLY_AT"); v != "" {
 		at, err := retention.ParseAt(v)
