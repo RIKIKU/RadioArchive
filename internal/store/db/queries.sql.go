@@ -69,6 +69,140 @@ func (q *Queries) AddTransmission(ctx context.Context, arg AddTransmissionParams
 	return err
 }
 
+const attach = `-- name: Attach :one
+INSERT INTO attachments (recorder_id, short_name, system_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (recorder_id, short_name) DO UPDATE
+SET system_id = EXCLUDED.system_id, attached_at = now()
+RETURNING attached_at
+`
+
+type AttachParams struct {
+	RecorderID int64
+	ShortName  string
+	SystemID   int64
+}
+
+func (q *Queries) Attach(ctx context.Context, arg AttachParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, attach, arg.RecorderID, arg.ShortName, arg.SystemID)
+	var attached_at pgtype.Timestamptz
+	err := row.Scan(&attached_at)
+	return attached_at, err
+}
+
+const attachedSystem = `-- name: AttachedSystem :one
+SELECT s.id, s.auto_create
+FROM attachments a JOIN systems s ON s.id = a.system_id
+WHERE a.recorder_id = $1 AND a.short_name = $2
+`
+
+type AttachedSystemParams struct {
+	RecorderID int64
+	ShortName  string
+}
+
+type AttachedSystemRow struct {
+	ID         int64
+	AutoCreate bool
+}
+
+func (q *Queries) AttachedSystem(ctx context.Context, arg AttachedSystemParams) (AttachedSystemRow, error) {
+	row := q.db.QueryRow(ctx, attachedSystem, arg.RecorderID, arg.ShortName)
+	var i AttachedSystemRow
+	err := row.Scan(&i.ID, &i.AutoCreate)
+	return i, err
+}
+
+const autoCreateTalkgroup = `-- name: AutoCreateTalkgroup :exec
+INSERT INTO talkgroups (system_id, talkgroup_id, unreviewed)
+VALUES ($1, $2, true)
+ON CONFLICT DO NOTHING
+`
+
+type AutoCreateTalkgroupParams struct {
+	SystemID    int64
+	TalkgroupID int32
+}
+
+// R21: public and unreviewed, with no label, name or tag yet.
+func (q *Queries) AutoCreateTalkgroup(ctx context.Context, arg AutoCreateTalkgroupParams) error {
+	_, err := q.db.Exec(ctx, autoCreateTalkgroup, arg.SystemID, arg.TalkgroupID)
+	return err
+}
+
+const callEffectiveState = `-- name: CallEffectiveState :one
+
+SELECT call_state(system_id, talkgroup, patched_talkgroups)::talkgroup_state AS state
+FROM calls WHERE id = $1
+`
+
+// The gate (issue #35) builds on this: a stored call's state, now (R16, R30).
+func (q *Queries) CallEffectiveState(ctx context.Context, id pgtype.UUID) (TalkgroupState, error) {
+	row := q.db.QueryRow(ctx, callEffectiveState, id)
+	var state TalkgroupState
+	err := row.Scan(&state)
+	return state, err
+}
+
+const callForAdmission = `-- name: CallForAdmission :one
+SELECT id, system_id, patched_talkgroups, (recording_path IS NOT NULL)::bool AS recorded
+FROM calls
+WHERE recorder_id = $1 AND sys_num = $2
+  AND call_num = $3 AND start_time = $4
+FOR UPDATE
+`
+
+type CallForAdmissionParams struct {
+	RecorderID int64
+	SysNum     int32
+	CallNum    int64
+	StartTime  int64
+}
+
+type CallForAdmissionRow struct {
+	ID                pgtype.UUID
+	SystemID          int64
+	PatchedTalkgroups []int32
+	Recorded          bool
+}
+
+// Locks the call's row while its recording or live start is decided.
+func (q *Queries) CallForAdmission(ctx context.Context, arg CallForAdmissionParams) (CallForAdmissionRow, error) {
+	row := q.db.QueryRow(ctx, callForAdmission,
+		arg.RecorderID,
+		arg.SysNum,
+		arg.CallNum,
+		arg.StartTime,
+	)
+	var i CallForAdmissionRow
+	err := row.Scan(
+		&i.ID,
+		&i.SystemID,
+		&i.PatchedTalkgroups,
+		&i.Recorded,
+	)
+	return i, err
+}
+
+const callState = `-- name: CallState :one
+SELECT call_state($1::bigint, $2::integer,
+                  $3::integer[])::talkgroup_state AS state
+`
+
+type CallStateParams struct {
+	SystemID  int64
+	Talkgroup int32
+	Patched   []int32
+}
+
+// The state a call on talkgroup, patched with patched, is treated as (R16).
+func (q *Queries) CallState(ctx context.Context, arg CallStateParams) (TalkgroupState, error) {
+	row := q.db.QueryRow(ctx, callState, arg.SystemID, arg.Talkgroup, arg.Patched)
+	var state TalkgroupState
+	err := row.Scan(&state)
+	return state, err
+}
+
 const createRecorder = `-- name: CreateRecorder :one
 
 INSERT INTO recorders (name, key_hash)
@@ -89,6 +223,61 @@ func (q *Queries) CreateRecorder(ctx context.Context, arg CreateRecorderParams) 
 	return id, err
 }
 
+const createSystem = `-- name: CreateSystem :one
+
+INSERT INTO systems (id, label, name, auto_create)
+VALUES ($1, $2, $3, $4)
+RETURNING id, label, name, auto_create, created_at, updated_at
+`
+
+type CreateSystemParams struct {
+	ID         int64
+	Label      string
+	Name       string
+	AutoCreate bool
+}
+
+type CreateSystemRow struct {
+	ID         int64
+	Label      string
+	Name       string
+	AutoCreate bool
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+// Systems (R11). The ID is the admin's.
+func (q *Queries) CreateSystem(ctx context.Context, arg CreateSystemParams) (CreateSystemRow, error) {
+	row := q.db.QueryRow(ctx, createSystem,
+		arg.ID,
+		arg.Label,
+		arg.Name,
+		arg.AutoCreate,
+	)
+	var i CreateSystemRow
+	err := row.Scan(
+		&i.ID,
+		&i.Label,
+		&i.Name,
+		&i.AutoCreate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const deleteSystem = `-- name: DeleteSystem :execrows
+DELETE FROM systems WHERE id = $1
+`
+
+func (q *Queries) DeleteSystem(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSystem, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteTransmissions = `-- name: DeleteTransmissions :exec
 DELETE FROM transmissions WHERE call_id = $1
 `
@@ -98,46 +287,223 @@ func (q *Queries) DeleteTransmissions(ctx context.Context, callID pgtype.UUID) e
 	return err
 }
 
-const endLiveCall = `-- name: EndLiveCall :exec
-UPDATE calls
-SET ended_at = CASE WHEN recording_path IS NULL THEN $1 ELSE ended_at END,
-    patched_talkgroups = CASE WHEN recording_path IS NULL THEN $2::integer[]
-                              ELSE patched_talkgroups END,
-    live_frames = live_frames + $3
-WHERE id = $4
+const deleteUnrecordedCall = `-- name: DeleteUnrecordedCall :exec
+DELETE FROM calls WHERE id = $1 AND recording_path IS NULL
 `
 
-type EndLiveCallParams struct {
-	EndedAt           pgtype.Timestamptz
-	PatchedTalkgroups []int32
-	Frames            int64
-	ID                pgtype.UUID
-}
-
-// The recording's end time and patched talkgroups win over the live ones.
-func (q *Queries) EndLiveCall(ctx context.Context, arg EndLiveCallParams) error {
-	_, err := q.db.Exec(ctx, endLiveCall,
-		arg.EndedAt,
-		arg.PatchedTalkgroups,
-		arg.Frames,
-		arg.ID,
-	)
+// A live call refused before its recording arrived (its patch became
+// ignored) leaves nothing behind.
+func (q *Queries) DeleteUnrecordedCall(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteUnrecordedCall, id)
 	return err
 }
 
-const ensureSystem = `-- name: EnsureSystem :one
+const detach = `-- name: Detach :execrows
+DELETE FROM attachments WHERE recorder_id = $1 AND short_name = $2
+`
 
-INSERT INTO systems (name) VALUES ($1)
+type DetachParams struct {
+	RecorderID int64
+	ShortName  string
+}
+
+func (q *Queries) Detach(ctx context.Context, arg DetachParams) (int64, error) {
+	result, err := q.db.Exec(ctx, detach, arg.RecorderID, arg.ShortName)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const endLiveCall = `-- name: EndLiveCall :exec
+UPDATE calls
+SET ended_at = CASE WHEN recording_path IS NULL THEN $1 ELSE ended_at END,
+    live_frames = live_frames + $2
+WHERE id = $3
+`
+
+type EndLiveCallParams struct {
+	EndedAt pgtype.Timestamptz
+	Frames  int64
+	ID      pgtype.UUID
+}
+
+// The recording's end time wins over the live one.
+func (q *Queries) EndLiveCall(ctx context.Context, arg EndLiveCallParams) error {
+	_, err := q.db.Exec(ctx, endLiveCall, arg.EndedAt, arg.Frames, arg.ID)
+	return err
+}
+
+const ensureTag = `-- name: EnsureTag :one
+INSERT INTO tags (name) VALUES ($1)
 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
 RETURNING id
 `
 
-// Systems: one, for now (issue #34 brings attachments).
-func (q *Queries) EnsureSystem(ctx context.Context, name string) (int64, error) {
-	row := q.db.QueryRow(ctx, ensureSystem, name)
+func (q *Queries) EnsureTag(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRow(ctx, ensureTag, name)
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const extendLivePatch = `-- name: ExtendLivePatch :one
+UPDATE calls
+SET patched_talkgroups = CASE WHEN recording_path IS NULL
+        THEN ARRAY(SELECT DISTINCT p FROM unnest(patched_talkgroups || $1::integer[]) AS p
+                   WHERE p <> talkgroup ORDER BY p)
+        ELSE patched_talkgroups END
+WHERE id = $2
+RETURNING call_state(system_id, talkgroup, patched_talkgroups)::talkgroup_state AS state
+`
+
+type ExtendLivePatchParams struct {
+	Patched []int32
+	ID      pgtype.UUID
+}
+
+// Adds the patched talkgroups a live event reports to the call's (a patch
+// can grow during a call, and can expire before it ends), unless the
+// recording has stored them, and returns the call's state now.
+func (q *Queries) ExtendLivePatch(ctx context.Context, arg ExtendLivePatchParams) (TalkgroupState, error) {
+	row := q.db.QueryRow(ctx, extendLivePatch, arg.Patched, arg.ID)
+	var state TalkgroupState
+	err := row.Scan(&state)
+	return state, err
+}
+
+const getSystem = `-- name: GetSystem :one
+SELECT id, label, name, auto_create, created_at, updated_at FROM systems WHERE id = $1
+`
+
+type GetSystemRow struct {
+	ID         int64
+	Label      string
+	Name       string
+	AutoCreate bool
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+func (q *Queries) GetSystem(ctx context.Context, id int64) (GetSystemRow, error) {
+	row := q.db.QueryRow(ctx, getSystem, id)
+	var i GetSystemRow
+	err := row.Scan(
+		&i.ID,
+		&i.Label,
+		&i.Name,
+		&i.AutoCreate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTalkgroup = `-- name: GetTalkgroup :one
+SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.unreviewed,
+       t.created_at, t.updated_at
+FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
+WHERE t.system_id = $1 AND t.talkgroup_id = $2
+`
+
+type GetTalkgroupParams struct {
+	SystemID    int64
+	TalkgroupID int32
+}
+
+type GetTalkgroupRow struct {
+	SystemID    int64
+	TalkgroupID int32
+	Label       string
+	Name        string
+	Tag         *string
+	State       TalkgroupState
+	Unreviewed  bool
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+func (q *Queries) GetTalkgroup(ctx context.Context, arg GetTalkgroupParams) (GetTalkgroupRow, error) {
+	row := q.db.QueryRow(ctx, getTalkgroup, arg.SystemID, arg.TalkgroupID)
+	var i GetTalkgroupRow
+	err := row.Scan(
+		&i.SystemID,
+		&i.TalkgroupID,
+		&i.Label,
+		&i.Name,
+		&i.Tag,
+		&i.State,
+		&i.Unreviewed,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const ignoredInPatch = `-- name: IgnoredInPatch :one
+SELECT talkgroup_id FROM talkgroups
+WHERE system_id = $1 AND state = 'ignored'
+  AND (talkgroup_id = $2 OR talkgroup_id = ANY ($3::integer[]))
+ORDER BY talkgroup_id = $2 DESC, talkgroup_id
+LIMIT 1
+`
+
+type IgnoredInPatchParams struct {
+	SystemID  int64
+	Talkgroup int32
+	Patched   []int32
+}
+
+// Which talkgroup of an ignored call's patch is ignored: its own first.
+func (q *Queries) IgnoredInPatch(ctx context.Context, arg IgnoredInPatchParams) (int32, error) {
+	row := q.db.QueryRow(ctx, ignoredInPatch, arg.SystemID, arg.Talkgroup, arg.Patched)
+	var talkgroup_id int32
+	err := row.Scan(&talkgroup_id)
+	return talkgroup_id, err
+}
+
+const listAttachments = `-- name: ListAttachments :many
+
+SELECT r.name AS recorder, a.short_name, a.system_id, s.label AS system_label, a.attached_at
+FROM attachments a
+JOIN recorders r ON r.id = a.recorder_id
+JOIN systems s ON s.id = a.system_id
+ORDER BY r.name, a.short_name
+`
+
+type ListAttachmentsRow struct {
+	Recorder    string
+	ShortName   string
+	SystemID    int64
+	SystemLabel string
+	AttachedAt  pgtype.Timestamptz
+}
+
+// Attachments (R12): each recorder + shortName pair to one system.
+func (q *Queries) ListAttachments(ctx context.Context) ([]ListAttachmentsRow, error) {
+	rows, err := q.db.Query(ctx, listAttachments)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAttachmentsRow
+	for rows.Next() {
+		var i ListAttachmentsRow
+		if err := rows.Scan(
+			&i.Recorder,
+			&i.ShortName,
+			&i.SystemID,
+			&i.SystemLabel,
+			&i.AttachedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listRecorders = `-- name: ListRecorders :many
@@ -169,6 +535,98 @@ func (q *Queries) ListRecorders(ctx context.Context) ([]ListRecordersRow, error)
 			&i.CreatedAt,
 			&i.KeyRotatedAt,
 			&i.RetiredAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSystems = `-- name: ListSystems :many
+SELECT id, label, name, auto_create, created_at, updated_at FROM systems ORDER BY id
+`
+
+type ListSystemsRow struct {
+	ID         int64
+	Label      string
+	Name       string
+	AutoCreate bool
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+func (q *Queries) ListSystems(ctx context.Context) ([]ListSystemsRow, error) {
+	rows, err := q.db.Query(ctx, listSystems)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSystemsRow
+	for rows.Next() {
+		var i ListSystemsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Label,
+			&i.Name,
+			&i.AutoCreate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTalkgroups = `-- name: ListTalkgroups :many
+
+SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.unreviewed,
+       t.created_at, t.updated_at
+FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
+WHERE t.system_id = $1
+ORDER BY t.talkgroup_id
+`
+
+type ListTalkgroupsRow struct {
+	SystemID    int64
+	TalkgroupID int32
+	Label       string
+	Name        string
+	Tag         *string
+	State       TalkgroupState
+	Unreviewed  bool
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+// Talkgroups (R21, R22).
+func (q *Queries) ListTalkgroups(ctx context.Context, systemID int64) ([]ListTalkgroupsRow, error) {
+	rows, err := q.db.Query(ctx, listTalkgroups, systemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTalkgroupsRow
+	for rows.Next() {
+		var i ListTalkgroupsRow
+		if err := rows.Scan(
+			&i.SystemID,
+			&i.TalkgroupID,
+			&i.Label,
+			&i.Name,
+			&i.Tag,
+			&i.State,
+			&i.Unreviewed,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -213,7 +671,7 @@ type LockCallForRecordingRow struct {
 // Recordings (R19, R20). In one transaction: lock or create the call, then
 // store the recording on it once.
 // Creates the call if the live call never reached the server, and locks
-// its row either way.
+// its row either way. An existing call keeps the system it was filed under.
 func (q *Queries) LockCallForRecording(ctx context.Context, arg LockCallForRecordingParams) (LockCallForRecordingRow, error) {
 	row := q.db.QueryRow(ctx, lockCallForRecording,
 		arg.RecorderID,
@@ -243,6 +701,43 @@ func (q *Queries) NotifyRecorderKeyChanged(ctx context.Context, recorderID int64
 	return err
 }
 
+const patchTalkgroup = `-- name: PatchTalkgroup :execrows
+UPDATE talkgroups
+SET label = COALESCE($1, label),
+    name = COALESCE($2, name),
+    tag_id = COALESCE($3, tag_id),
+    state = COALESCE($4::talkgroup_state, state),
+    unreviewed = false,
+    updated_at = now()
+WHERE system_id = $5 AND talkgroup_id = $6
+`
+
+type PatchTalkgroupParams struct {
+	Label       *string
+	Name        *string
+	TagID       *int64
+	State       *TalkgroupState
+	SystemID    int64
+	TalkgroupID int32
+}
+
+// An admin's partial edit, of the fields given. It marks the talkgroup
+// reviewed, so it needs a tag by then (the table's check).
+func (q *Queries) PatchTalkgroup(ctx context.Context, arg PatchTalkgroupParams) (int64, error) {
+	result, err := q.db.Exec(ctx, patchTalkgroup,
+		arg.Label,
+		arg.Name,
+		arg.TagID,
+		arg.State,
+		arg.SystemID,
+		arg.TalkgroupID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const ping = `-- name: Ping :one
 SELECT 1::int AS ok
 `
@@ -253,6 +748,73 @@ func (q *Queries) Ping(ctx context.Context) (int32, error) {
 	var ok int32
 	err := row.Scan(&ok)
 	return ok, err
+}
+
+const putTalkgroup = `-- name: PutTalkgroup :exec
+INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state)
+VALUES ($1, $2, $3, $4,
+        $5, $6)
+ON CONFLICT (system_id, talkgroup_id) DO UPDATE
+SET label = EXCLUDED.label, name = EXCLUDED.name, tag_id = EXCLUDED.tag_id, state = EXCLUDED.state,
+    unreviewed = false, updated_at = now()
+`
+
+type PutTalkgroupParams struct {
+	SystemID    int64
+	TalkgroupID int32
+	Label       string
+	Name        string
+	TagID       *int64
+	State       TalkgroupState
+}
+
+// An admin's add or full edit. It marks the talkgroup reviewed.
+func (q *Queries) PutTalkgroup(ctx context.Context, arg PutTalkgroupParams) error {
+	_, err := q.db.Exec(ctx, putTalkgroup,
+		arg.SystemID,
+		arg.TalkgroupID,
+		arg.Label,
+		arg.Name,
+		arg.TagID,
+		arg.State,
+	)
+	return err
+}
+
+const recordRejection = `-- name: RecordRejection :execrows
+INSERT INTO rejected_calls (recorder_id, sys_num, call_num, start_time, short_name, system_id, talkgroup, reason)
+VALUES ($1, $2, $3, $4,
+        $5, $6, $7, $8)
+ON CONFLICT DO NOTHING
+`
+
+type RecordRejectionParams struct {
+	RecorderID int64
+	SysNum     int32
+	CallNum    int64
+	StartTime  int64
+	ShortName  string
+	SystemID   *int64
+	Talkgroup  int32
+	Reason     RejectionReason
+}
+
+// Once per call: no row when the call was already counted.
+func (q *Queries) RecordRejection(ctx context.Context, arg RecordRejectionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordRejection,
+		arg.RecorderID,
+		arg.SysNum,
+		arg.CallNum,
+		arg.StartTime,
+		arg.ShortName,
+		arg.SystemID,
+		arg.Talkgroup,
+		arg.Reason,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const recorderByKeyHash = `-- name: RecorderByKeyHash :one
@@ -270,6 +832,22 @@ func (q *Queries) RecorderByKeyHash(ctx context.Context, keyHash []byte) (Record
 	row := q.db.QueryRow(ctx, recorderByKeyHash, keyHash)
 	var i RecorderByKeyHashRow
 	err := row.Scan(&i.ID, &i.Name)
+	return i, err
+}
+
+const recorderByName = `-- name: RecorderByName :one
+SELECT id, retired_at FROM recorders WHERE name = $1
+`
+
+type RecorderByNameRow struct {
+	ID        int64
+	RetiredAt pgtype.Timestamptz
+}
+
+func (q *Queries) RecorderByName(ctx context.Context, name string) (RecorderByNameRow, error) {
+	row := q.db.QueryRow(ctx, recorderByName, name)
+	var i RecorderByNameRow
+	err := row.Scan(&i.ID, &i.RetiredAt)
 	return i, err
 }
 
@@ -292,6 +870,34 @@ func (q *Queries) RecorderKeyIsCurrent(ctx context.Context, arg RecorderKeyIsCur
 	return current, err
 }
 
+const rejectionFor = `-- name: RejectionFor :one
+
+SELECT reason FROM rejected_calls
+WHERE recorder_id = $1 AND sys_num = $2
+  AND call_num = $3 AND start_time = $4
+`
+
+type RejectionForParams struct {
+	RecorderID int64
+	SysNum     int32
+	CallNum    int64
+	StartTime  int64
+}
+
+// Ingest's decisions (R12, R17, R18, R21), made in one transaction when the
+// server first hears of a call: store.Admit.
+func (q *Queries) RejectionFor(ctx context.Context, arg RejectionForParams) (RejectionReason, error) {
+	row := q.db.QueryRow(ctx, rejectionFor,
+		arg.RecorderID,
+		arg.SysNum,
+		arg.CallNum,
+		arg.StartTime,
+	)
+	var reason RejectionReason
+	err := row.Scan(&reason)
+	return reason, err
+}
+
 const retireRecorder = `-- name: RetireRecorder :one
 UPDATE recorders
 SET key_hash = NULL, retired_at = now()
@@ -309,21 +915,19 @@ func (q *Queries) RetireRecorder(ctx context.Context, name string) (int64, error
 
 const setCallRecording = `-- name: SetCallRecording :exec
 UPDATE calls
-SET system_id = $1,
-    short_name = $2,
-    talkgroup = $3,
-    patched_talkgroups = $4::integer[],
-    started_at = $5,
-    ended_at = $6,
-    recording_path = $7,
-    recording_size = $8,
-    recording_sha256 = $9,
+SET short_name = $1,
+    talkgroup = $2,
+    patched_talkgroups = $3::integer[],
+    started_at = $4,
+    ended_at = $5,
+    recording_path = $6,
+    recording_size = $7,
+    recording_sha256 = $8,
     recording_at = now()
-WHERE id = $10
+WHERE id = $9
 `
 
 type SetCallRecordingParams struct {
-	SystemID          int64
 	ShortName         string
 	Talkgroup         int32
 	PatchedTalkgroups []int32
@@ -337,7 +941,6 @@ type SetCallRecordingParams struct {
 
 func (q *Queries) SetCallRecording(ctx context.Context, arg SetCallRecordingParams) error {
 	_, err := q.db.Exec(ctx, setCallRecording,
-		arg.SystemID,
 		arg.ShortName,
 		arg.Talkgroup,
 		arg.PatchedTalkgroups,
@@ -369,6 +972,174 @@ func (q *Queries) SetRecorderKey(ctx context.Context, arg SetRecorderKeyParams) 
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const systemInUse = `-- name: SystemInUse :one
+SELECT EXISTS (SELECT 1 FROM talkgroups t WHERE t.system_id = $1)::bool AS talkgroups,
+       EXISTS (SELECT 1 FROM calls c WHERE c.system_id = $1)::bool AS calls
+`
+
+type SystemInUseRow struct {
+	Talkgroups bool
+	Calls      bool
+}
+
+// A system that still has talkgroups or calls can't be deleted (R11).
+func (q *Queries) SystemInUse(ctx context.Context, id int64) (SystemInUseRow, error) {
+	row := q.db.QueryRow(ctx, systemInUse, id)
+	var i SystemInUseRow
+	err := row.Scan(&i.Talkgroups, &i.Calls)
+	return i, err
+}
+
+const talkgroupListed = `-- name: TalkgroupListed :one
+SELECT EXISTS (
+    SELECT 1 FROM talkgroups WHERE system_id = $1 AND talkgroup_id = $2
+)::bool AS listed
+`
+
+type TalkgroupListedParams struct {
+	SystemID    int64
+	TalkgroupID int32
+}
+
+func (q *Queries) TalkgroupListed(ctx context.Context, arg TalkgroupListedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, talkgroupListed, arg.SystemID, arg.TalkgroupID)
+	var listed bool
+	err := row.Scan(&listed)
+	return listed, err
+}
+
+const talkgroupRejections = `-- name: TalkgroupRejections :many
+SELECT j.system_id::bigint AS system_id, j.talkgroup, j.reason, count(*) AS calls,
+       max(j.rejected_at)::timestamptz AS last_at
+FROM rejected_calls j
+WHERE j.reason <> 'not_attached'
+  AND ($1::bigint IS NULL OR j.system_id = $1)
+GROUP BY j.system_id, j.talkgroup, j.reason
+ORDER BY j.system_id, j.talkgroup, j.reason
+`
+
+type TalkgroupRejectionsRow struct {
+	SystemID  int64
+	Talkgroup int32
+	Reason    RejectionReason
+	Calls     int64
+	LastAt    pgtype.Timestamptz
+}
+
+func (q *Queries) TalkgroupRejections(ctx context.Context, systemID *int64) ([]TalkgroupRejectionsRow, error) {
+	rows, err := q.db.Query(ctx, talkgroupRejections, systemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TalkgroupRejectionsRow
+	for rows.Next() {
+		var i TalkgroupRejectionsRow
+		if err := rows.Scan(
+			&i.SystemID,
+			&i.Talkgroup,
+			&i.Reason,
+			&i.Calls,
+			&i.LastAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const unattachedRejections = `-- name: UnattachedRejections :many
+
+SELECT r.name AS recorder, j.short_name, count(*) AS calls, max(j.rejected_at)::timestamptz AS last_at
+FROM rejected_calls j JOIN recorders r ON r.id = j.recorder_id
+WHERE j.reason = 'not_attached'
+GROUP BY r.name, j.short_name
+ORDER BY r.name, j.short_name
+`
+
+type UnattachedRejectionsRow struct {
+	Recorder  string
+	ShortName string
+	Calls     int64
+	LastAt    pgtype.Timestamptz
+}
+
+// Rejected calls, for admins (R12, R17, R18).
+func (q *Queries) UnattachedRejections(ctx context.Context) ([]UnattachedRejectionsRow, error) {
+	rows, err := q.db.Query(ctx, unattachedRejections)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UnattachedRejectionsRow
+	for rows.Next() {
+		var i UnattachedRejectionsRow
+		if err := rows.Scan(
+			&i.Recorder,
+			&i.ShortName,
+			&i.Calls,
+			&i.LastAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateSystem = `-- name: UpdateSystem :one
+UPDATE systems
+SET label = COALESCE($1, label),
+    name = COALESCE($2, name),
+    auto_create = COALESCE($3, auto_create),
+    updated_at = now()
+WHERE id = $4
+RETURNING id, label, name, auto_create, created_at, updated_at
+`
+
+type UpdateSystemParams struct {
+	Label      *string
+	Name       *string
+	AutoCreate *bool
+	ID         int64
+}
+
+type UpdateSystemRow struct {
+	ID         int64
+	Label      string
+	Name       string
+	AutoCreate bool
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+// Changes only the fields given.
+func (q *Queries) UpdateSystem(ctx context.Context, arg UpdateSystemParams) (UpdateSystemRow, error) {
+	row := q.db.QueryRow(ctx, updateSystem,
+		arg.Label,
+		arg.Name,
+		arg.AutoCreate,
+		arg.ID,
+	)
+	var i UpdateSystemRow
+	err := row.Scan(
+		&i.ID,
+		&i.Label,
+		&i.Name,
+		&i.AutoCreate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const upsertLiveCall = `-- name: UpsertLiveCall :one

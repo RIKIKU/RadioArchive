@@ -5,8 +5,104 @@
 package db
 
 import (
+	"database/sql/driver"
+	"fmt"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type RejectionReason string
+
+const (
+	RejectionReasonNotAttached      RejectionReason = "not_attached"
+	RejectionReasonUnknownTalkgroup RejectionReason = "unknown_talkgroup"
+	RejectionReasonIgnoredTalkgroup RejectionReason = "ignored_talkgroup"
+)
+
+func (e *RejectionReason) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = RejectionReason(s)
+	case string:
+		*e = RejectionReason(s)
+	default:
+		return fmt.Errorf("unsupported scan type for RejectionReason: %T", src)
+	}
+	return nil
+}
+
+type NullRejectionReason struct {
+	RejectionReason RejectionReason
+	Valid           bool // Valid is true if RejectionReason is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullRejectionReason) Scan(value interface{}) error {
+	if value == nil {
+		ns.RejectionReason, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.RejectionReason.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullRejectionReason) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.RejectionReason), nil
+}
+
+type TalkgroupState string
+
+const (
+	TalkgroupStatePublic  TalkgroupState = "public"
+	TalkgroupStateHidden  TalkgroupState = "hidden"
+	TalkgroupStateIgnored TalkgroupState = "ignored"
+)
+
+func (e *TalkgroupState) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TalkgroupState(s)
+	case string:
+		*e = TalkgroupState(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TalkgroupState: %T", src)
+	}
+	return nil
+}
+
+type NullTalkgroupState struct {
+	TalkgroupState TalkgroupState
+	Valid          bool // Valid is true if TalkgroupState is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTalkgroupState) Scan(value interface{}) error {
+	if value == nil {
+		ns.TalkgroupState, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TalkgroupState.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTalkgroupState) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TalkgroupState), nil
+}
+
+type Attachment struct {
+	RecorderID int64
+	ShortName  string
+	SystemID   int64
+	AttachedAt pgtype.Timestamptz
+}
 
 type Call struct {
 	ID                pgtype.UUID
@@ -37,10 +133,42 @@ type Recorder struct {
 	RetiredAt    pgtype.Timestamptz
 }
 
+type RejectedCall struct {
+	RecorderID int64
+	SysNum     int32
+	CallNum    int64
+	StartTime  int64
+	ShortName  string
+	SystemID   *int64
+	Talkgroup  int32
+	Reason     RejectionReason
+	RejectedAt pgtype.Timestamptz
+}
+
 type System struct {
-	ID        int64
-	Name      string
-	CreatedAt pgtype.Timestamptz
+	ID         int64
+	Label      string
+	CreatedAt  pgtype.Timestamptz
+	Name       string
+	AutoCreate bool
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type Tag struct {
+	ID   int64
+	Name string
+}
+
+type Talkgroup struct {
+	SystemID    int64
+	TalkgroupID int32
+	Label       string
+	Name        string
+	TagID       *int64
+	State       TalkgroupState
+	Unreviewed  bool
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
 }
 
 type Transmission struct {

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,12 +51,23 @@ func (s *sink) count(callID string) int {
 	return len(s.frames[callID])
 }
 
+func (s *sink) total() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, f := range s.frames {
+		n += len(f)
+	}
+	return n
+}
+
 type env struct {
 	st   *store.Store
 	rs   *server.Recorders
 	srv  *httptest.Server
 	dir  string
 	sink *sink
+	sys  int64 // the test's fixture system, once recorder has made it
 }
 
 func newEnv(t *testing.T) *env {
@@ -77,7 +89,11 @@ func newEnv(t *testing.T) *env {
 	case <-time.After(10 * time.Second):
 		t.Fatal("key listener never started")
 	}
-	e.srv = httptest.NewServer(server.New(st, slog.New(slog.DiscardHandler), server.WithRecorders(e.rs)))
+	admin, err := server.NewAdmin(st, slog.New(slog.DiscardHandler), testAdmin{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv = httptest.NewServer(server.New(st, slog.New(slog.DiscardHandler), server.WithRecorders(e.rs), server.WithAdmin(admin)))
 	t.Cleanup(func() {
 		e.srv.Close()
 		cancel()
@@ -86,7 +102,10 @@ func newEnv(t *testing.T) *env {
 	return e
 }
 
-// recorder adds a recorder with a name unique to the test run.
+// recorder adds a recorder with a name unique to the test run, and the
+// test fixture (SPEC.md section 8) for it to feed: a system of its own with
+// talkgroups 1001, 1002 (public), 1003 (hidden) and 1004 (ignored), with
+// the recorder's `ex` attached to it.
 func (e *env) recorder(t *testing.T) (name, key string) {
 	t.Helper()
 	name = fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano())
@@ -94,6 +113,8 @@ func (e *env) recorder(t *testing.T) (name, key string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.sys = e.fixture(t)
+	e.mustAdmin(t, "PUT", "/recorders/"+url.PathEscape(name)+"/attachments/ex", map[string]any{"system_id": e.sys}, 200)
 	return name, key
 }
 

@@ -206,21 +206,31 @@ func parseMetadata(raw []byte) (cp.RecordingMetadata, error) {
 }
 
 // store files the recording against its call, creating the call if its live
-// half never reached the server.
+// half never reached the server, unless store.Admit refuses it (R12, R17,
+// R18), when the client is told so and the file is dropped.
 func (rs *Recorders) store(ctx context.Context, rec store.Recorder, m cp.RecordingMetadata, tmp string, sum []byte, size int64) (int, cp.UploadResponse, error) {
-	sys, err := rs.cfg.Systems.SystemFor(ctx, rec.ID, m.ShortName)
-	if err != nil {
-		return 0, cp.UploadResponse{}, err
-	}
 	var (
 		code    int
 		resp    cp.UploadResponse
 		renamed string
+		adm     store.Admission
 	)
-	err = rs.st.InTx(ctx, func(_ pgx.Tx, q *db.Queries) error {
+	err := rs.st.InTx(ctx, func(_ pgx.Tx, q *db.Queries) error {
+		var err error
+		adm, err = store.Admit(ctx, q, store.HeardCall{
+			CallKey:   store.CallKey{RecorderID: rec.ID, SysNum: m.SysNum, CallNum: m.CallNum, StartTime: m.StartTime},
+			ShortName: m.ShortName, Talkgroup: m.Talkgroup, Patched: m.PatchedTalkgroups,
+		})
+		if err != nil {
+			return err
+		}
+		if adm.Rejected != "" {
+			code, resp = http.StatusOK, cp.UploadResponse{Status: cp.StatusRejected, Reason: string(adm.Rejected)}
+			return nil // committed: the rejection is counted
+		}
 		row, err := q.LockCallForRecording(ctx, db.LockCallForRecordingParams{
 			RecorderID: rec.ID, SysNum: int32(m.SysNum), CallNum: m.CallNum, StartTime: m.StartTime,
-			SystemID: sys, ShortName: m.ShortName, Talkgroup: m.Talkgroup,
+			SystemID: adm.SystemID, ShortName: m.ShortName, Talkgroup: m.Talkgroup,
 			PatchedTalkgroups: nonNil(m.PatchedTalkgroups),
 			StartedAt:         tsMS(m.StartTimeMS), EndedAt: tsMS(m.StopTimeMS),
 		})
@@ -243,7 +253,7 @@ func (rs *Recorders) store(ctx context.Context, rec store.Recorder, m cp.Recordi
 			return err
 		}
 		if err := q.SetCallRecording(ctx, db.SetCallRecordingParams{
-			ID: row.ID, SystemID: sys, ShortName: m.ShortName, Talkgroup: m.Talkgroup,
+			ID: row.ID, ShortName: m.ShortName, Talkgroup: m.Talkgroup,
 			PatchedTalkgroups: nonNil(m.PatchedTalkgroups),
 			StartedAt:         tsMS(m.StartTimeMS), EndedAt: tsMS(m.StopTimeMS),
 			RecordingPath: &rel, RecordingSize: &size, RecordingSha256: sum,
@@ -277,5 +287,6 @@ func (rs *Recorders) store(ctx context.Context, rec store.Recorder, m cp.Recordi
 		}
 		return 0, cp.UploadResponse{}, err
 	}
+	rs.Stat.admitted(adm)
 	return code, resp, nil
 }

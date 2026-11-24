@@ -28,45 +28,13 @@ type LiveSink interface {
 	Frame(callID string, f cp.Frame)
 }
 
-// SystemResolver decides which system a recorder's call is filed under.
-// Until systems and attachments arrive (issue #34) there's one system for
-// every call; #34 replaces this with the recorder + shortName attachment
-// and its rejections (R12).
-type SystemResolver interface {
-	SystemFor(ctx context.Context, recorderID int64, shortName string) (int64, error)
-}
-
-// SingleSystem files every call under one system, created on first use.
-type SingleSystem struct {
-	Store *store.Store
-	Name  string
-
-	mu sync.Mutex
-	id int64
-}
-
-// SystemFor implements SystemResolver.
-func (s *SingleSystem) SystemFor(ctx context.Context, _ int64, _ string) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.id != 0 {
-		return s.id, nil
-	}
-	id, err := s.Store.EnsureSystem(ctx, s.Name)
-	if err != nil {
-		return 0, fmt.Errorf("system: %s", store.SafeError(err))
-	}
-	s.id = id
-	return id, nil
-}
-
-// RecordersConfig configures the recorder endpoints.
+// RecordersConfig configures the recorder endpoints. Which system a call is
+// filed under, and whether it's taken at all, is store.Admit's decision
+// (R12, R17, R18, R21).
 type RecordersConfig struct {
 	// RecordingsDir is the recordings volume (R20). Uploads are written to
 	// RecordingsDir/.incoming first, so the rename into place is atomic.
 	RecordingsDir string
-	// Systems defaults to one system named "default".
-	Systems SystemResolver
 	// Live is optional.
 	Live LiveSink
 	// ServerVersion is sent in the welcome.
@@ -79,12 +47,32 @@ type Counters struct {
 	UnknownTypes    atomic.Uint64 // unknown text type or binary kind
 	ProtocolCloses  atomic.Uint64 // sockets closed with 1007 or 1008 for bad input
 	Revoked         atomic.Uint64 // sockets closed because their key was rotated or retired
+	FramesRefused   atomic.Uint64 // frames of live calls refused by R12, R17 or R18
 	Uploads         sync.Map      // status -> *atomic.Uint64
+	Rejected        sync.Map      // reason -> *atomic.Uint64: calls refused, each counted once (R90)
 }
 
-func (c *Counters) upload(status string) {
-	v, _ := c.Uploads.LoadOrStore(status, new(atomic.Uint64))
+func (c *Counters) upload(status string) { inc(&c.Uploads, status) }
+
+func (c *Counters) admitted(a store.Admission) {
+	if a.Counted {
+		inc(&c.Rejected, string(a.Rejected))
+	}
+}
+
+func inc(m *sync.Map, k string) {
+	v, _ := m.LoadOrStore(k, new(atomic.Uint64))
 	v.(*atomic.Uint64).Add(1)
+}
+
+// RejectedCount returns how many calls were refused for reason since the
+// server started.
+func (c *Counters) RejectedCount(reason string) uint64 {
+	v, ok := c.Rejected.Load(reason)
+	if !ok {
+		return 0
+	}
+	return v.(*atomic.Uint64).Load()
 }
 
 // UploadCount returns how many uploads ended with status (or error code).
@@ -119,9 +107,6 @@ func NewRecorders(st *store.Store, log *slog.Logger, cfg RecordersConfig) (*Reco
 	}
 	if err := os.MkdirAll(filepath.Join(cfg.RecordingsDir, incomingDir), 0o750); err != nil {
 		return nil, fmt.Errorf("recordings directory: %w", err)
-	}
-	if cfg.Systems == nil {
-		cfg.Systems = &SingleSystem{Store: st, Name: "default"}
 	}
 	return &Recorders{st: st, log: log, cfg: cfg, sessions: map[int64]*session{}, listening: make(chan struct{})}, nil
 }

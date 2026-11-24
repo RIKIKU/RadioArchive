@@ -1,0 +1,17 @@
+{
+  "boot_id": 305419897,
+  "epoch_ms": 1764000100000,
+  "calls": {
+    "unattached": {"sys_num": 1, "call_num": 6, "start_time": 1764000100, "short_name": "other", "talkgroup": 1001, "freq": 852000000},
+    "unknown_tg": {"sys_num": 0, "call_num": 5, "start_time": 1764000100, "short_name": "ex", "talkgroup": 4711, "freq": 851050000}
+  },
+  "events": [
+    {"at_ms": 0, "type": "transmission", "call": "unattached", "unit": 5001},
+    {"at_ms": 0, "type": "audio", "call": "unattached", "unit": 5001, "pcm": "noise-bursts-500ms.pcm"},
+    {"at_ms": 600, "type": "call_end", "call": "unattached", "filename": "/app/media/other/1001-1764000100_852000000.0-call_6.wav"},
+
+    {"at_ms": 0, "type": "transmission", "call": "unknown_tg", "unit": 5150},
+    {"at_ms": 0, "type": "audio", "call": "unknown_tg", "unit": 5150, "pcm": "noise-bursts-500ms.pcm"},
+    {"at_ms": 600, "type": "call_end", "call": "unknown_tg", "filename": "/app/media/ex/4711-1764000100_851050000.0-call_5.wav"}
+  ]
+}

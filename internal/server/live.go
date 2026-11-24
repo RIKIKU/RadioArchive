@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/coder/websocket"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
@@ -38,7 +39,8 @@ type session struct {
 	conn *websocket.Conn
 	log  *slog.Logger
 
-	calls map[cp.CallID]*liveCall // started on this socket
+	calls   map[cp.CallID]*liveCall // started on this socket
+	refused map[cp.CallID]bool      // refused by store.Admit; their frames are dropped
 
 	closeOnce sync.Once
 }
@@ -83,7 +85,7 @@ func (rs *Recorders) serveLive(w http.ResponseWriter, r *http.Request) {
 	// Text over 64 KB is closed with 1008 below, so the library's own limit
 	// (which closes with 1009) sits above it.
 	conn.SetReadLimit(2 * cp.MaxTextMessage)
-	s := &session{rs: rs, rec: rec, conn: conn, calls: map[cp.CallID]*liveCall{},
+	s := &session{rs: rs, rec: rec, conn: conn, calls: map[cp.CallID]*liveCall{}, refused: map[cp.CallID]bool{},
 		log: rs.log.With("recorder", rec.Name)}
 	ctx := r.Context()
 
@@ -163,7 +165,7 @@ func (s *session) binary(b []byte) error {
 	}
 	c := s.calls[f.CallID]
 	if c == nil {
-		s.rs.Stat.FramesUnstarted.Add(1)
+		s.unstarted(f.CallID)
 		return nil
 	}
 	c.unflush++
@@ -255,26 +257,81 @@ func (s *session) callStart(ctx context.Context, id cp.CallID, e event) error {
 	if n := len(*e.ShortName); n < 1 || n > 64 {
 		return protoErr(policyViolation, "call_start: invalid field short_name")
 	}
-	if s.calls[id] != nil {
-		return nil // resent; already started on this socket
+	if s.calls[id] != nil || s.refused[id] {
+		return nil // resent; already decided on this socket
 	}
-	sys, err := s.rs.cfg.Systems.SystemFor(ctx, s.rec.ID, *e.ShortName)
+	var (
+		adm    store.Admission
+		callID pgtype.UUID
+	)
+	err := s.rs.st.InTx(ctx, func(_ pgx.Tx, q *db.Queries) error {
+		var err error
+		adm, err = store.Admit(ctx, q, store.HeardCall{
+			CallKey:   store.CallKey{RecorderID: s.rec.ID, SysNum: id.SysNum, CallNum: id.CallNum, StartTime: id.StartTime},
+			ShortName: *e.ShortName, Talkgroup: *e.Talkgroup, Patched: e.PatchedTalkgroups,
+		})
+		if err != nil || adm.Rejected != "" {
+			return err
+		}
+		p := db.UpsertLiveCallParams{
+			RecorderID: s.rec.ID, SysNum: int32(id.SysNum), CallNum: id.CallNum, StartTime: id.StartTime,
+			SystemID: adm.SystemID, ShortName: *e.ShortName, Talkgroup: *e.Talkgroup,
+			PatchedTalkgroups: nonNil(e.PatchedTalkgroups), StartedAt: tsMS(*e.StartTimeMS),
+		}
+		if e.FirstPCMMS != nil && *e.FirstPCMMS > 0 {
+			p.LiveFirstPcmAt = tsMS(*e.FirstPCMMS)
+		}
+		callID, err = q.UpsertLiveCall(ctx, p)
+		if err != nil {
+			return fmt.Errorf("upsert: %s", store.SafeError(err))
+		}
+		return nil
+	})
 	if err != nil {
 		return protoErr(websocket.StatusInternalError, "call_start: %v", err)
 	}
-	p := db.UpsertLiveCallParams{
-		RecorderID: s.rec.ID, SysNum: int32(id.SysNum), CallNum: id.CallNum, StartTime: id.StartTime,
-		SystemID: sys, ShortName: *e.ShortName, Talkgroup: *e.Talkgroup,
-		PatchedTalkgroups: nonNil(e.PatchedTalkgroups), StartedAt: tsMS(*e.StartTimeMS),
-	}
-	if e.FirstPCMMS != nil && *e.FirstPCMMS > 0 {
-		p.LiveFirstPcmAt = tsMS(*e.FirstPCMMS)
-	}
-	callID, err := s.rs.st.UpsertLiveCall(ctx, p)
-	if err != nil {
-		return protoErr(websocket.StatusInternalError, "call_start: %s", store.SafeError(err))
+	s.rs.Stat.admitted(adm)
+	if adm.Rejected != "" {
+		// Its frames are refused (R12, R17, R18). The client isn't told: its
+		// recording's upload gets the same answer.
+		s.refused[id] = true
+		return nil
 	}
 	s.calls[id] = &liveCall{id: callID, idText: uuidString(callID)}
+	return nil
+}
+
+// unstarted counts a message for a call this socket hasn't started: one it
+// refused, or one it never heard start.
+func (s *session) unstarted(id cp.CallID) {
+	if s.refused[id] {
+		s.rs.Stat.FramesRefused.Add(1)
+		return
+	}
+	s.rs.Stat.FramesUnstarted.Add(1)
+}
+
+// extendPatch adds a live event's patched talkgroups to the call. A patch
+// that has become ignored refuses the rest of the call's live audio; its
+// recording is then refused too (store.Admit).
+func (s *session) extendPatch(ctx context.Context, id cp.CallID, c *liveCall, patched []int32) error {
+	if len(patched) == 0 {
+		return nil
+	}
+	state, err := s.rs.st.ExtendLivePatch(ctx, db.ExtendLivePatchParams{ID: c.id, Patched: patched})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // deleted meanwhile: refused by its recording's upload
+	}
+	if err != nil {
+		return fmt.Errorf("patch: %s", store.SafeError(err))
+	}
+	if state == store.Ignored {
+		if err := s.rs.st.AddLiveFrames(ctx, db.AddLiveFramesParams{ID: c.id, Frames: c.unflush}); err != nil {
+			return fmt.Errorf("frames: %s", store.SafeError(err))
+		}
+		delete(s.calls, id)
+		s.refused[id] = true
+	}
 	return nil
 }
 
@@ -288,12 +345,15 @@ func (s *session) transmission(ctx context.Context, id cp.CallID, e event) error
 	}
 	c := s.calls[id]
 	if c == nil {
-		s.rs.Stat.FramesUnstarted.Add(1)
+		s.unstarted(id)
 		return nil
 	}
 	err := s.rs.st.AddLiveTransmission(ctx, db.AddLiveTransmissionParams{CallID: c.id, OffsetMs: int32(*e.OffsetMS), Unit: int64(*e.Unit)})
 	if err != nil {
 		return protoErr(websocket.StatusInternalError, "transmission: %s", store.SafeError(err))
+	}
+	if err := s.extendPatch(ctx, id, c, e.PatchedTalkgroups); err != nil {
+		return protoErr(websocket.StatusInternalError, "transmission: %v", err)
 	}
 	return nil
 }
@@ -304,11 +364,21 @@ func (s *session) callEnd(ctx context.Context, id cp.CallID, e event) error {
 	}
 	c := s.calls[id]
 	if c == nil {
+		if s.refused[id] {
+			delete(s.refused, id)
+			return nil
+		}
 		s.rs.Stat.FramesUnstarted.Add(1)
 		return nil
 	}
-	err := s.rs.st.EndLiveCall(ctx, db.EndLiveCallParams{ID: c.id, EndedAt: tsMS(*e.StopTimeMS),
-		PatchedTalkgroups: nonNil(e.PatchedTalkgroups), Frames: c.unflush})
+	if err := s.extendPatch(ctx, id, c, e.PatchedTalkgroups); err != nil {
+		return protoErr(websocket.StatusInternalError, "call_end: %v", err)
+	}
+	if s.refused[id] {
+		delete(s.refused, id)
+		return nil
+	}
+	err := s.rs.st.EndLiveCall(ctx, db.EndLiveCallParams{ID: c.id, EndedAt: tsMS(*e.StopTimeMS), Frames: c.unflush})
 	if err != nil {
 		return protoErr(websocket.StatusInternalError, "call_end: %s", store.SafeError(err))
 	}

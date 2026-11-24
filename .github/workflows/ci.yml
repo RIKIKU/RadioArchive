@@ -63,7 +63,7 @@ jobs:
           cgo=$(go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./cmd/radioarchive | grep '^github.com/RIKIKU/' || true)
           if [ -n "$cgo" ]; then echo "FAIL: the API imports cgo packages: $cgo" >&2; exit 1; fi
           echo "ok: the API imports none of this repo's cgo packages"
-      - name: Tests (unit, integration against PostgreSQL, and A1 end to end in process)
+      - name: Tests (unit, integration against PostgreSQL, and A1-A4 end to end in process)
         run: go test -count=1 -v ./...
 
   # The recorder client's image, for both of the recorder host's

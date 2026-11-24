@@ -105,3 +105,7 @@ _Avoid_: Uploader, agent, feeder
 **Recorder plugin**:
 The small part of RadioArchive that runs inside trunk-recorder and hands each call to the recorder client.
 _Avoid_: Streamer, simplestream
+
+**Attachment**:
+An admin's link from one recorder's system, as trunk-recorder names it (its `shortName`), to the system its calls are filed under.
+_Avoid_: Mapping, binding, assignment

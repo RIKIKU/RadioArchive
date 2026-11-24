@@ -106,7 +106,7 @@ func serve(log *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr:              listenAddr(),
-		Handler:           server.New(st, log, server.WithRecorders(rs)),
+		Handler:           apiHandler(st, log, rs),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errc := make(chan error, 1)
@@ -122,6 +122,14 @@ func serve(log *slog.Logger) error {
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutCtx)
+}
+
+// apiHandler is everything the API serves. The admin API (server.WithAdmin)
+// joins it once admin sign-in (Authentik, M4) exists. Until then only tests
+// serve it, with an authenticator that lives in their _test.go files, so no
+// build of this binary can serve it.
+func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders) http.Handler {
+	return server.New(st, log, server.WithRecorders(rs))
 }
 
 func recorderMain(args []string, out io.Writer) error {
