@@ -1,0 +1,110 @@
+name: CI
+
+# Build, vet and test the server (issue #30), as PagerArchive's CI does:
+# actions pinned to commit SHAs, least-privilege permissions, and a time
+# limit on every job well above its usual time, so a hang fails in minutes
+# rather than after GitHub's 6 hours.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request's branch cancels that pull request's run still
+# in progress. Every other run gets a group of its own.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Build, vet and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      RADIOARCHIVE_TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/postgres?sslmode=disable
+      # The database tests fail, never skip, if the database is missing.
+      RADIOARCHIVE_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l . | tee /dev/stderr)"
+      - name: go vet
+        run: go vet ./...
+      - name: sqlc generated code is up to date
+        run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 diff
+      - name: Build
+        run: CGO_ENABLED=0 go build ./...
+      - name: Tests (unit and integration against PostgreSQL)
+        run: go test -count=1 -v ./...
+
+  # A38 (SPEC.md section 8): the API is built with CGO_ENABLED=0 on
+  # distroless static, and the check fails otherwise. Then the compose stack
+  # runs: the API applies its migrations and /healthz answers.
+  image:
+    name: Image (A38) and compose stack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: The image's final stage is distroless static
+        run: |
+          base=$(grep -E '^FROM ' Dockerfile | tail -n 1 | awk '{print $2}')
+          echo "final stage: $base"
+          case "$base" in
+            gcr.io/distroless/static-*) ;;
+            *) echo "FAIL: the image isn't on distroless static" >&2; exit 1 ;;
+          esac
+      - name: Build the image and start the stack
+        run: docker compose up --build --detach --wait --wait-timeout 120
+      - name: The image's binary is static and cgo-free
+        run: |
+          id=$(docker create radioarchive:dev)
+          docker cp "$id:/usr/local/bin/radioarchive" ./radioarchive
+          docker rm "$id"
+          sh scripts/ci/check-static.sh ./radioarchive
+      - name: The check fails a build with cgo enabled
+        # The negative control: the same program built with cgo on (the
+        # runner has a C compiler) must fail the check above, so the check
+        # can't pass by checking nothing.
+        run: |
+          CGO_ENABLED=1 go build -o radioarchive-cgo ./cmd/radioarchive
+          if sh scripts/ci/check-static.sh ./radioarchive-cgo; then
+            echo "FAIL: the check passed a cgo build" >&2
+            exit 1
+          fi
+          echo "ok: the check fails a cgo build"
+      - name: Migrations ran and /healthz answers
+        run: |
+          curl --fail --silent --show-error http://127.0.0.1:8080/healthz
+          docker compose exec -T db psql -U radioarchive -d radioarchive -tAc \
+            "SELECT max(version_id) FROM goose_db_version" | tee version.txt
+          test "$(cat version.txt)" -ge 1
+      - name: Logs
+        if: always()
+        run: docker compose logs
+      - name: Stop the stack
+        if: always()
+        run: docker compose down --volumes
