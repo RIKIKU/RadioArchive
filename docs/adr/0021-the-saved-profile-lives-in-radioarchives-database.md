@@ -1,10 +1,12 @@
 ---
-status: accepted (2026-11-25, by the owner)
+status: accepted (2026-11-25, by the owner; the session parts superseded by ADR 0022)
 ---
 
 # 21. The saved profile lives in RadioArchive's database
 
 Date: 2026-11-25
+
+> **Partly superseded by [ADR 0022](0022-listener-sessions-live-in-the-database.md) (2026-11-25).** The session is no longer a sealed cookie: it is a row of `listener_sessions`, and the cookie holds only a random ID. Where this ADR says the sealed session cookie carries the issuer, that the account menu's name and email come from it, and (under Deletion) that a switched-off user stays signed in until the cookie ends, read ADR 0022. An admin can now end a listener's sessions at once. The profile, its table and its key stand. The text below is as it was decided.
 
 A signed-in listener's saved profile (the listening set with its priority marks, the playback settings, the look, and the download basket with its conversations) moves out of Authentik and into RadioArchive's own PostgreSQL. It is one row of `listener_profiles`, keyed by the OIDC issuer and subject the listener signs in with. Authentik keeps only who the listener is. The API no longer holds an Authentik API token, and the blueprint no longer creates the API's account or the policy that gave it `view_user` and `change_user` on each listener. The browser-facing API and its behaviour stay as they were. The owner decided this on 2026-11-25: "Shouldn't we keep just the user info there and store things like download basket in radio archive and just reference the user ID?" (`SPEC.md` P4, R41, R48, R64, R89, R110). The rest are the implementer's choices (spec "How to use this spec", item 6).
 

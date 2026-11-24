@@ -11,20 +11,23 @@ import (
 	"errors"
 )
 
-// sealer seals what the API keeps in a browser's cookies (the session, a
-// sign-in under way, a sign-out's ID token) with AES-256-GCM, so the server
-// stores nothing of a listener (P4, R110) and the browser can neither read
-// nor change it. Each cookie's name is bound in as additional data, so one
-// cookie's value can't stand in for another's.
+// sealer seals what the API keeps in a browser's cookie while a sign-in is
+// under way (its state, nonce, PKCE verifier and return path) with
+// AES-256-GCM, so the server stores nothing of a listener who hasn't
+// finished signing in (P4) and the browser can neither read nor change it.
+// The cookie's name is bound in as additional data, so a value sealed for
+// one use can't stand in for another's. (The session itself is a row of
+// the database since ADR 0022, and its cookie only a random ID.)
 type sealer struct{ aead cipher.AEAD }
 
-// cookieKeyInfo names the key's use in HKDF. Changing it signs everyone out.
+// cookieKeyInfo names the key's use in HKDF. Changing it only fails the
+// sign-ins under way at that moment.
 const cookieKeyInfo = "radioarchive listener cookies v1"
 
 // newSealer derives the cookies' key from secret, the OIDC client secret
 // (ADR 0009): a key of its own would be one more secret for the operator
 // to keep, and HKDF keeps the two uses apart. Rotating the client secret
-// signs every listener out, which costs them nothing but signing in.
+// fails only the sign-ins under way; sessions are rows, and stay.
 func newSealer(secret []byte) (*sealer, error) {
 	if len(secret) < 16 {
 		return nil, errors.New("the OIDC client secret is too short to derive a cookie key from (at least 16 bytes)")

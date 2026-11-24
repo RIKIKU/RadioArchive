@@ -154,6 +154,18 @@ type ListenerProfile struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
+type ListenerSession struct {
+	IDHash     []byte
+	Issuer     string
+	Subject    string
+	Name       string
+	Email      string
+	IDToken    *string
+	CreatedAt  pgtype.Timestamptz
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+}
+
 type PublicCall struct {
 	ID                pgtype.UUID
 	SystemID          int64
