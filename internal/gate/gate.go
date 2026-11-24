@@ -53,14 +53,47 @@ type Gate struct {
 	dir string
 	log *slog.Logger
 
+	now func() time.Time
+
 	catMu sync.Mutex
 	cat   *Catalogue // the last built, at its generation
+
+	live *Live
+}
+
+// Option configures the gate.
+type Option func(*Gate)
+
+// WithClock sets the gate's clock (default time.Now), which says when a
+// delayed talkgroup's call becomes public (R23) and how old a live event
+// is (R37). Tests control it.
+func WithClock(now func() time.Time) Option {
+	return func(g *Gate) { g.now = now }
 }
 
 // New returns the gate over st, with the recordings volume at
 // recordingsDir.
-func New(st *store.Store, recordingsDir string, log *slog.Logger) *Gate {
-	return &Gate{q: st.Queries, dir: recordingsDir, log: log}
+func New(st *store.Store, recordingsDir string, log *slog.Logger, opts ...Option) *Gate {
+	g := &Gate{q: st.Queries, dir: recordingsDir, log: log, now: time.Now}
+	for _, o := range opts {
+		o(g)
+	}
+	g.live = newLive(g)
+	return g
+}
+
+// Live is the live feed (ADR 0007): the recorder endpoints hand it every
+// live call's events and frames, and listeners subscribe to it.
+func (g *Gate) Live() *Live { return g.live }
+
+// delayHolds says whether a delayed talkgroup's call is still kept from the
+// public (R23): until its delay has passed since it ended, and so for as
+// long as it's in progress.
+func (g *Gate) delayHolds(delayMinutes int32, ended *time.Time) bool {
+	if delayMinutes <= 0 {
+		return false
+	}
+	return ended == nil || g.now().Before(ended.Add(time.Duration(delayMinutes)*time.Minute))
 }
 
 // MaxCalls is the most call IDs one call-list request may name (R73).
@@ -148,6 +181,12 @@ func (g *Gate) Calls(ctx context.Context, ids []string) ([]Call, error) {
 	if len(us) == 0 {
 		return []Call{}, nil
 	}
+	// The catalogue is read first, so it's never newer than the calls: a
+	// talkgroup it doesn't have yet keeps its calls out until it does.
+	cat, err := g.Catalogue(ctx)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 	rows, err := g.q.GatePublicCalls(ctx, us)
@@ -160,6 +199,9 @@ func (g *Gate) Calls(ctx context.Context, ids []string) ([]Call, error) {
 		if err != nil {
 			return nil, err
 		}
+		if g.held(cat, r.SystemID, c) {
+			continue
+		}
 		byID[c.ID] = c
 	}
 	out := make([]Call, 0, len(byID))
@@ -169,6 +211,16 @@ func (g *Gate) Calls(ctx context.Context, ids []string) ([]Call, error) {
 		}
 	}
 	return out, nil
+}
+
+// held says whether a public call is kept from the public for now: its
+// talkgroup isn't in the catalogue yet, or a delay in its patch hasn't
+// passed (R23).
+func (g *Gate) held(cat *Catalogue, system int64, c Call) bool {
+	if _, ok := cat.talkgroup(system, c.Talkgroup.ID); !ok {
+		return true
+	}
+	return g.delayHolds(cat.delayOf(system, c.Talkgroup.ID, c.Patched), c.EndedAt)
 }
 
 func callOf(r db.GatePublicCallsRow) (Call, error) {
@@ -231,6 +283,21 @@ func (g *Gate) Recording(ctx context.Context, callID string) (*Recording, error)
 	id, ok := ParseCallID(callID)
 	if !ok {
 		return nil, ErrUnavailable
+	}
+	// A delayed talkgroup's recording waits for its delay (R23). Only then
+	// is a second query needed.
+	cat, err := g.Catalogue(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cat.delayed {
+		cs, err := g.Calls(ctx, []string{id})
+		if err != nil {
+			return nil, err
+		}
+		if len(cs) == 0 {
+			return nil, ErrUnavailable
+		}
 	}
 	qctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()

@@ -308,6 +308,10 @@ func TestIntegrationA10(t *testing.T) {
 	for p := range a10Probes {
 		probed = append(probed, p)
 	}
+	// The live feed's probes are listeners (a10_live_test.go).
+	for p := range a10LiveProbes {
+		probed = append(probed, p)
+	}
 	slices.Sort(mounted)
 	slices.Sort(probed)
 	if len(mounted) == 0 || !slices.Equal(mounted, probed) {
@@ -315,6 +319,9 @@ func TestIntegrationA10(t *testing.T) {
 	}
 
 	for _, route := range probed {
+		if _, ok := a10LiveProbes[route]; ok {
+			continue // TestIntegrationA10Live
+		}
 		for _, p := range a10Probes[route] {
 			t.Run(route+"/"+p.name, func(t *testing.T) {
 				// The probe works: a public call is served.

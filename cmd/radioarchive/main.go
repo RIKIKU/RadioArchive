@@ -104,8 +104,13 @@ func serve(log *slog.Logger) error {
 	defer st.Close()
 	log.Info("migrations applied")
 
+	// The gate, and its live feed, which the recorder endpoints hand every
+	// live call to (ADR 0007).
+	g := gate.New(st, recordingsDir(), log)
+	go g.Live().Run(ctx)
 	rs, err := server.NewRecorders(st, log, server.RecordersConfig{
 		RecordingsDir: recordingsDir(),
+		Live:          g.Live(),
 		ServerVersion: version.Version,
 	})
 	if err != nil {
@@ -121,7 +126,7 @@ func serve(log *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr:              listenAddr(),
-		Handler:           apiHandler(st, log, rs, recordingsDir()),
+		Handler:           apiHandler(st, log, rs, g),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errc := make(chan error, 1)
@@ -146,9 +151,9 @@ func serve(log *slog.Logger) error {
 // (Authentik, M4) exists. Until then only tests serve it, with an
 // authenticator that lives in their _test.go files, so no build of this
 // binary can serve it.
-func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, recordings string) *server.API {
+func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate) *server.API {
 	return server.New(st, log, server.WithRecorders(rs),
-		server.WithPublic(public.New(gate.New(st, recordings, log), log)), server.WithApp(web.New()))
+		server.WithPublic(public.New(g, log)), server.WithApp(web.New()))
 }
 
 // retentionJob is the nightly retention job and the low-disk check (R88),

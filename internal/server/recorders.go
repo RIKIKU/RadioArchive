@@ -23,10 +23,16 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/version"
 )
 
-// LiveSink receives every live frame the server accepts, with the ID of the
-// call it belongs to. The live feed to listeners plugs in here; until then
-// it's a test hook.
+// LiveSink receives every live call the server accepts: its start, its
+// transmissions and its end, each once its row is written, and its frames,
+// with the ID of the call they belong to. The live feed to listeners
+// (gate.Live, ADR 0007) plugs in here, and decides what listeners may have
+// of each. It's called on the recorder's socket's goroutine, so it must not
+// block.
 type LiveSink interface {
+	CallStarted(callID string, unit uint32)
+	Transmission(callID string, unit uint32, offsetMS int32)
+	CallEnded(callID string)
 	Frame(callID string, f cp.Frame)
 }
 

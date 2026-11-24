@@ -3,7 +3,8 @@
 //
 // Its handlers see the deployment only through the gate (internal/gate).
 // This package may not import the store, the database driver or the file
-// system (imports_test.go enforces it), and its routes are the only public
+// system (imports_test.go enforces it; its one third-party module is the
+// WebSocket library, which reaches no data), and its routes are the only public
 // ones the server mounts (internal/server). A new public surface (recent
 // calls, the live feed, zips) is added here, on the gate, and to
 // the A10 harness (internal/server/a10_test.go), which fails while any public
@@ -53,6 +54,7 @@ func New(g *gate.Gate, log *slog.Logger) *API {
 	a.handle("GET "+CataloguePath, a.catalogue)
 	a.handle("GET "+SearchPath, a.search)
 	a.handle("GET "+FiregroundPath, a.fireground)
+	a.handle("GET "+LivePath, a.live)
 	return a
 }
 

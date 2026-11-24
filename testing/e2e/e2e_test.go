@@ -45,6 +45,37 @@ func (s *sink) Frame(callID string, f cp.Frame) {
 	s.frames[callID] = append(s.frames[callID], f)
 }
 
+func (s *sink) CallStarted(string, uint32)         {}
+func (s *sink) Transmission(string, uint32, int32) {}
+func (s *sink) CallEnded(string)                   {}
+
+// tee hands the live calls to the test's sink and to the live feed.
+type tee []server.LiveSink
+
+func (t tee) CallStarted(id string, unit uint32) {
+	for _, s := range t {
+		s.CallStarted(id, unit)
+	}
+}
+
+func (t tee) Transmission(id string, unit uint32, offsetMS int32) {
+	for _, s := range t {
+		s.Transmission(id, unit, offsetMS)
+	}
+}
+
+func (t tee) CallEnded(id string) {
+	for _, s := range t {
+		s.CallEnded(id)
+	}
+}
+
+func (t tee) Frame(id string, f cp.Frame) {
+	for _, s := range t {
+		s.Frame(id, f)
+	}
+}
+
 func (s *sink) get(callID string) []cp.Frame {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -226,8 +257,10 @@ func newRig(t *testing.T, serverVersion string) *rig {
 func (r *rig) serverUp(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	rs, err := server.NewRecorders(r.st, r.log, server.RecordersConfig{RecordingsDir: r.dir, Live: r.sink,
-		ServerVersion: r.serverVersion})
+	g := gate.New(r.st, r.dir, r.log)
+	go g.Live().Run(ctx)
+	rs, err := server.NewRecorders(r.st, r.log, server.RecordersConfig{RecordingsDir: r.dir,
+		Live: tee{r.sink, g.Live()}, ServerVersion: r.serverVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +283,7 @@ func (r *rig) serverUp(t *testing.T) {
 	r.addr = ln.Addr().String()
 	r.api = "http://" + r.addr
 	srv := &http.Server{Handler: server.New(r.st, r.log, server.WithRecorders(rs), server.WithAdmin(admin),
-		server.WithPublic(public.New(gate.New(r.st, r.dir, r.log), r.log))),
+		server.WithPublic(public.New(g, r.log))),
 		// Live sockets are hijacked, so Close doesn't end them; cancelling
 		// their requests' context does.
 		BaseContext: func(net.Listener) context.Context { return ctx }}

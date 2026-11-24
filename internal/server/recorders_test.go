@@ -49,6 +49,37 @@ func (s *sink) Frame(callID string, f cp.Frame) {
 	s.frames[callID] = append(s.frames[callID], f)
 }
 
+func (s *sink) CallStarted(string, uint32)         {}
+func (s *sink) Transmission(string, uint32, int32) {}
+func (s *sink) CallEnded(string)                   {}
+
+// tee hands the live calls to the test's sink and to the live feed.
+type tee []server.LiveSink
+
+func (t tee) CallStarted(id string, unit uint32) {
+	for _, s := range t {
+		s.CallStarted(id, unit)
+	}
+}
+
+func (t tee) Transmission(id string, unit uint32, offsetMS int32) {
+	for _, s := range t {
+		s.Transmission(id, unit, offsetMS)
+	}
+}
+
+func (t tee) CallEnded(id string) {
+	for _, s := range t {
+		s.CallEnded(id)
+	}
+}
+
+func (t tee) Frame(id string, f cp.Frame) {
+	for _, s := range t {
+		s.Frame(id, f)
+	}
+}
+
 func (s *sink) count(callID string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -81,6 +112,9 @@ type env struct {
 	job   *retention.Job
 	clock *testClock
 	disk  *testDisk
+	// The gate, on the test's clock, and its live feed, running.
+	gate *gate.Gate
+	live *gate.Live
 }
 
 func newEnv(t *testing.T) *env {
@@ -98,9 +132,13 @@ func newEnvAt(t *testing.T, serverVersion string) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{st: st, dir: t.TempDir(), sink: &sink{}}
-	e.rs, err = server.NewRecorders(st, slog.New(slog.DiscardHandler), server.RecordersConfig{
-		RecordingsDir: e.dir, Live: e.sink, ServerVersion: serverVersion})
+	e := &env{st: st, dir: t.TempDir(), sink: &sink{}, clock: &testClock{}, disk: &testDisk{}}
+	log := slog.New(slog.DiscardHandler)
+	e.gate = gate.New(st, e.dir, log, gate.WithClock(e.clock.now))
+	e.live = e.gate.Live()
+	go e.live.Run(ctx)
+	e.rs, err = server.NewRecorders(st, log, server.RecordersConfig{
+		RecordingsDir: e.dir, Live: tee{e.sink, e.live}, ServerVersion: serverVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,12 +148,10 @@ func newEnvAt(t *testing.T, serverVersion string) *env {
 	case <-time.After(10 * time.Second):
 		t.Fatal("key listener never started")
 	}
-	log := slog.New(slog.DiscardHandler)
 	admin, err := server.NewAdmin(st, log, testAdmin{}, e.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.clock, e.disk = &testClock{}, &testDisk{}
 	e.job, err = retention.New(retention.Config{Store: st, Dir: e.dir, Log: log, Now: e.clock.now,
 		FreeSpace: e.disk.space, Location: time.UTC})
 	if err != nil {
@@ -123,7 +159,7 @@ func newEnvAt(t *testing.T, serverVersion string) *env {
 	}
 	admin.WithRetention(e.job)
 	e.api = server.New(st, log, server.WithRecorders(e.rs), server.WithAdmin(admin),
-		server.WithPublic(public.New(gate.New(st, e.dir, log), log)), server.WithApp(web.Serve(appBuild)))
+		server.WithPublic(public.New(e.gate, log)), server.WithApp(web.Serve(appBuild)))
 	e.srv = httptest.NewServer(e.api)
 	t.Cleanup(func() {
 		e.srv.Close()
