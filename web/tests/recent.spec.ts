@@ -125,11 +125,12 @@ test('filters: talkgroups picked with Suggest, a unit, the order, kept in the ad
 	await expect(rows(page)).toHaveCount(12);
 	expect(await ids(page)).toEqual(want);
 
-	// A unit that isn't a radio ID is the form's to say, under the field.
+	// A unit neither picked from the list nor a radio ID is the form's to
+	// say, under the field.
 	await openFilters(page);
-	await page.getByLabel('Unit', { exact: true }).fill('Engine 1');
+	await page.getByLabel('Unit', { exact: true }).fill('Nobody at all');
 	await page.getByRole('button', { name: 'Show calls' }).click();
-	await expect(page.locator('#unit-error')).toHaveText('Enter a radio ID in digits, such as 2001.');
+	await expect(page.locator('#unit-error')).toHaveText('Choose a unit from the list, or enter a radio ID in digits, such as 2001.');
 	await expect(page.getByLabel('Unit', { exact: true })).toBeFocused();
 	await expect(page.getByText('1 field needs attention')).toBeVisible();
 

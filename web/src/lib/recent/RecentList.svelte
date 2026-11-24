@@ -5,8 +5,8 @@
 	// call, filtered to its talkgroup and scrolled to its time.
 	//
 	// Each row: the talkgroup's name (R24) and group, the start time on the
-	// deployment's clock (TZ), the duration, and the units heard, by radio
-	// ID (#83 adds aliases). Pressing the call replays it in the dock
+	// deployment's clock (TZ), the duration, and the units heard, each by
+	// its alias, else its radio ID (R27). Pressing the call replays it in the dock
 	// (R46), which pauses live listening; a call still in progress has no
 	// recording yet, so it offers live listening instead. Download saves the
 	// stored file under R63's name (ADR 0014). Share (ADR 0017) and Add to

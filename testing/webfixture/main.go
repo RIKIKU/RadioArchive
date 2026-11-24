@@ -5,7 +5,9 @@
 // fireground channel number 41), 1003 "Admin" (hidden) and 1004 (ignored).
 // 1003 and 1004 have fireground channel numbers too (43 and 44), and 1003 is
 // in group North, so the browser tests can show neither leaks through a
-// fireground link or a group. The binary serves no admin API yet (ADR 0003),
+// fireground link or a group. Its units (R26) are 5001 "Engine 1" and
+// 5100-5199 "Portables", and 9003 "Covert radio", heard only on 1003, which
+// unit search must never find (ADR 0019). The binary serves no admin API yet (ADR 0003),
 // so this writes the rows directly. Running it again changes nothing.
 //
 // Given a recorder's name (one `radioarchive recorder add` made), it also
@@ -77,6 +79,9 @@ INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state, fir
 SELECT 1, 1004, 'TG 1004', '', id, 'ignored', 44 FROM tags WHERE name = 'dispatch' ON CONFLICT DO NOTHING;
 INSERT INTO talkgroup_groups (system_id, talkgroup_id, group_id)
 SELECT 1, t, id FROM groups, unnest(ARRAY[1001, 1003]) AS t WHERE name = 'North' ON CONFLICT DO NOTHING;
+INSERT INTO units (system_id, first_id, last_id, alias)
+VALUES (1, 5001, 5001, 'Engine 1'), (1, 5100, 5199, 'Portables'), (1, 9003, 9003, 'Covert radio')
+ON CONFLICT DO NOTHING;
 `
 
 // attach is the recorder's attachment: its `ex` is system EX.

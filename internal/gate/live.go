@@ -129,6 +129,7 @@ type liveCall struct {
 	tgs     []int32
 	info    callInfo
 	unit    uint32
+	cat     *Catalogue // the last check's, which names its unit (ADR 0019)
 	endedAt *time.Time
 	delay   int32
 	size    *int64
@@ -439,6 +440,7 @@ func (l *Live) failed(err error) {
 // talkgroup.
 func (l *Live) refresh(c *liveCall, lk look) bool {
 	c.checkedGen = lk.cat.Generation
+	c.cat = lk.cat
 	r, ok := lk.rows[c.id]
 	if !ok {
 		return false
@@ -540,7 +542,14 @@ func (l *Live) emit(c *liveCall, typ string, more func(*callEvent)) int64 {
 	l.nextID++
 	e := callEvent{Type: typ, EventID: l.nextID, CallID: c.id, callInfo: c.info}
 	if c.unit != 0 {
-		e.Unit = &liveUnit{ID: int64(c.unit), Name: strconv.FormatUint(uint64(c.unit), 10)}
+		// The unit's alias, else its ID (R27, R36).
+		name := strconv.FormatUint(uint64(c.unit), 10)
+		if c.cat != nil {
+			if a := c.cat.UnitAlias(c.sys, int64(c.unit)); a != "" {
+				name = a
+			}
+		}
+		e.Unit = &liveUnit{ID: int64(c.unit), Name: name}
 	}
 	if more != nil {
 		more(&e)

@@ -64,5 +64,5 @@ The replay announces `radioarchive:first-frame`, `radioarchive:played` and `radi
 
 - The browser tests' archive is made up by the fixture's command (`webfixture calls`), stored as Bench's with silent Ogg/Opus recordings, and the API in `e2e-web.sh` runs in `TZ=Australia/Melbourne`.
 - #80 puts `RecentList` under the call card with a search for the call's talkgroup from its time, oldest first, and adds Share through `actions`; #81 adds Add to basket there too.
-- #83 adds unit aliases to the rows and unit search to the filters.
+- #83 adds unit aliases to the rows and unit search to the filters. (Built: ADR 0019.)
 - Play from here is the follow-up issue's, blocked on #75's open question 3.

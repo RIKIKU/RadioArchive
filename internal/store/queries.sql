@@ -221,6 +221,31 @@ SET name = COALESCE(sqlc.narg(name), name),
 WHERE id = sqlc.arg(id)
 RETURNING id, name, alert, led_colour, sort_order;
 
+-- Units (R26): a radio ID, or a range of them, with an alias in its system
+-- (migration 00016, ADR 0019).
+
+-- name: ListUnits :many
+SELECT system_id, first_id, last_id, alias, created_at, updated_at
+FROM units WHERE system_id = sqlc.arg(system_id)
+ORDER BY first_id, last_id;
+
+-- name: GetUnit :one
+SELECT system_id, first_id, last_id, alias, created_at, updated_at
+FROM units
+WHERE system_id = sqlc.arg(system_id) AND first_id = sqlc.arg(first_id) AND last_id = sqlc.arg(last_id);
+
+-- name: PutUnit :one
+-- An admin's add or edit. created says which.
+INSERT INTO units (system_id, first_id, last_id, alias)
+VALUES (sqlc.arg(system_id), sqlc.arg(first_id), sqlc.arg(last_id), sqlc.arg(alias))
+ON CONFLICT (system_id, first_id, last_id) DO UPDATE
+SET alias = EXCLUDED.alias, updated_at = now()
+RETURNING (xmax = 0)::bool AS created;
+
+-- name: DeleteUnit :execrows
+DELETE FROM units
+WHERE system_id = sqlc.arg(system_id) AND first_id = sqlc.arg(first_id) AND last_id = sqlc.arg(last_id);
+
 -- Ingest's decisions (R12, R17, R18, R21), made in one transaction when the
 -- server first hears of a call: store.Admit.
 
@@ -544,6 +569,45 @@ FROM public_talkgroups p
 JOIN systems s ON s.id = p.system_id
 LEFT JOIN tags g ON g.id = p.tag_id
 ORDER BY s.sort_order, s.id, p.sort_order, p.talkgroup_id;
+
+-- name: GateUnits :many
+-- Every unit's alias (R26, R27), held with the catalogue at its generation
+-- (ADR 0019). The gate names with them only the units of calls it gives,
+-- and unit search finds only units heard on those.
+SELECT system_id, first_id, last_id, alias FROM units ORDER BY system_id, first_id, last_id;
+
+-- name: GateUnitsIn :many
+-- Unit search (ADR 0019): the radio IDs in [first_id, last_id] heard on any
+-- stored call, lowest first, up to row_limit. A skip scan of the
+-- transmissions_unit index, one probe per radio ID, so a busy radio costs
+-- what a quiet one does. Whether each is heard on a public call is
+-- GateUnitsHeard's to say.
+WITH RECURSIVE heard (unit) AS (
+    (SELECT x.unit FROM transmissions x
+     WHERE x.unit >= sqlc.arg(first_id)::bigint AND x.unit <= sqlc.arg(last_id)::bigint
+     ORDER BY x.unit LIMIT 1)
+    UNION ALL
+    SELECT (SELECT x.unit FROM transmissions x
+            WHERE x.unit > h.unit AND x.unit <= sqlc.arg(last_id)::bigint
+            ORDER BY x.unit LIMIT 1)
+    FROM heard h WHERE h.unit IS NOT NULL
+)
+SELECT h.unit::bigint AS unit FROM heard h WHERE h.unit IS NOT NULL LIMIT sqlc.arg(row_limit);
+
+-- name: GateUnitsHeard :many
+-- Unit search (ADR 0019): for each radio ID, up to per_unit of the public
+-- calls it's heard on, from at most scan_limit of its transmissions, for the
+-- gate to check against the catalogue and the delay (R23). Bounded, so a
+-- radio heard on many hidden calls costs no more than scan_limit probes; it
+-- may then be missed, which finds less, never more.
+SELECT u.unit::bigint AS unit, c.system_id, c.talkgroup, c.patched_talkgroups, c.ended_at
+FROM unnest(sqlc.arg(units)::bigint[]) AS u (unit)
+CROSS JOIN LATERAL (
+    SELECT p.system_id, p.talkgroup, p.patched_talkgroups, p.ended_at
+    FROM (SELECT x.call_id FROM transmissions x WHERE x.unit = u.unit LIMIT sqlc.arg(scan_limit)) t
+    JOIN public_calls p ON p.id = t.call_id
+    LIMIT sqlc.arg(per_unit)
+) c;
 
 -- Admin playback (R34): any stored call's recording, whatever its state.
 

@@ -22,8 +22,8 @@ for (const path of paths) {
 		console.log(`A7 [${info.project.name}] ${first.call_id}: ${played.path}, ${played.frames} frames, peak ${played.peak.toFixed(3)}`);
 		expect(first.path).toBe(path);
 		audible(played, path);
-		// What played is in the dock until the next call.
-		await expect(dock(page).getByText('Last call: Dispatch North, 5001.')).toBeVisible();
+		// What played is in the dock until the next call, its unit by its alias (R27).
+		await expect(dock(page).getByText('Last call: Dispatch North, Engine 1.')).toBeVisible();
 	});
 
 	test(`@live a finished call plays from its recording, through ${path === 'webcodecs' ? 'WebCodecs' : 'the WASM fallback'}`, async ({ page, request }, info) => {

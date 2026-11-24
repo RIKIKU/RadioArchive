@@ -77,7 +77,7 @@ The browser builds the parts (#81): it adds calls in the basket's order, keeping
 
 **`manifest.json`**: `format` (1), `part` and `parts` when split, `conversations` (number, folder, name, note, and calls in the conversation's order, each with its ID, path in the zip and start) and the loose `calls`.
 
-**`index.csv`** (RFC 4180, CRLF), one row per call by start time: `call_id`, `start_utc`, `end_utc`, `start_local`, `end_local` (the deployment's `TZ`, with its offset), `duration_s`, `system` (its name, else its label), `talkgroup_id`, `talkgroup_name` (R24), `talkgroup_label`, `groups`, `tag`, `unit_ids`, `unit_aliases`, `unit_offsets_s` (one per transmission, `;`-separated, in order; aliases are empty until units have them, #83 or M4) and `file`.
+**`index.csv`** (RFC 4180, CRLF), one row per call by start time: `call_id`, `start_utc`, `end_utc`, `start_local`, `end_local` (the deployment's `TZ`, with its offset), `duration_s`, `system` (its name, else its label), `talkgroup_id`, `talkgroup_name` (R24), `talkgroup_label`, `groups`, `tag`, `unit_ids`, `unit_aliases`, `unit_offsets_s` (one per transmission, `;`-separated, in order; aliases are empty for a unit with none, ADR 0019) and `file`.
 
 **The name** it saves as: the conversation's name when the zip holds one conversation and no loose calls, else `Calls`, then the first call's local date, then ` part n of N` when split: `Structure fire 2026-03-04.zip`. It depends only on what the zip holds, so a call left out changes nothing.
 

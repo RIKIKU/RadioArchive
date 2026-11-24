@@ -531,6 +531,25 @@ func (q *Queries) DeleteTransmissions(ctx context.Context, callID pgtype.UUID) e
 	return err
 }
 
+const deleteUnit = `-- name: DeleteUnit :execrows
+DELETE FROM units
+WHERE system_id = $1 AND first_id = $2 AND last_id = $3
+`
+
+type DeleteUnitParams struct {
+	SystemID int64
+	FirstID  int64
+	LastID   int64
+}
+
+func (q *Queries) DeleteUnit(ctx context.Context, arg DeleteUnitParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnit, arg.SystemID, arg.FirstID, arg.LastID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteUnrecordedCall = `-- name: DeleteUnrecordedCall :exec
 DELETE FROM calls WHERE id = $1 AND recording_path IS NULL
 `
@@ -1110,6 +1129,146 @@ func (q *Queries) GateUnitCalls(ctx context.Context, arg GateUnitCallsParams) ([
 	return items, nil
 }
 
+const gateUnits = `-- name: GateUnits :many
+SELECT system_id, first_id, last_id, alias FROM units ORDER BY system_id, first_id, last_id
+`
+
+type GateUnitsRow struct {
+	SystemID int64
+	FirstID  int64
+	LastID   int64
+	Alias    string
+}
+
+// Every unit's alias (R26, R27), held with the catalogue at its generation
+// (ADR 0019). The gate names with them only the units of calls it gives,
+// and unit search finds only units heard on those.
+func (q *Queries) GateUnits(ctx context.Context) ([]GateUnitsRow, error) {
+	rows, err := q.db.Query(ctx, gateUnits)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GateUnitsRow
+	for rows.Next() {
+		var i GateUnitsRow
+		if err := rows.Scan(
+			&i.SystemID,
+			&i.FirstID,
+			&i.LastID,
+			&i.Alias,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const gateUnitsHeard = `-- name: GateUnitsHeard :many
+SELECT u.unit::bigint AS unit, c.system_id, c.talkgroup, c.patched_talkgroups, c.ended_at
+FROM unnest($1::bigint[]) AS u (unit)
+CROSS JOIN LATERAL (
+    SELECT p.system_id, p.talkgroup, p.patched_talkgroups, p.ended_at
+    FROM (SELECT x.call_id FROM transmissions x WHERE x.unit = u.unit LIMIT $2) t
+    JOIN public_calls p ON p.id = t.call_id
+    LIMIT $3
+) c
+`
+
+type GateUnitsHeardParams struct {
+	Units     []int64
+	ScanLimit int32
+	PerUnit   int32
+}
+
+type GateUnitsHeardRow struct {
+	Unit              int64
+	SystemID          int64
+	Talkgroup         int32
+	PatchedTalkgroups []int32
+	EndedAt           pgtype.Timestamptz
+}
+
+// Unit search (ADR 0019): for each radio ID, up to per_unit of the public
+// calls it's heard on, from at most scan_limit of its transmissions, for the
+// gate to check against the catalogue and the delay (R23). Bounded, so a
+// radio heard on many hidden calls costs no more than scan_limit probes; it
+// may then be missed, which finds less, never more.
+func (q *Queries) GateUnitsHeard(ctx context.Context, arg GateUnitsHeardParams) ([]GateUnitsHeardRow, error) {
+	rows, err := q.db.Query(ctx, gateUnitsHeard, arg.Units, arg.ScanLimit, arg.PerUnit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GateUnitsHeardRow
+	for rows.Next() {
+		var i GateUnitsHeardRow
+		if err := rows.Scan(
+			&i.Unit,
+			&i.SystemID,
+			&i.Talkgroup,
+			&i.PatchedTalkgroups,
+			&i.EndedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const gateUnitsIn = `-- name: GateUnitsIn :many
+WITH RECURSIVE heard (unit) AS (
+    (SELECT x.unit FROM transmissions x
+     WHERE x.unit >= $2::bigint AND x.unit <= $3::bigint
+     ORDER BY x.unit LIMIT 1)
+    UNION ALL
+    SELECT (SELECT x.unit FROM transmissions x
+            WHERE x.unit > h.unit AND x.unit <= $3::bigint
+            ORDER BY x.unit LIMIT 1)
+    FROM heard h WHERE h.unit IS NOT NULL
+)
+SELECT h.unit::bigint AS unit FROM heard h WHERE h.unit IS NOT NULL LIMIT $1
+`
+
+type GateUnitsInParams struct {
+	RowLimit int32
+	FirstID  int64
+	LastID   int64
+}
+
+// Unit search (ADR 0019): the radio IDs in [first_id, last_id] heard on any
+// stored call, lowest first, up to row_limit. A skip scan of the
+// transmissions_unit index, one probe per radio ID, so a busy radio costs
+// what a quiet one does. Whether each is heard on a public call is
+// GateUnitsHeard's to say.
+func (q *Queries) GateUnitsIn(ctx context.Context, arg GateUnitsInParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, gateUnitsIn, arg.RowLimit, arg.FirstID, arg.LastID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var unit int64
+		if err := rows.Scan(&unit); err != nil {
+			return nil, err
+		}
+		items = append(items, unit)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getJob = `-- name: GetJob :one
 
 SELECT name, ran_for, started_at, finished_at, ok, error, result FROM jobs WHERE name = $1
@@ -1281,6 +1440,32 @@ func (q *Queries) GetTalkgroup(ctx context.Context, arg GetTalkgroupParams) (Get
 		&i.LedColour,
 		&i.SortOrder,
 		&i.FiregroundChannel,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUnit = `-- name: GetUnit :one
+SELECT system_id, first_id, last_id, alias, created_at, updated_at
+FROM units
+WHERE system_id = $1 AND first_id = $2 AND last_id = $3
+`
+
+type GetUnitParams struct {
+	SystemID int64
+	FirstID  int64
+	LastID   int64
+}
+
+func (q *Queries) GetUnit(ctx context.Context, arg GetUnitParams) (Unit, error) {
+	row := q.db.QueryRow(ctx, getUnit, arg.SystemID, arg.FirstID, arg.LastID)
+	var i Unit
+	err := row.Scan(
+		&i.SystemID,
+		&i.FirstID,
+		&i.LastID,
+		&i.Alias,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1658,6 +1843,42 @@ func (q *Queries) ListTalkgroups(ctx context.Context, systemID int64) ([]ListTal
 	return items, nil
 }
 
+const listUnits = `-- name: ListUnits :many
+
+SELECT system_id, first_id, last_id, alias, created_at, updated_at
+FROM units WHERE system_id = $1
+ORDER BY first_id, last_id
+`
+
+// Units (R26): a radio ID, or a range of them, with an alias in its system
+// (migration 00016, ADR 0019).
+func (q *Queries) ListUnits(ctx context.Context, systemID int64) ([]Unit, error) {
+	rows, err := q.db.Query(ctx, listUnits, systemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Unit
+	for rows.Next() {
+		var i Unit
+		if err := rows.Scan(
+			&i.SystemID,
+			&i.FirstID,
+			&i.LastID,
+			&i.Alias,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockCallForRecording = `-- name: LockCallForRecording :one
 
 INSERT INTO calls (recorder_id, sys_num, call_num, start_time, system_id, short_name,
@@ -1863,6 +2084,34 @@ func (q *Queries) PutTalkgroup(ctx context.Context, arg PutTalkgroupParams) erro
 		arg.FiregroundChannel,
 	)
 	return err
+}
+
+const putUnit = `-- name: PutUnit :one
+INSERT INTO units (system_id, first_id, last_id, alias)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (system_id, first_id, last_id) DO UPDATE
+SET alias = EXCLUDED.alias, updated_at = now()
+RETURNING (xmax = 0)::bool AS created
+`
+
+type PutUnitParams struct {
+	SystemID int64
+	FirstID  int64
+	LastID   int64
+	Alias    string
+}
+
+// An admin's add or edit. created says which.
+func (q *Queries) PutUnit(ctx context.Context, arg PutUnitParams) (bool, error) {
+	row := q.db.QueryRow(ctx, putUnit,
+		arg.SystemID,
+		arg.FirstID,
+		arg.LastID,
+		arg.Alias,
+	)
+	var created bool
+	err := row.Scan(&created)
+	return created, err
 }
 
 const recordRejection = `-- name: RecordRejection :execrows

@@ -46,7 +46,10 @@ psql "INSERT INTO settings (key, value) VALUES ('retention_days', '3650')
 	INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state, fireground_channel)
 	SELECT 1, 1003, 'ADMIN', 'Admin', id, 'hidden', 43 FROM tags WHERE name = 'admin'
 	ON CONFLICT (system_id, talkgroup_id) DO UPDATE SET state = 'hidden', fireground_channel = 43;
-	INSERT INTO attachments (recorder_id, short_name, system_id) SELECT id, 'ex', 1 FROM recorders WHERE name = '$name';" >/dev/null
+	INSERT INTO attachments (recorder_id, short_name, system_id) SELECT id, 'ex', 1 FROM recorders WHERE name = '$name';
+	INSERT INTO units (system_id, first_id, last_id, alias)
+	VALUES (1, 5001, 5001, 'Engine 1'), (1, 5100, 5199, 'Portables'), (1, 5101, 5101, 'Covert radio'), (1, 5102, 5102, 'Covert scanner')
+	ON CONFLICT DO NOTHING;" >/dev/null
 
 mkdir -p "$media/app/media"
 docker run -d --name "$client" --network host --user "$(id -u):$(id -g)" \
@@ -291,6 +294,38 @@ $got
 but GET naming 4711 answers
 $unknown"
 	done
+done
+
+# Units (R26, R27; ADR 0019): the public call's 5001 is "Engine 1" in its
+# details, and unit search finds it. 5101 "Covert radio" and 5102 "Covert
+# scanner" are heard only on 1003's calls (A1's calls, in the same stack,
+# have 5100 and 5123 of the "Portables", which are public): by
+# alias or ID, each answers byte for byte as a unit never heard (5999),
+# and so does a recent-calls filter naming one.
+answer QUERY /api/v1/calls -H 'Content-Type: application/json' --data "{\"ids\":[\"$pub\"]}" |
+	grep -q '"unit":5001,"alias":"Engine 1"' || fail "the public call's unit has no alias"
+found=$(answer GET "/api/v1/units/search?q=engine")
+echo "$found" | grep -q '"id":5001,"alias":"Engine 1"' || fail "unit search doesn't find Engine 1: $found"
+grep -iq '^cache-control: no-store' "$media/h" || fail "unit search's Cache-Control"
+found=$(answer GET "/api/v1/units/search?q=5")
+echo "$found" | grep -q '"id":5001' || fail "unit search 5 doesn't find 5001: $found"
+if echo "$found" | grep -E -q '510[12]|Covert'; then fail "unit search 5 finds 1003's units: $found"; fi
+never=$(answer GET "/api/v1/units/search?q=5999")
+echo "$never" | grep -q '"units":\[\]' || fail "unit search for a unit never heard: $never"
+for q in 5101 5102 Covert%20radio covert%20scanner covert COVERT; do
+	got=$(answer GET "/api/v1/units/search?q=$q")
+	test "$got" = "$never" || fail "unit search $q (heard only on 1003) answers
+$got
+but a unit never heard answers
+$never"
+done
+never=$(answer GET "/api/v1/recent-calls?$window&unit=5999")
+for u in 5101 1.5102; do
+	got=$(answer GET "/api/v1/recent-calls?$window&unit=$u")
+	test "$got" = "$never" || fail "recent calls of unit $u answer
+$got
+but a unit never heard
+$never"
 done
 
 # Nothing was deleted to hide them.

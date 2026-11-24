@@ -358,8 +358,9 @@ func jsonIndented(v any) ([]byte, error) {
 // index.csv: one row per call (R65).
 
 // ZipIndexColumns are index.csv's columns. A list's cells (groups, and
-// each transmission's unit, alias and offset) are separated by ";". The
-// alias is empty until units have aliases.
+// each transmission's unit, alias and offset) are separated by ";". A unit
+// with no alias has an empty one; an alias never holds ";" (migration
+// 00016).
 var ZipIndexColumns = []string{"call_id", "start_utc", "end_utc", "start_local", "end_local", "duration_s",
 	"system", "talkgroup_id", "talkgroup_name", "talkgroup_label", "groups", "tag",
 	"unit_ids", "unit_aliases", "unit_offsets_s", "file"}
@@ -381,7 +382,7 @@ func (a *API) zipIndex(calls []*zipCall) []byte {
 			make([]string, 0, len(c.Transmissions))
 		for _, t := range c.Transmissions {
 			units = append(units, strconv.FormatInt(t.Unit, 10))
-			aliases = append(aliases, "")
+			aliases = append(aliases, t.Alias)
 			offsets = append(offsets, seconds(int64(t.OffsetMS)))
 		}
 		system := c.System.Name

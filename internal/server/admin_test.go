@@ -108,6 +108,9 @@ func (e *env) fixture(t *testing.T) int64 {
 		}
 		e.mustAdmin(t, "PUT", fmt.Sprintf("/systems/%d/talkgroups/%d", id, tg.id), body, 201)
 	}
+	// The fixture's units (R26): 5001 "Engine 1" and 5100-5199 "Portables".
+	e.mustAdmin(t, "PUT", fmt.Sprintf("/systems/%d/units/5001", id), map[string]any{"alias": "Engine 1"}, 201)
+	e.mustAdmin(t, "PUT", fmt.Sprintf("/systems/%d/units/5100-5199", id), map[string]any{"alias": "Portables"}, 201)
 	return id
 }
 

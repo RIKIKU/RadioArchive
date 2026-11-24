@@ -221,6 +221,7 @@ func (g *Gate) recentCalls(ctx context.Context, s Search, from, to time.Time, li
 			if g.held(cat, r.SystemID, c) || (named != nil && !matches(named, r.SystemID, c)) {
 				continue
 			}
+			cat.nameUnits(r.SystemID, &c)
 			if len(out.Calls) == limit {
 				// There's at least one more: the next page starts after
 				// the last one given.

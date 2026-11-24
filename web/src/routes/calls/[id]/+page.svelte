@@ -4,7 +4,7 @@
 	//
 	// - The card: the talkgroup's name (R24) and group, the start date and
 	//   time on the deployment's clock (TZ), the duration, the units heard
-	//   (by radio ID; #83 adds aliases), Play, Download, Share and Add to
+	//   (each by its alias, else its radio ID, R27), Play, Download, Share and Add to
 	//   basket (ADR 0018). Live listening doesn't start; Start listening
 	//   stays in the dock.
 	// - In progress: the card says so and offers live listening, which adds
@@ -208,7 +208,7 @@
 			</div>
 			<div>
 				<dt>{units.length === 1 ? 'Unit heard' : 'Units heard'}</dt>
-				<!-- By radio ID; #83 shows each unit's alias (R27). -->
+				<!-- Each unit's alias, else its radio ID (R27). -->
 				<dd class="units">{units.length ? units.join(', ') : 'None heard'}</dd>
 			</div>
 		</dl>

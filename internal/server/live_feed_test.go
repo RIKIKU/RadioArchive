@@ -317,7 +317,8 @@ func (r *liveRec) end(id cp.CallID, stopMS int64) {
 func quiet() { time.Sleep(400 * time.Millisecond) }
 
 // A5: A with {1001} gets only 1001's events and frames, B with {1002} only
-// 1002's. Each event names its talkgroup, group and unit (R36, R76).
+// 1002's. Each event names its talkgroup, group and unit, the unit by its
+// alias (R27, R36, R76): 5001 is "Engine 1", 5123 one of the "Portables".
 func TestIntegrationLiveA5(t *testing.T) {
 	e := newEnv(t)
 	rec := e.liveRecorder(t)
@@ -356,11 +357,11 @@ func TestIntegrationLiveA5(t *testing.T) {
 	start := a.wait("1001's start", isEvent(gate.TypeCallStart, xid))
 	if start.Talkgroup.ID != 1001 || start.Talkgroup.Name != "Dispatch North" || start.Talkgroup.Label != "DISP N" ||
 		!slices.Equal(start.Talkgroup.Groups, []string{"North"}) || start.Unit == nil || start.Unit.ID != 5001 ||
-		start.Unit.Name != "5001" || start.StartedAt == "" || start.EventID <= a.welcome.LastEventID || start.System != nil {
+		start.Unit.Name != "Engine 1" || start.StartedAt == "" || start.EventID <= a.welcome.LastEventID || start.System != nil {
 		t.Errorf("call_start = %s", start.Raw)
 	}
 	tx := a.wait("1001's transmission", isEvent(gate.TypeTransmission, xid))
-	if tx.Unit == nil || tx.Unit.ID != 5123 || tx.OffsetMS == nil || *tx.OffsetMS != 1500 || tx.EventID <= start.EventID {
+	if tx.Unit == nil || tx.Unit.ID != 5123 || tx.Unit.Name != "Portables" || tx.OffsetMS == nil || *tx.OffsetMS != 1500 || tx.EventID <= start.EventID {
 		t.Errorf("transmission = %s", tx.Raw)
 	}
 	end := a.wait("1001's end", isEvent(gate.TypeCallEnd, xid))
