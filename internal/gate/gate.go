@@ -3,7 +3,8 @@
 // recordings.
 //
 // Every read goes through the public_calls view, whose one condition is
-// call_state's (ADR 0003), evaluated on the request: a call whose patch has
+// call_state's rule (ADR 0003; written for speed in migration 00012, ADR
+// 0013), evaluated on the request: a call whose patch has
 // a hidden or ignored talkgroup isn't there, and a call that isn't there
 // can't be told apart from one that never existed. The gate returns no
 // reason, no state and no error that says which.
@@ -29,6 +30,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/RIKIKU/RadioArchive/internal/recordings"
 	"github.com/RIKIKU/RadioArchive/internal/store"
@@ -49,9 +51,12 @@ const queryTimeout = 5 * time.Second
 
 // Gate reads what the public may see.
 type Gate struct {
-	q   *db.Queries
-	dir string
-	log *slog.Logger
+	q    *db.Queries
+	pool *pgxpool.Pool
+	dir  string
+	log  *slog.Logger
+
+	searchTimeout time.Duration // a search's, all its queries together (R73)
 
 	now func() time.Time
 
@@ -71,10 +76,17 @@ func WithClock(now func() time.Time) Option {
 	return func(g *Gate) { g.now = now }
 }
 
+// WithSearchTimeout sets how long a search of recent calls may take, all
+// its queries together (default 5 s, R73). Tests shorten it.
+func WithSearchTimeout(d time.Duration) Option {
+	return func(g *Gate) { g.searchTimeout = d }
+}
+
 // New returns the gate over st, with the recordings volume at
 // recordingsDir.
 func New(st *store.Store, recordingsDir string, log *slog.Logger, opts ...Option) *Gate {
-	g := &Gate{q: st.Queries, dir: recordingsDir, log: log, now: time.Now}
+	g := &Gate{q: st.Queries, pool: st.Pool, dir: recordingsDir, log: log, now: time.Now,
+		searchTimeout: queryTimeout}
 	for _, o := range opts {
 		o(g)
 	}
