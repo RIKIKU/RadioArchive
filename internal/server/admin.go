@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/RIKIKU/RadioArchive/internal/recordings"
+	"github.com/RIKIKU/RadioArchive/internal/retention"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/db"
 )
@@ -44,6 +45,14 @@ type Admin struct {
 	log  *slog.Logger
 	auth AdminAuthenticator
 	dir  string
+	ret  *retention.Job
+}
+
+// WithRetention serves the retention setting and the recordings volume's
+// state (R88) from the retention job too.
+func (a *Admin) WithRetention(j *retention.Job) *Admin {
+	a.ret = j
+	return a
 }
 
 // NewAdmin returns the admin API, with the recordings volume at
@@ -79,6 +88,10 @@ func WithAdmin(a *Admin) Option {
 		} {
 			method, path, _ := strings.Cut(r.pattern, " ")
 			api.handle(AdminRoute, method+" "+AdminPath+path, a.serve(r.h))
+		}
+		if a.ret != nil {
+			api.handle(AdminRoute, "GET "+AdminPath+"/retention", a.serve(a.getRetention))
+			api.handle(AdminRoute, "PUT "+AdminPath+"/retention", a.serve(a.putRetention))
 		}
 	}
 }

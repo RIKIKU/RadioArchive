@@ -28,6 +28,14 @@ _Avoid_: Stream, real-time call
 The finished audio of a call, kept in the archive once the call ends.
 _Avoid_: Call file, upload
 
+**Retention period**:
+How long a call and its recording are kept, in days, before the nightly job deletes them; the same for every talkgroup, hidden ones included.
+_Avoid_: TTL, expiry, archive period
+
+**Retention shortened**:
+Recordings deleted before their retention period is over, oldest first, because the recordings volume ran low on free space.
+_Avoid_: Purge, eviction, early expiry
+
 **Talkgroup**:
 A P25 trunked-radio group that calls are made on; the unit of what a listener chooses to hear.
 _Avoid_: Channel, frequency

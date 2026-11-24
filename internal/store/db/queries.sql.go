@@ -225,6 +225,22 @@ func (q *Queries) CallState(ctx context.Context, arg CallStateParams) (Talkgroup
 	return state, err
 }
 
+const countRecordingsBefore = `-- name: CountRecordingsBefore :one
+
+SELECT count(*) FROM calls
+WHERE started_at < $1 AND recording_path IS NOT NULL
+`
+
+// Retention (R88, P5, R35; ADR 0005). Calls go by when they started, hidden
+// and ignored ones alike, and their transmissions with them.
+// How many recordings a retention period ending at cutoff would delete.
+func (q *Queries) CountRecordingsBefore(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
+	row := q.db.QueryRow(ctx, countRecordingsBefore, cutoff)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createRecorder = `-- name: CreateRecorder :one
 
 INSERT INTO recorders (name, key_hash)
@@ -285,6 +301,59 @@ func (q *Queries) CreateSystem(ctx context.Context, arg CreateSystemParams) (Cre
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
+	return i, err
+}
+
+const deleteCallsBefore = `-- name: DeleteCallsBefore :many
+DELETE FROM calls
+WHERE id IN (SELECT c.id FROM calls c WHERE c.started_at < $1
+             ORDER BY c.started_at, c.id LIMIT $2)
+RETURNING recording_path
+`
+
+type DeleteCallsBeforeParams struct {
+	Cutoff pgtype.Timestamptz
+	Batch  int32
+}
+
+// A batch of the calls that started before cutoff, oldest first. Their
+// recordings' files are the caller's to remove, after the commit.
+func (q *Queries) DeleteCallsBefore(ctx context.Context, arg DeleteCallsBeforeParams) ([]*string, error) {
+	rows, err := q.db.Query(ctx, deleteCallsBefore, arg.Cutoff, arg.Batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*string
+	for rows.Next() {
+		var recording_path *string
+		if err := rows.Scan(&recording_path); err != nil {
+			return nil, err
+		}
+		items = append(items, recording_path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const deleteOldestCall = `-- name: DeleteOldestCall :one
+DELETE FROM calls
+WHERE id = (SELECT c.id FROM calls c ORDER BY c.started_at, c.id LIMIT 1)
+RETURNING recording_path, started_at
+`
+
+type DeleteOldestCallRow struct {
+	RecordingPath *string
+	StartedAt     pgtype.Timestamptz
+}
+
+// Low disk (R88): the oldest call goes first. No row: no calls left.
+func (q *Queries) DeleteOldestCall(ctx context.Context) (DeleteOldestCallRow, error) {
+	row := q.db.QueryRow(ctx, deleteOldestCall)
+	var i DeleteOldestCallRow
+	err := row.Scan(&i.RecordingPath, &i.StartedAt)
 	return i, err
 }
 
@@ -484,6 +553,40 @@ func (q *Queries) GatePublicRecording(ctx context.Context, id pgtype.UUID) (Gate
 	var i GatePublicRecordingRow
 	err := row.Scan(&i.RecordingPath, &i.RecordingSize, &i.RecordingAt)
 	return i, err
+}
+
+const getJob = `-- name: GetJob :one
+
+SELECT name, ran_for, started_at, finished_at, ok, error, result FROM jobs WHERE name = $1
+`
+
+// Background jobs' last runs (ADR 0005).
+func (q *Queries) GetJob(ctx context.Context, name string) (Job, error) {
+	row := q.db.QueryRow(ctx, getJob, name)
+	var i Job
+	err := row.Scan(
+		&i.Name,
+		&i.RanFor,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.Ok,
+		&i.Error,
+		&i.Result,
+	)
+	return i, err
+}
+
+const getSetting = `-- name: GetSetting :one
+
+SELECT value FROM settings WHERE key = $1
+`
+
+// Settings (R84, R88).
+func (q *Queries) GetSetting(ctx context.Context, key string) (string, error) {
+	row := q.db.QueryRow(ctx, getSetting, key)
+	var value string
+	err := row.Scan(&value)
+	return value, err
 }
 
 const getSystem = `-- name: GetSystem :one
@@ -815,6 +918,18 @@ func (q *Queries) NotifyRecorderKeyChanged(ctx context.Context, recorderID int64
 	return err
 }
 
+const oldestCallStart = `-- name: OldestCallStart :one
+SELECT min(started_at)::timestamptz AS started_at FROM calls
+`
+
+// When the oldest call kept started: retention, once shortened.
+func (q *Queries) OldestCallStart(ctx context.Context) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, oldestCallStart)
+	var started_at pgtype.Timestamptz
+	err := row.Scan(&started_at)
+	return started_at, err
+}
+
 const patchTalkgroup = `-- name: PatchTalkgroup :execrows
 UPDATE talkgroups
 SET label = COALESCE($1, label),
@@ -862,6 +977,19 @@ func (q *Queries) Ping(ctx context.Context) (int32, error) {
 	var ok int32
 	err := row.Scan(&ok)
 	return ok, err
+}
+
+const pruneRejectedCalls = `-- name: PruneRejectedCalls :execrows
+DELETE FROM rejected_calls WHERE rejected_at < $1
+`
+
+// Rejected calls are counted over the retention period (ADR 0003).
+func (q *Queries) PruneRejectedCalls(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneRejectedCalls, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const putTalkgroup = `-- name: PutTalkgroup :exec
@@ -1027,6 +1155,38 @@ func (q *Queries) RetireRecorder(ctx context.Context, name string) (int64, error
 	return id, err
 }
 
+const saveJob = `-- name: SaveJob :exec
+INSERT INTO jobs (name, ran_for, started_at, finished_at, ok, error, result)
+VALUES ($1, $2, $3, $4,
+        $5, $6, $7)
+ON CONFLICT (name) DO UPDATE
+SET ran_for = EXCLUDED.ran_for, started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at,
+    ok = EXCLUDED.ok, error = EXCLUDED.error, result = EXCLUDED.result
+`
+
+type SaveJobParams struct {
+	Name       string
+	RanFor     pgtype.Timestamptz
+	StartedAt  pgtype.Timestamptz
+	FinishedAt pgtype.Timestamptz
+	Ok         bool
+	Error      string
+	Result     []byte
+}
+
+func (q *Queries) SaveJob(ctx context.Context, arg SaveJobParams) error {
+	_, err := q.db.Exec(ctx, saveJob,
+		arg.Name,
+		arg.RanFor,
+		arg.StartedAt,
+		arg.FinishedAt,
+		arg.Ok,
+		arg.Error,
+		arg.Result,
+	)
+	return err
+}
+
 const setCallRecording = `-- name: SetCallRecording :exec
 UPDATE calls
 SET short_name = $1,
@@ -1108,6 +1268,48 @@ func (q *Queries) SetRecorderKey(ctx context.Context, arg SetRecorderKeyParams) 
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const setSetting = `-- name: SetSetting :exec
+INSERT INTO settings (key, value) VALUES ($1, $2)
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+`
+
+type SetSettingParams struct {
+	Key   string
+	Value string
+}
+
+func (q *Queries) SetSetting(ctx context.Context, arg SetSettingParams) error {
+	_, err := q.db.Exec(ctx, setSetting, arg.Key, arg.Value)
+	return err
+}
+
+const storedRecordingPaths = `-- name: StoredRecordingPaths :many
+SELECT recording_path::text AS recording_path FROM calls
+WHERE id = ANY ($1::uuid[]) AND recording_path IS NOT NULL
+`
+
+// The stored recordings among these calls': a file on the volume whose
+// path isn't among them has no row.
+func (q *Queries) StoredRecordingPaths(ctx context.Context, ids []pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, storedRecordingPaths, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var recording_path string
+		if err := rows.Scan(&recording_path); err != nil {
+			return nil, err
+		}
+		items = append(items, recording_path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const systemInUse = `-- name: SystemInUse :one

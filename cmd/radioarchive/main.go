@@ -12,6 +12,9 @@
 //	DATABASE_URL    PostgreSQL connection URL (required by serve and recorder)
 //	LISTEN_ADDR     address to listen on (default :8080)
 //	RECORDINGS_DIR  the recordings volume (default /var/lib/radioarchive/recordings)
+//	RECORDINGS_MIN_FREE  below this much free on the recordings volume, the
+//	                oldest recordings are deleted early (default 5%)
+//	NIGHTLY_AT      local time of the nightly retention run, HH:MM (default 03:00, in TZ)
 package main
 
 import (
@@ -29,6 +32,7 @@ import (
 
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/public"
+	"github.com/RIKIKU/RadioArchive/internal/retention"
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/version"
@@ -106,6 +110,12 @@ func serve(log *slog.Logger) error {
 	}
 	go rs.Run(ctx)
 
+	job, err := retentionJob(st, log)
+	if err != nil {
+		return err
+	}
+	go job.Run(ctx)
+
 	srv := &http.Server{
 		Addr:              listenAddr(),
 		Handler:           apiHandler(st, log, rs, recordingsDir()),
@@ -135,6 +145,28 @@ func serve(log *slog.Logger) error {
 func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, recordings string) *server.API {
 	return server.New(st, log, server.WithRecorders(rs),
 		server.WithPublic(public.New(gate.New(st, recordings, log), log)))
+}
+
+// retentionJob is the nightly retention job and the low-disk check (R88),
+// on the real clock and the real volume. The binary only runs it on its
+// schedule: no route, setting or signal triggers a run.
+func retentionJob(st *store.Store, log *slog.Logger) (*retention.Job, error) {
+	cfg := retention.Config{Store: st, Dir: recordingsDir(), Log: log}
+	if v := os.Getenv("RECORDINGS_MIN_FREE"); v != "" {
+		f, err := retention.ParsePercent(v)
+		if err != nil {
+			return nil, fmt.Errorf("RECORDINGS_MIN_FREE: %w", err)
+		}
+		cfg.MinFree = f
+	}
+	if v := os.Getenv("NIGHTLY_AT"); v != "" {
+		at, err := retention.ParseAt(v)
+		if err != nil {
+			return nil, fmt.Errorf("NIGHTLY_AT: %w", err)
+		}
+		cfg.At = at
+	}
+	return retention.New(cfg)
 }
 
 func recorderMain(args []string, out io.Writer) error {

@@ -124,6 +124,16 @@ type Call struct {
 	RecordingAt       pgtype.Timestamptz
 }
 
+type Job struct {
+	Name       string
+	RanFor     pgtype.Timestamptz
+	StartedAt  pgtype.Timestamptz
+	FinishedAt pgtype.Timestamptz
+	Ok         bool
+	Error      string
+	Result     []byte
+}
+
 type PublicCall struct {
 	ID                pgtype.UUID
 	SystemID          int64
@@ -158,6 +168,12 @@ type RejectedCall struct {
 	Talkgroup  int32
 	Reason     RejectionReason
 	RejectedAt pgtype.Timestamptz
+}
+
+type Setting struct {
+	Key       string
+	Value     string
+	UpdatedAt pgtype.Timestamptz
 }
 
 type System struct {
