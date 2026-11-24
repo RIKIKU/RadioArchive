@@ -50,4 +50,4 @@ The fireground link relies on the server's one answer (ADR 0006): an unknown num
 - The live WebSocket's client (#56's feed, #58's player) calls nothing new: it replaces the body of `sendListeningSet` with the message ADR 0007 defines. The Listen page already calls it whenever the set or the session's additions change.
 - The browser tests run against the binary with the test fixture's setup (`testing/webfixture`), because the picker, the share link and fireground links need the catalogue.
 - Signed-in saving (#61) adds a second home for the same entries; the share link and the session's additions don't change.
-- ADR 0006's LED colour names (`amber`, `teal`) differ from ArchiveUx 0.3.0's (`yellow`, `cyan`). The picker shows no LED, so nothing here depends on it; the player (#60) has to settle it.
+- ADR 0006's LED colour names were aligned with ArchiveUx 0.3.0's (`yellow`, `cyan` rather than `amber`, `teal`) on 2026-11-24, before anything was deployed.

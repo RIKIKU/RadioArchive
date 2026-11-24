@@ -11,7 +11,7 @@ import "slices"
 // groups, then its system. NoSetting stops there: no alert, or no colour.
 var (
 	Alerts     = []string{NoSetting, "beep", "chime", "pip", "tone"}
-	LEDColours = []string{NoSetting, "red", "orange", "amber", "green", "teal", "blue", "purple", "pink"}
+	LEDColours = []string{NoSetting, "red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink"}
 )
 
 // NoSetting is an alert or LED colour of "none", which isn't taken from
