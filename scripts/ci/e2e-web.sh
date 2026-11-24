@@ -1,6 +1,6 @@
 #!/bin/sh
 # The browser tests (web/tests) against the binary, with the app built into
-# it, and its database (issue #54).
+# it, and its database holding the test fixture's setup (issues #54, #59).
 #
 #   sh scripts/ci/e2e-web.sh [playwright arguments]
 #
@@ -56,6 +56,8 @@ pid=$!
 # Node, not curl: Playwright's image may have no curl.
 wait_for 120 "the API" node -e "fetch(process.argv[1]).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))" \
 	"http://127.0.0.1:$port/healthz"
+# The test fixture's setup, once the API has migrated the database.
+go run ./testing/webfixture "$DATABASE_URL"
 
 cd web
 RA_URL="http://127.0.0.1:$port" npx playwright test "$@"
