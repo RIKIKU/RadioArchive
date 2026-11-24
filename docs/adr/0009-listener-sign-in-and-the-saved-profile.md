@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-25, by the owner; where the profile lives superseded by ADR 0021)
 ---
 
 # 9. Listener sign-in and the saved profile

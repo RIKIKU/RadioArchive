@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-25, by the owner)
 ---
 
 # 13. Recent calls and search: the route, its paging cursor, the default and calls in progress
