@@ -77,11 +77,17 @@ export class Account {
 	#s: Settings;
 	#timer: ReturnType<typeof setTimeout> | undefined;
 	#quiet = false;
+	/** Something changed while the account was being read. */
+	#dirty = false;
 
 	constructor(s: Settings) {
 		this.#s = s;
 		s.listening.onsetchange = () => this.changed();
-		s.basket.onchange = () => this.changed();
+		s.basket.onchange = () => {
+			// The listener changed the basket while the account was being read.
+			if (this.mode === 'loading') this.#dirty = true;
+			this.changed();
+		};
 	}
 
 	#browser(): Profile {
@@ -119,8 +125,12 @@ export class Account {
 		}
 		link(st.account.id);
 		this.mode = 'saving';
-		if (step === 'adopt' && st.profile) this.#adopt(st.profile);
-		if (step === 'save') await this.save();
+		// A basket changed here while the account was being read is newer
+		// than the account's: the browser's profile is saved, not replaced.
+		const dirty = this.#dirty;
+		this.#dirty = false;
+		if (step === 'adopt' && st.profile && !dirty) this.#adopt(st.profile);
+		if (step === 'save' || (step === 'adopt' && dirty)) await this.save();
 	}
 
 	#adopt(p: Profile) {

@@ -228,6 +228,12 @@ test("an unavailable call shows only \"No longer available\", the same for every
 	}
 	await expect(page.locator('.summary')).toContainText('2 calls no longer available.');
 	await namesNothingHidden(page);
+	// A long note shows its first lines until opened.
+	const fire = page.getByRole('article', { name: 'Grass fire' });
+	await expect(fire.locator('.note')).toHaveClass(/clamped/);
+	await fire.getByRole('button', { name: 'Show the whole note' }).click();
+	await expect(fire.locator('.note')).not.toHaveClass(/clamped/);
+	await expect(fire.getByRole('button', { name: 'Show less of the note' })).toHaveAttribute('aria-expanded', 'true');
 	// Taken out of the conversation, it stays in the basket; removed, it's gone.
 	await page.getByRole('article', { name: 'Car accident' }).getByRole('button', { name: 'Take out of Car accident: a call no longer available' }).click();
 	await expect(gone).toHaveCount(2);
@@ -261,8 +267,13 @@ test('axe: the basket with conversations, countdowns, an unavailable call and a 
 				expect(results.violations, `${look} ${theme}, ${width} px`).toEqual([]);
 				expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width} px scrolls sideways`).toBeLessThanOrEqual(width);
 				if (shots) {
+					// The top (the download in parts, the first conversation) and the end (an unavailable call).
 					await page.mouse.move(0, 0);
-					await page.screenshot({ path: `${shots}/basket-${look}-${theme}-${width}.png`, fullPage: true });
+					await page.evaluate(() => scrollTo(0, 0));
+					await page.screenshot({ path: `${shots}/basket-top-${look}-${theme}-${width}.png` });
+					await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+					await page.screenshot({ path: `${shots}/basket-end-${look}-${theme}-${width}.png` });
+					await page.evaluate(() => scrollTo(0, 0));
 				}
 			}
 	}

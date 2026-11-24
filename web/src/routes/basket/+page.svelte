@@ -227,6 +227,9 @@
 	}
 
 	let deleting: string | undefined = $state();
+	// Long notes show their first lines until opened.
+	const LONG_NOTE = 240;
+	let notesOpen: string[] = $state([]);
 	let clearing = $state(false);
 
 	function put(convId: string, id: string) {
@@ -457,7 +460,16 @@
 				{:else}
 					<div class="conversation-head">
 						<h3 id="conversation-{v.id}">{v.name}</h3>
-						{#if v.note}<p class="note">{v.note}</p>{/if}
+						{#if v.note}
+							{@const long = v.note.length > LONG_NOTE}
+							<p class="note" class:clamped={long && !notesOpen.includes(v.id)} id="note-{v.id}">{v.note}</p>
+							{#if long}
+								{@const open = notesOpen.includes(v.id)}
+								<button type="button" class="ghost more-note" aria-expanded={open} aria-controls="note-{v.id}" onclick={() => (notesOpen = open ? notesOpen.filter((x) => x !== v.id) : [...notesOpen, v.id])}
+									>{open ? "Show less of the note" : "Show the whole note"}</button
+								>
+							{/if}
+						{/if}
 						<p class="meta">{plural(v.calls.length, 'call')}</p>
 					</div>
 					<div class="actions">
@@ -592,6 +604,18 @@
 	.note {
 		white-space: pre-line;
 		overflow-wrap: anywhere;
+	}
+	/* A long note's first lines, until opened. */
+	.note.clamped {
+		display: -webkit-box;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 3;
+		line-clamp: 3;
+		overflow: hidden;
+	}
+	.more-note {
+		padding: 0;
+		min-height: var(--target);
 	}
 	.conversation .actions {
 		margin-top: var(--space-sm);
