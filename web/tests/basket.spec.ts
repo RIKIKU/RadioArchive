@@ -63,8 +63,8 @@ test('Add to basket on a recent-calls row and the call card; the menu counts the
 	await add.click();
 	await expect(add).toHaveAttribute('aria-pressed', 'true');
 	await expect(row.getByRole('status').filter({ hasText: 'Added to the basket' })).toBeVisible();
-	// Beside Share, after Download.
-	await expect(row.locator('.row-actions > *')).toHaveCount(3);
+	// Beside Share, after Play from here and Download.
+	await expect(row.locator('.row-actions > *')).toHaveCount(4);
 
 	const [card] = await newest(page, 1002, 1);
 	await page.goto(`/calls/${card.id}`);
