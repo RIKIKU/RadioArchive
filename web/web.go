@@ -13,6 +13,7 @@ package web
 import (
 	"bytes"
 	"embed"
+	"html"
 	"io/fs"
 	"net/http"
 	"path"
@@ -48,6 +49,7 @@ type Route struct {
 // App is the browser app.
 type App struct {
 	routes []Route
+	index  []byte // the app's one page; nil when the app wasn't built
 }
 
 // Routes are the app's routes, for the server to mount.
@@ -62,10 +64,15 @@ func New() *App {
 
 // Serve returns the app built into root.
 func Serve(root fs.FS) *App {
-	return &App{routes: []Route{
+	a := &App{}
+	if index, err := fs.ReadFile(root, "index.html"); err == nil {
+		a.index = index
+	}
+	a.routes = []Route{
 		{"GET /robots.txt", http.HandlerFunc(robots)},
-		{"GET /", shell(root)},
-	}}
+		{"GET /", a.shell(root)},
+	}
+	return a
 }
 
 func robots(w http.ResponseWriter, _ *http.Request) {
@@ -78,15 +85,13 @@ func robots(w http.ResponseWriter, _ *http.Request) {
 // every other path, so the browser's router can handle it. The page is sent
 // in the listener's look and theme (WithLook), so its first paint is
 // already theirs and the default never flashes first (R82).
-func shell(root fs.FS) http.Handler {
-	index, err := fs.ReadFile(root, "index.html")
-	if err != nil {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "The browser app wasn't built into this binary (cd web && npm run build).", http.StatusServiceUnavailable)
-		})
-	}
+func (a *App) shell(root fs.FS) http.Handler {
 	fileServer := http.FileServerFS(root)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.index == nil {
+			notBuilt(w)
+			return
+		}
 		p := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 		if p != "" && p != "index.html" {
 			if st, err := fs.Stat(root, p); err == nil && !st.IsDir() {
@@ -100,21 +105,80 @@ func shell(root fs.FS) http.Handler {
 				return
 			}
 		}
-		look, theme := "", ""
-		if c, err := r.Cookie(LookCookie); err == nil {
-			look = c.Value
-		}
-		if c, err := r.Cookie(ThemeCookie); err == nil {
-			theme = c.Value
-		}
 		// The page depends on the asker's cookies, so no cache may keep one
 		// listener's for another.
-		w.Header().Set("Cache-Control", "no-cache, private")
-		w.Header().Set("Vary", "Cookie")
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Content-Security-Policy", csp)
-		_, _ = w.Write(WithLook(index, look, theme))
+		a.write(w, r, http.StatusOK, "no-cache, private", a.index)
 	})
+}
+
+func notBuilt(w http.ResponseWriter) {
+	http.Error(w, "The browser app wasn't built into this binary (cd web && npm run build).", http.StatusServiceUnavailable)
+}
+
+// write sends page with status, in the asker's look and theme.
+func (a *App) write(w http.ResponseWriter, r *http.Request, status int, cache string, page []byte) {
+	look, theme := "", ""
+	if c, err := r.Cookie(LookCookie); err == nil {
+		look = c.Value
+	}
+	if c, err := r.Cookie(ThemeCookie); err == nil {
+		theme = c.Value
+	}
+	h := w.Header()
+	h.Set("Cache-Control", cache)
+	h.Set("Vary", "Cookie")
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Content-Security-Policy", csp)
+	w.WriteHeader(status)
+	_, _ = w.Write(WithLook(page, look, theme))
+}
+
+// Preview is what a page tells link previews about what it names (R61,
+// R74): a title and a description, as text. The zero Preview is none: the
+// app's own page, which is the site's generic preview.
+type Preview struct {
+	Title       string
+	Description string
+}
+
+// Page sends the app's page with status and preview, in the asker's look
+// and theme, for a path that names something: a call link (ADR 0017). The
+// server calls it for the public API's pages, which decide what may be
+// shown (internal/public); this package only writes it. A zero preview
+// sends the app's own page, byte for byte. A page built from what the
+// deployment holds is never kept by a cache, so hiding a talkgroup takes
+// effect at the next request (R74).
+func (a *App) Page(w http.ResponseWriter, r *http.Request, status int, p Preview) {
+	if a.index == nil {
+		notBuilt(w)
+		return
+	}
+	a.write(w, r, status, "no-store", WithPreview(a.index, p))
+}
+
+// WithPreview is the page with p's preview tags at the end of its head:
+// Open Graph's and the description, which link previews read. The text is
+// escaped, so a talkgroup's name can never be markup. A zero preview, or a
+// page with no head, is the page as it is.
+func WithPreview(page []byte, p Preview) []byte {
+	if p == (Preview{}) {
+		return page
+	}
+	i := bytes.Index(page, []byte("</head>"))
+	if i < 0 {
+		return page
+	}
+	t, d := html.EscapeString(p.Title), html.EscapeString(p.Description)
+	tags := `<meta property="og:type" content="website" />` +
+		`<meta property="og:site_name" content="RadioArchive" />` +
+		`<meta property="og:title" content="` + t + `" />` +
+		`<meta property="og:description" content="` + d + `" />` +
+		`<meta name="description" content="` + d + `" />` +
+		`<meta name="twitter:card" content="summary" />`
+	out := make([]byte, 0, len(page)+len(tags))
+	out = append(out, page[:i]...)
+	out = append(out, tags...)
+	return append(out, page[i:]...)
 }
 
 // WithLook is the page with the look and theme on its root element:

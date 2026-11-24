@@ -11,14 +11,16 @@
 	//
 	// Controls (R44): Pause or Resume, Skip, Jump to live, Hold, Stop
 	// listening. Each has its name in words: shown on a desktop, read out on
-	// a phone, where the buttons show their icons only. Share and Add to
-	// basket (R45) are M3's.
+	// a phone, where the buttons show their icons only. Share (R45, ADR
+	// 0017) copies the playing call's link; Add to basket is #81's.
 	//
 	// A call replayed from recent calls (R46; ADR 0016) shows first, with
-	// its own Stop, whether live listening is paused or never started.
+	// its own Stop and Share, whether live listening is paused or never
+	// started.
 	import { Icon, LiveBadge } from 'archiveux/components';
 	import type { Player, CallInfo } from './player.svelte.ts';
 	import { dockIcons } from './icons.ts';
+	import ShareButton from '#lib/share/ShareButton.svelte';
 
 	let { player }: { player: Player } = $props();
 
@@ -48,6 +50,7 @@
 		</div>
 		<div class="controls" role="group" aria-label="Replay controls">
 			<button type="button" class="secondary" onclick={() => player.replay.stop()}><Icon svg={dockIcons.stop} /><span class="label">Stop replay</span></button>
+			<ShareButton callId={r.callId} label={r.talkgroup.name} icon compact />
 		</div>
 	</div>
 {:else if player.replay.failure}
@@ -121,6 +124,7 @@
 				>
 			{/if}
 			<button type="button" class="secondary" onclick={() => player.stop()}><Icon svg={dockIcons.stop} /><span class="label">Stop listening</span></button>
+			{#if c}<ShareButton callId={c.callId} label={c.talkgroup.name} icon compact />{/if}
 		</div>
 	</div>
 {/if}

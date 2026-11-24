@@ -23,6 +23,7 @@
 
 import { rangeBounds } from 'archiveux/dates.js';
 import { decodeSet, keyOf, linkEntries, resolve, type Index, type Span, type Talkgroup } from '#lib/listening/set.ts';
+import type { CallInfo } from '#lib/audio/player.svelte.ts';
 
 export const RECENT_PATH = '/api/v1/recent-calls';
 
@@ -242,6 +243,40 @@ export function startOf(iso: string, timeZone: string, now = new Date()): string
 	const year = (d: Date) => new Intl.DateTimeFormat('en-AU', { timeZone, year: 'numeric' }).format(d);
 	const d = new Date(iso);
 	return fmt(timeZone, year(d) !== year(now)).format(d);
+}
+
+/** A call's start in full on the deployment's clock, for its call card (R61): "Wednesday 25 November 2026, 14:03:22". */
+export function dateTimeOf(iso: string, timeZone: string): string {
+	return new Intl.DateTimeFormat('en-AU', {
+		timeZone,
+		weekday: 'long',
+		day: 'numeric',
+		month: 'long',
+		year: 'numeric',
+		hour: '2-digit',
+		minute: '2-digit',
+		second: '2-digit',
+		hourCycle: 'h23'
+	}).format(new Date(iso));
+}
+
+/** A call's talkgroup's name as shown (R24). */
+export const nameOf = (c: RecentCall): string => c.talkgroup.name || c.talkgroup.label || String(c.talkgroup.id);
+
+/** What the dock shows of a call replayed from its recording (ADR 0016). */
+export function callInfoOf(ix: Index, c: RecentCall): CallInfo {
+	const t = talkgroupOf(ix, c);
+	const unit = c.transmissions[0];
+	return {
+		callId: c.id,
+		talkgroup: { id: c.talkgroup.id, label: c.talkgroup.label, name: nameOf(c), tag: c.talkgroup.tag, groups: t?.groups ?? [], led_colour: t?.led_colour ?? null, alert: t?.alert ?? null },
+		patched: c.patched_talkgroups,
+		system: ix.single ? undefined : c.system,
+		unit: unit ? { id: unit.unit, name: '' } : null,
+		startedAt: c.started_at,
+		source: 'recording',
+		durationMs: c.duration_ms ?? undefined
+	};
 }
 
 /** A zone's name as a person reads it: "Australia/Melbourne" is "Melbourne". */

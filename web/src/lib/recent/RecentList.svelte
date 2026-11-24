@@ -9,14 +9,17 @@
 	// ID (#83 adds aliases). Pressing the call replays it in the dock
 	// (R46), which pauses live listening; a call still in progress has no
 	// recording yet, so it offers live listening instead. Download saves the
-	// stored file under R63's name (ADR 0014). Share (#80) and Add to
-	// basket (#81) go in the row's actions, after Download (actions).
+	// stored file under R63's name (ADR 0014). Share (ADR 0017) and Add to
+	// basket (#81) go in the row's actions, after Download (actions). Under
+	// a call card, the card's call is marked "This call" (current).
 	import type { Snippet } from 'svelte';
 	import { Icon } from 'archiveux/components';
-	import type { Player, CallInfo } from '#lib/audio/player.svelte.ts';
+	import type { Player } from '#lib/audio/player.svelte.ts';
 	import type { Index } from '#lib/listening/set.ts';
 	import {
+		callInfoOf,
 		clock,
+		nameOf,
 		requestOf,
 		startOf,
 		talkgroupOf,
@@ -35,7 +38,8 @@
 		label = 'Recent calls',
 		onrefusal,
 		onlive,
-		actions
+		actions,
+		current
 	}: {
 		/** What to list; undefined: talkgroups were named and none is public, so none. */
 		search: Search | undefined;
@@ -50,6 +54,8 @@
 		onlive?: (c: RecentCall) => void;
 		/** More actions for a row, after Download. */
 		actions?: Snippet<[RecentCall]>;
+		/** The call card's call, marked in the list. */
+		current?: string;
 	} = $props();
 
 	let calls: RecentCall[] = $state([]);
@@ -124,26 +130,10 @@
 	}
 
 	const several = $derived(!ix.single);
-	const nameOf = (c: RecentCall) => c.talkgroup.name || c.talkgroup.label || String(c.talkgroup.id);
-
-	function infoOf(c: RecentCall): CallInfo {
-		const t = talkgroupOf(ix, c);
-		const unit = c.transmissions[0];
-		return {
-			callId: c.id,
-			talkgroup: { id: c.talkgroup.id, label: c.talkgroup.label, name: nameOf(c), tag: c.talkgroup.tag, groups: t?.groups ?? [], led_colour: t?.led_colour ?? null, alert: t?.alert ?? null },
-			patched: c.patched_talkgroups,
-			system: several ? c.system : undefined,
-			unit: unit ? { id: unit.unit, name: '' } : null,
-			startedAt: c.started_at,
-			source: 'recording',
-			durationMs: c.duration_ms ?? undefined
-		};
-	}
 
 	function play(c: RecentCall) {
 		if (!c.recording) return;
-		player.replayCall(infoOf(c), c.recording.url);
+		player.replayCall(callInfoOf(ix, c), c.recording.url);
 	}
 
 	const downloadURL = (c: RecentCall) => `/api/v1/calls/${encodeURIComponent(c.id)}/download`;
@@ -167,7 +157,7 @@
 		{#each calls as c (c.id)}
 			{@const t = talkgroupOf(ix, c)}
 			{@const start = startOf(c.started_at, timeZone)}
-			<li class="row" data-call-id={c.id} data-playing={playing === c.id ? 'yes' : undefined}>
+			<li class="row" data-call-id={c.id} data-playing={playing === c.id ? 'yes' : undefined} data-current={current === c.id ? 'yes' : undefined}>
 				{#if c.recording}
 					<button type="button" class="play" aria-label="{playing === c.id ? 'Play again' : 'Play'}: {nameOf(c)}, {start}" onclick={() => play(c)}>
 						<Icon name="play" />
@@ -182,6 +172,7 @@
 						{#if t?.led_colour}<span class="led" data-led={t.led_colour} aria-hidden="true"></span>{/if}
 						<span class="tg">{nameOf(c)}</span>{#if t?.groups[0]}<span class="group">{t.groups[0]}</span>{/if}
 						{#if several}<span class="system">{c.system.name || c.system.label}</span>{/if}
+						{#if current === c.id}<span class="this">This call</span>{/if}
 						{#if playing === c.id}<span class="now">Replaying</span>{/if}
 					</p>
 					<p class="meta">
@@ -262,6 +253,14 @@
 	.system::before {
 		content: '·';
 		margin-right: var(--space-xs);
+	}
+	.this {
+		padding: var(--badge-pad-y) var(--badge-pad-x);
+		border: var(--border-width) solid var(--border);
+		border-radius: var(--radius-badge);
+		color: var(--muted);
+		font-size: var(--text-sm);
+		font-weight: var(--weight-normal);
 	}
 	.now {
 		padding: var(--badge-pad-y) var(--badge-pad-x);

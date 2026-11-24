@@ -17,11 +17,13 @@
 	// - Pressing a call replays it in the dock, pausing live listening;
 	//   live calls keep queuing meanwhile (R46). Play from here waits on
 	//   #75's open question 3.
+	// - Share on each row copies the call's link (ADR 0017).
 	import { onMount, tick } from 'svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { DateRange, Suggest } from 'archiveux/components';
 	import RecentList from '#lib/recent/RecentList.svelte';
+	import ShareButton from '#lib/share/ShareButton.svelte';
 	import { usePlayer } from '#lib/audio/context.ts';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import { indexOf, keyOf, resolve, search as searchTalkgroups, type Catalogue, type Index, type Talkgroup } from '#lib/listening/set.ts';
@@ -30,7 +32,9 @@
 		UNIT,
 		chosenOf,
 		fieldOf,
+		nameOf,
 		readFilters,
+		startOf,
 		searchOf,
 		spanOf,
 		talkgroupOf,
@@ -313,7 +317,9 @@
 	</section>
 
 	<p class="meta zone">Times are {zoneLabel(timeZone)} time.</p>
-	<RecentList {search} {ix} {timeZone} {player} {onrefusal} onlive={listenLive} />
+	<RecentList {search} {ix} {timeZone} {player} {onrefusal} onlive={listenLive}>
+		{#snippet actions(c: RecentCall)}<ShareButton callId={c.id} label="{nameOf(c)}, {startOf(c.started_at, timeZone)}" />{/snippet}
+	</RecentList>
 {/if}
 
 <style>
