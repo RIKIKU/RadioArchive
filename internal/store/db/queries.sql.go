@@ -687,6 +687,54 @@ func (q *Queries) GateCatalogueGeneration(ctx context.Context) (int64, error) {
 	return n, err
 }
 
+const gateEndedSince = `-- name: GateEndedSince :many
+SELECT c.id, c.system_id, c.talkgroup, c.patched_talkgroups, c.ended_at::timestamptz AS ended_at
+FROM public_calls c
+WHERE c.started_at >= $1 AND c.ended_at >= $2
+`
+
+type GateEndedSinceParams struct {
+	StartedSince pgtype.Timestamptz
+	EndedSince   pgtype.Timestamptz
+}
+
+type GateEndedSinceRow struct {
+	ID                pgtype.UUID
+	SystemID          int64
+	Talkgroup         int32
+	PatchedTalkgroups []int32
+	EndedAt           pgtype.Timestamptz
+}
+
+// The public calls that ended at or after ended_since, for the live feed to
+// find, when it starts, the delayed calls it has still to release (R23).
+// started_since only lets the started_at index bound the scan.
+func (q *Queries) GateEndedSince(ctx context.Context, arg GateEndedSinceParams) ([]GateEndedSinceRow, error) {
+	rows, err := q.db.Query(ctx, gateEndedSince, arg.StartedSince, arg.EndedSince)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GateEndedSinceRow
+	for rows.Next() {
+		var i GateEndedSinceRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SystemID,
+			&i.Talkgroup,
+			&i.PatchedTalkgroups,
+			&i.EndedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const gatePublicCalls = `-- name: GatePublicCalls :many
 
 SELECT c.id, c.system_id, s.label AS system_label, s.name AS system_name,

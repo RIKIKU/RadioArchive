@@ -78,6 +78,10 @@ const (
 	// recording before it's dropped from the live feed (R19 alerts at 10
 	// minutes).
 	recordingWait = 10 * time.Minute
+	// longestCall bounds how long before its end a call recovered at start
+	// may have begun: a delayed call longer than this, pending over a
+	// restart, isn't released.
+	longestCall = 24 * time.Hour
 	// maxRing bounds the replay buffer, whatever ReplayWindow holds.
 	maxRing = 50_000
 	// eventTimeout bounds the queries made at a live event.
@@ -97,6 +101,7 @@ type LiveCounters struct {
 	SlowClosed    atomic.Uint64 // subscriptions closed for falling too far behind
 	Withdrawn     atomic.Uint64 // calls withdrawn from listeners (R31)
 	Released      atomic.Uint64 // delayed calls released (R23)
+	Recovered     atomic.Uint64 // delayed calls found at start, still to release
 	CheckFailed   atomic.Uint64 // event or tick checks that couldn't read the database
 }
 
@@ -202,10 +207,12 @@ func newLive(g *Gate) *Live {
 
 // Run checks the catalogue's generation every tick, rereading every held
 // call when it has moved; releases delayed calls; ends calls nothing has
-// been heard of; and forgets what's past the replay window. It returns when
-// ctx ends.
+// been heard of; and forgets what's past the replay window. First it
+// recovers the delayed calls a restart left pending, trying again each tick
+// until it can. It returns when ctx ends.
 func (l *Live) Run(ctx context.Context) {
 	l.running.Store(true)
+	recovered := l.recoverDelayed(ctx)
 	t := time.NewTicker(liveTick)
 	defer t.Stop()
 	for {
@@ -213,9 +220,77 @@ func (l *Live) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if !recovered {
+				recovered = l.recoverDelayed(ctx)
+			}
 			l.tick(ctx)
 		}
 	}
+}
+
+// recoverDelayed holds, as deferred, the delayed calls whose release (R23)
+// is still ahead, or passed while the server was down within the replay
+// window (R37): they're released as if it had never stopped. Only memory
+// held them, so a restart would otherwise lose them. They're read through
+// the gate like any call, so one hidden meanwhile stays out. It reports
+// whether it could read them.
+func (l *Live) recoverDelayed(ctx context.Context) bool {
+	cat, err := l.g.Catalogue(ctx)
+	if err != nil {
+		l.failed(err)
+		return false
+	}
+	if !cat.delayed {
+		return true
+	}
+	var longest int32
+	for _, t := range cat.Talkgroups {
+		longest = max(longest, t.DelayMinutes)
+	}
+	now := l.g.now()
+	since := now.Add(-time.Duration(longest)*time.Minute - ReplayWindow)
+	qctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	rows, err := l.g.q.GateEndedSince(qctx, db.GateEndedSinceParams{
+		StartedSince: pgtype.Timestamptz{Time: since.Add(-longestCall), Valid: true},
+		EndedSince:   pgtype.Timestamptz{Time: since, Valid: true}})
+	if err != nil {
+		l.failed(fmt.Errorf("delayed calls: %s", store.SafeError(err)))
+		return false
+	}
+	var ids []string
+	for _, r := range rows {
+		d := cat.delayOf(r.SystemID, r.Talkgroup, r.PatchedTalkgroups)
+		if d > 0 && !r.EndedAt.Time.Add(time.Duration(d)*time.Minute).Before(now.Add(-ReplayWindow)) {
+			ids = append(ids, uuidString(r.ID))
+		}
+	}
+	for len(ids) > 0 {
+		n := min(len(ids), MaxCalls)
+		chunk := ids[:n]
+		ids = ids[n:]
+		lk, err := l.look(ctx, chunk)
+		if err != nil {
+			l.failed(err)
+			return false
+		}
+		l.mu.Lock()
+		for _, id := range chunk {
+			if l.calls[id] != nil {
+				continue
+			}
+			c := &liveCall{id: id, idRaw: uuidOf(id).Bytes, lastSeen: time.Now()}
+			if !l.refresh(c, lk) || c.delay <= 0 || c.endedAt == nil {
+				continue
+			}
+			c.phase = phaseDeferred
+			c.dueAt = c.endedAt.Add(time.Duration(c.delay) * time.Minute)
+			l.calls[id] = c
+			l.Stat.Recovered.Add(1)
+		}
+		l.mu.Unlock()
+	}
+	return true
 }
 
 // Running says whether Run is running.
