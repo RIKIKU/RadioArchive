@@ -1,5 +1,5 @@
 ---
-status: accepted (2026-11-25, by the owner; where the profile lives superseded by ADR 0021)
+status: accepted (2026-11-25, by the owner; where the profile lives superseded by ADR 0021, the session by ADR 0022)
 ---
 
 # 9. Listener sign-in and the saved profile
@@ -7,6 +7,8 @@ status: accepted (2026-11-25, by the owner; where the profile lives superseded b
 Date: 2026-11-24
 
 > **Partly superseded by [ADR 0021](0021-the-saved-profile-lives-in-radioarchives-database.md) (2026-11-25).** The profile now lives in RadioArchive's database, keyed by the account's issuer and subject, and the API holds no Authentik token. The summary rows **Where the profile lives**, **How the server writes it** and **The token**, the section "Where the profile lives, and the token", and what follows from it (an account the token can't reach saving nothing, a switched-off user signed out at the next read, the first consequence for M4, **Migration: none**) are superseded. The rest stands. The text below is as it was decided.
+
+> **Partly superseded by [ADR 0022](0022-listener-sessions-live-in-the-database.md) (2026-11-25).** A signed-in listener's session is now a row of RadioArchive's database, and the cookie holds only a random session ID, so a session can be ended at once. The summary row **Session**, the section "The session, and why nothing is stored" (except its last paragraph, on logging and the P4 test), the considered option **Sessions**, and the consequence that rotating the OIDC client secret signs every listener out are superseded. The sign-out's ID token is no longer in a sealed `ra_signout` cookie: it is held in memory under a one-time handle. The sealed sign-in cookie, `ra_signin`, stands.
 
 A listener signs in with Authentik, which RadioArchive uses as an OIDC client with PKCE, as PagerArchive does. Signing in only saves preferences. The listening set with its priority marks, the playback settings and the look are kept in one attribute of the listener's Authentik user, `radioarchive`, and nowhere else. The API writes that attribute with a standing Authentik API token. The token's role holds "view user" and "change user" only on the users of listeners who have signed in to the radio, as object permissions. The session is a sealed, host-only cookie, so the server stores nothing about any listener. Public routes are handed no cookie or credential, so being signed in can't change anything a listener hears. The owner chose the standing token and enrolment by emailed code in [the parent's open question 3](https://github.com/RIKIKU/RadioArchive/issues/53) (`SPEC.md` P3, P4, R41, R48, R82, R103, R110, R111, A33). The rest are the implementer's choices (spec "How to use this spec", item 6). Built in [Listener sign-in and the saved profile](https://github.com/RIKIKU/RadioArchive/issues/61).
 
@@ -52,6 +54,8 @@ So the role, `RadioArchive API`, holds **no global permission**. An expression p
 **Read, then write.** Authentik's `PATCH` replaces `attributes` whole, so the API reads the user and writes back every other attribute unchanged. Another app changing its own attribute of the same user at the same moment could lose that change. At this scale that is accepted.
 
 ## The session, and why nothing is stored
+
+> **Superseded by [ADR 0022](0022-listener-sessions-live-in-the-database.md)**, except the last paragraph.
 
 P4 and R110 together mean the server keeps nothing about a listener, signed in or not. PagerArchive keeps sessions in its database. Here the session is the cookie itself, sealed with AES-256-GCM, with the cookie's name bound in as additional data. It holds the Authentik subject, the name and email for the account menu, and the ID token for signing out. A cookie that would pass 3,800 bytes drops the ID token; signing out then still ends Authentik's session but doesn't come back. A sign-in under way (`ra_signin`: state, nonce, PKCE verifier, return path) and a sign-out's ID token (`ra_signout`) are sealed cookies too, on their own paths for minutes.
 
