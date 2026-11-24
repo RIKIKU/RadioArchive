@@ -159,6 +159,41 @@ export function requestOf(s: Search, cursor?: string, limit = PAGE_SIZE): { url:
 	return { url: RECENT_PATH, init: { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) } };
 }
 
+/** The longest range the route searches at once (R73): 31 days. */
+const RANGE_MS = 31 * 24 * 3600 * 1000;
+
+/**
+ * Play from here's search (R46; ADR 0023): the list's filters, from the
+ * call's start, oldest first, whatever order the list shows, and up to the
+ * press (now): what starts after that is live listening's. The end is
+ * never past the list's own, nor more than 31 days on, nor at or before
+ * the call's start (a browser clock behind the server's).
+ */
+export function runSearchOf(s: Search, c: RecentCall, now = Date.now()): Search {
+	const from = Date.parse(c.started_at);
+	let to = Math.min(now, from + RANGE_MS);
+	if (s.to) to = Math.min(to, Date.parse(s.to));
+	to = Math.max(to, from + 1);
+	return { ...s, from: c.started_at, to: new Date(to).toISOString(), order: 'oldest' };
+}
+
+/**
+ * The calls of a page of play from here's search that come after c, in
+ * order: those at its start time up to and including it (the route orders
+ * by start time, then ID) are left out, as are calls in progress, which
+ * have no recording to play yet.
+ */
+export function following(calls: RecentCall[], c: RecentCall): RecentCall[] {
+	let passed = false;
+	return calls.filter((x) => {
+		if (x.started_at === c.started_at && !passed) {
+			if (x.id === c.id) passed = true;
+			return false;
+		}
+		return !!x.recording;
+	});
+}
+
 /** A call as recent calls give it: the call details' shape (ADR 0004). */
 export interface RecentCall {
 	id: string;

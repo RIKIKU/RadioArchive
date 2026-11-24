@@ -9,6 +9,12 @@
 // It's made from the press, as browsers let audio start only from a
 // gesture.
 //
+// Several calls play one after another on the same output: a
+// conversation's Play all, and play from here (ADR 0023), whose calls are
+// fetched a page at a time as it goes. When replaying is over (played out,
+// failed or stopped) it calls onend, and the player resumes live listening
+// if it paused it for the replay (ADR 0016 as amended, ADR 0023).
+//
 // It announces on the window, as the player does, with replay: true:
 //
 //   radioarchive:first-frame  {call_id, unit, path, source: 'recording', replay, at}
@@ -18,6 +24,16 @@
 import { decoding, type OpusStream, type Pcm } from './decoder.ts';
 import { readOggOpus } from './ogg.ts';
 import type { CallInfo } from './player.svelte.ts';
+
+/** A call to replay: what the dock shows of it, its recording, and when it started, as shown (when). */
+export interface ReplayItem {
+	info: CallInfo;
+	url: string;
+	when?: string;
+}
+
+/** Play from here's next page of calls, and whether there are more after it. */
+export type MoreCalls = () => Promise<{ items: ReplayItem[]; more: boolean }>;
 
 /** How far ahead of now the first frame is scheduled. */
 const LEAD = 0.1;
@@ -49,13 +65,31 @@ export class Replay {
 	#peak = 0;
 	#firstFrame = false;
 
-	/** A conversation played in order (R64; ADR 0018): its name, and which of its calls is playing. */
-	list: { name: string; at: number; of: number } | undefined = $state();
-	#queue: { info: CallInfo; url: string }[] = [];
+	/**
+	 * Calls played one after another: a conversation's Play all (R64; ADR
+	 * 0018), or play from here (R46; ADR 0023). Its name, which of its calls
+	 * is playing and when that call started (when), how many it has so far,
+	 * and whether more are still to be fetched.
+	 */
+	list: { name: string; at: number; of: number; more: boolean; when?: string } | undefined = $state();
+	/**
+	 * Called once replaying is over: the last call played to its end, one
+	 * couldn't be played, or Stop. Never between the calls of a list, nor
+	 * when a new press replaces what was replaying. The player resumes live
+	 * listening from it (ADR 0023).
+	 */
+	onend: (() => void) | undefined;
+	#queue: ReplayItem[] = [];
+	/** Play from here: fetches the calls after those queued. */
+	#more: MoreCalls | undefined;
+	#fetching: Promise<void> | undefined;
+	#moreFailed = false;
+	/** Each press is a run: what an earlier one fetches later is ignored. */
+	#press = 0;
 
 	/** Plays a call's recording from its start. Call it from the press. */
 	play(info: CallInfo, url: string) {
-		this.#queue = [];
+		this.#begin();
 		this.list = undefined;
 		this.#start(info, url);
 	}
@@ -65,11 +99,81 @@ export class Replay {
 	 * a conversation's Play all. Call it from the press; the rest follow on
 	 * the same output. Stop ends them all.
 	 */
-	playAll(name: string, calls: { info: CallInfo; url: string }[]) {
+	playAll(name: string, calls: ReplayItem[]) {
 		if (!calls.length) return;
+		this.#begin();
 		this.#queue = calls.slice(1);
-		this.list = { name, at: 1, of: calls.length };
+		this.list = { name, at: 1, of: calls.length, more: false, when: calls[0].when };
 		this.#start(calls[0].info, calls[0].url);
+	}
+
+	/**
+	 * Play from here (R46; ADR 0023): plays first, then the calls more
+	 * gives, a page at a time, fetched ahead while one plays. Call it from
+	 * the press. It ends when more has none left, or on Stop.
+	 */
+	playRun(name: string, first: ReplayItem, more: MoreCalls) {
+		this.#begin();
+		this.#more = more;
+		this.list = { name, at: 1, of: 1, more: true, when: first.when };
+		this.#start(first.info, first.url);
+		this.#topUp();
+	}
+
+	#begin() {
+		this.#press++;
+		this.#queue = [];
+		this.#more = undefined;
+		this.#fetching = undefined;
+		this.#moreFailed = false;
+	}
+
+	/** Fetches the next page of a run while there's at most one call left queued. */
+	#topUp() {
+		const more = this.#more;
+		if (!more || this.#fetching || this.#queue.length > 1) return;
+		const run = this.#press;
+		this.#fetching = more()
+			.then(
+				({ items, more: left }) => {
+					if (run !== this.#press) return;
+					this.#queue.push(...items);
+					if (!left) this.#more = undefined;
+					if (this.list) this.list = { ...this.list, of: this.list.of + items.length, more: left };
+				},
+				() => {
+					if (run !== this.#press) return;
+					this.#more = undefined;
+					this.#moreFailed = true;
+					if (this.list) this.list = { ...this.list, more: false };
+				}
+			)
+			.finally(() => {
+				if (run === this.#press) this.#fetching = undefined;
+			});
+	}
+
+	/** After a call of a list has played: the next one, fetching it first if need be; else it's over. */
+	async #advance() {
+		const run = this.#press;
+		let next = this.#queue.shift();
+		while (!next && (this.#fetching || this.#more)) {
+			this.#topUp();
+			await this.#fetching;
+			if (run !== this.#press) return;
+			next = this.#queue.shift();
+		}
+		if (next && this.list) {
+			this.list = { ...this.list, at: this.list.at + 1, when: next.when };
+			this.#start(next.info, next.url);
+			this.#topUp();
+			return;
+		}
+		const failed = this.#moreFailed;
+		this.#begin();
+		this.list = undefined;
+		if (failed) this.failure = "Couldn't load the calls after that one.";
+		this.onend?.();
 	}
 
 	#start(info: CallInfo, url: string) {
@@ -95,9 +199,11 @@ export class Replay {
 
 	/** Stops the call being replayed, if one is, and the calls after it. */
 	stop() {
-		this.#queue = [];
+		const replaying = !!this.call || !!this.list;
+		this.#begin();
 		this.list = undefined;
 		this.#stopCurrent();
+		if (replaying) this.onend?.();
 	}
 
 	#stopCurrent() {
@@ -128,9 +234,10 @@ export class Replay {
 		} catch (err) {
 			if (gen !== this.#gen) return;
 			this.#halt();
-			this.#queue = [];
+			this.#begin();
 			this.list = undefined;
 			this.failure = String(err).includes('404') ? "This call isn't available any more." : "Couldn't play that call. Try again.";
+			this.onend?.();
 			return;
 		}
 		this.#timer = setInterval(() => this.#tick(), 50);
@@ -153,12 +260,9 @@ export class Replay {
 			announce('radioarchive:played', { call_id: c?.callId, path, source: 'recording', replay: true, frames: this.#frames, peak: this.#peak });
 			this.#gen++;
 			this.#halt();
-			// Play all: the next call, on the output the press started.
-			const next = this.#queue.shift();
-			if (next && this.list) {
-				this.list = { ...this.list, at: this.list.at + 1 };
-				this.#start(next.info, next.url);
-			} else this.list = undefined;
+			// A list: the next call, on the output the press started.
+			if (this.list) void this.#advance();
+			else this.onend?.();
 		};
 		wait();
 	}

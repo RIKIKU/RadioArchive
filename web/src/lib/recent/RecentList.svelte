@@ -12,6 +12,11 @@
 	// stored file under R63's name (ADR 0014). Share (ADR 0017) and Add to
 	// basket (ADR 0018) go in the row's actions, after Download (actions). Under
 	// a call card, the card's call is marked "This call" (current).
+	//
+	// Play from here (R46; ADR 0023) replays the call, then the calls after
+	// it in time order, whatever order the list shows: newest first, that's
+	// up the list. They're fetched through the same route, with the same
+	// filters, a page at a time as the run goes.
 	import type { Snippet } from 'svelte';
 	import { Icon } from 'archiveux/components';
 	import type { Player } from '#lib/audio/player.svelte.ts';
@@ -19,8 +24,10 @@
 	import {
 		callInfoOf,
 		clock,
+		following,
 		nameOf,
 		requestOf,
+		runSearchOf,
 		startOf,
 		talkgroupOf,
 		unitsOf,
@@ -136,6 +143,20 @@
 		player.replayCall(callInfoOf(ix, c), c.recording.url);
 	}
 
+	const itemOf = (c: RecentCall) => ({ info: callInfoOf(ix, c), url: c.recording!.url, when: startOf(c.started_at, timeZone) });
+
+	function playFromHere(c: RecentCall) {
+		if (!c.recording || !search) return;
+		const s = runSearchOf(search, c);
+		let cursor: string | undefined;
+		player.replayRun('From here', itemOf(c), async () => {
+			const got = await page(s, cursor);
+			if ('error' in got) throw new Error(got.error);
+			cursor = got.next ?? undefined;
+			return { items: following(got.calls, c).map(itemOf), more: !!got.next };
+		});
+	}
+
 	const downloadURL = (c: RecentCall) => `/api/v1/calls/${encodeURIComponent(c.id)}/download`;
 	const unitsText = (c: RecentCall) => {
 		const us = unitsOf(c);
@@ -185,6 +206,9 @@
 				</div>
 				<div class="row-actions">
 					{#if c.recording}
+						<button type="button" class="secondary from-here" aria-label="Play from here: {nameOf(c)}, {start}" onclick={() => playFromHere(c)}
+							><Icon name="play" /><span>Play from here</span></button
+						>
 						<a class="button secondary download" href={downloadURL(c)} download aria-label="Download: {nameOf(c)}, {start}"><span>Download</span></a>
 					{/if}
 					{@render actions?.(c)}
