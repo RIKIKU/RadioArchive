@@ -12,7 +12,7 @@ export default defineConfig({
 	// passes. By hand, no retries.
 	retries: process.env.CI ? 1 : 0,
 	// A stuck run stops, with its report, before the job's own time limit.
-	globalTimeout: process.env.CI ? 15 * 60_000 : 0,
+	globalTimeout: process.env.CI ? 30 * 60_000 : 0,
 	reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
 	use: { baseURL, trace: 'retain-on-failure', screenshot: 'only-on-failure' },
 	// A7: Chrome (Chromium), Firefox and WebKit. WebKit stays though iOS

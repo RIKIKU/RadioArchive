@@ -45,7 +45,17 @@ export interface FeedHandlers {
 	frame(callId: string, seq: number, packet: Uint8Array): void;
 	/** The socket is open and the set taken, or not. */
 	connected?(on: boolean): void;
+	/**
+	 * A feed notice is on or off (R15, R71; ADR 0007, 0010). A new socket
+	 * starts with every notice off: each welcome calls this with every kind
+	 * the listener has been told is on, off.
+	 */
+	notice?(kind: NoticeKind, active: boolean): void;
 }
+
+/** The feed notices (ADR 0007): the recorder notice (R15) and "the radio is full" (R71). */
+export type NoticeKind = 'recorders' | 'radio_full';
+const NOTICES: readonly NoticeKind[] = ['recorders', 'radio_full'];
 
 /** The binary frame's header (ADR 0007): kind, reserved, call ID, frame number. */
 export const FRAME_HEADER = 24;
@@ -138,7 +148,7 @@ export class LiveFeed {
 	}
 
 	#text(text: string) {
-		let m: { type?: unknown; event_id?: unknown; last_event_id?: unknown; call_id?: unknown };
+		let m: { type?: unknown; event_id?: unknown; last_event_id?: unknown; call_id?: unknown; notice?: unknown; active?: unknown };
 		try {
 			m = JSON.parse(text);
 		} catch {
@@ -151,6 +161,8 @@ export class LiveFeed {
 				// so the first event it could miss is the next one.
 				if (this.#lastEventId === undefined && typeof m.last_event_id === 'number') this.#lastEventId = m.last_event_id;
 				this.#welcomed = true;
+				// A new socket starts with every notice off; one that's on comes next.
+				for (const k of NOTICES) this.#h.notice?.(k, false);
 				this.#sendSet(true);
 				return;
 			case 'listening':
@@ -165,6 +177,9 @@ export class LiveFeed {
 				return;
 			case 'call_withdrawn':
 				if (typeof m.call_id === 'string') this.#h.withdrawn(m.call_id);
+				return;
+			case 'notice':
+				if (NOTICES.includes(m.notice as NoticeKind) && typeof m.active === 'boolean') this.#h.notice?.(m.notice as NoticeKind, m.active);
 				return;
 		}
 	}

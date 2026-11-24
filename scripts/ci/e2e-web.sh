@@ -17,6 +17,14 @@
 # The tests run twice: first all but the playback tests, in parallel, then
 # the playback tests (@live in their titles), one at a time, since they share
 # the one recorder.
+#
+# The queue's tests (issue #60) also need the recorder healthy, then deaf
+# (A27): while they run, a fake recorder sends Bench's client one healthy
+# heartbeat every 2 s, as trunk-recorder would, unless the file named in
+# RA_HEARTBEATS_HELD exists. The recorder notice comes 3 s after the
+# recorder goes deaf (RECORDER_NOTICE_AFTER), not 2 min. They change
+# talkgroups as an admin would with the fixture's command (RA_WEBFIXTURE,
+# on RA_DATABASE_URL).
 set -eu
 cd "$(dirname "$0")/../.."
 
@@ -27,9 +35,11 @@ db=""
 pid=""
 client=""
 pulse=""
+beats=""
 
 cleanup() {
 	rc=$?
+	[ -z "$beats" ] || kill "$beats" 2>/dev/null || true
 	[ -z "$client" ] || kill "$client" 2>/dev/null || true
 	[ -z "$pulse" ] || pulseaudio --kill 2>/dev/null || true
 	[ -z "$pid" ] || kill "$pid" 2>/dev/null || true
@@ -74,8 +84,9 @@ fi
 CGO_ENABLED=0 go build -trimpath -o "$tmp/radioarchive" ./cmd/radioarchive
 CGO_ENABLED=0 go build -trimpath -o "$tmp/fakerecorder" ./testing/fakerecorder/cmd/fakerecorder
 CGO_ENABLED=1 go build -trimpath -o "$tmp/radioarchive-client" ./cmd/radioarchive-client
+CGO_ENABLED=0 go build -trimpath -o "$tmp/webfixture" ./testing/webfixture
 mkdir -p "$tmp/recordings" "$tmp/media" "$tmp/queue"
-DATABASE_URL=$DATABASE_URL LISTEN_ADDR="127.0.0.1:$port" RECORDINGS_DIR="$tmp/recordings" \
+DATABASE_URL=$DATABASE_URL LISTEN_ADDR="127.0.0.1:$port" RECORDINGS_DIR="$tmp/recordings" RECORDER_NOTICE_AFTER=3s \
 	"$tmp/radioarchive" serve >"$tmp/api.log" 2>&1 &
 pid=$!
 # Node, not curl: Playwright's image may have no curl.
@@ -85,7 +96,7 @@ wait_for 120 "the API" node -e "fetch(process.argv[1]).then((r) => process.exit(
 # Bench attached, once the API has migrated the database.
 key=$(DATABASE_URL=$DATABASE_URL "$tmp/radioarchive" recorder add Bench | grep -o 'rak_[A-Za-z0-9_-]*')
 test -n "$key"
-go run ./testing/webfixture "$DATABASE_URL" Bench
+"$tmp/webfixture" "$DATABASE_URL" Bench
 
 # Bench's recorder client, beside the fake recorder's "trunk-recorder".
 SERVER_URL="http://127.0.0.1:$port" CLIENT_KEY="$key" UDP_ADDR="127.0.0.1:$udp" QUEUE_DIR="$tmp/queue" \
@@ -94,8 +105,26 @@ client=$!
 wait_for 60 "the recorder client's live connection" grep -q '"live connection open"' "$tmp/client.log"
 
 fixtures=$(pwd)/testing/fakerecorder/testdata/fixtures
+
+# trunk-recorder's heartbeat: healthy, every 2 s, unless held (above).
+held="$tmp/heartbeats-held"
+cat >"$tmp/heartbeat.json" <<'EOF'
+{"boot_id": 6000, "epoch_ms": 0, "calls": {},
+ "events": [{"at_ms": 0, "type": "heartbeat", "systems": [{"sys_num": 0, "short_name": "ex", "system_type": "p25", "decode_rate": 40}]}]}
+EOF
+(
+	while :; do
+		[ -e "$held" ] || "$tmp/fakerecorder" -scenario "$tmp/heartbeat.json" -addr "127.0.0.1:$udp" -fixtures "$fixtures" >/dev/null 2>&1 || true
+		sleep 2
+	done
+) &
+beats=$!
+# The client relays it within its 5 s heartbeat: Bench is heard, not deaf.
+sleep 6
+
 cd web
 RA_URL="http://127.0.0.1:$port" npx playwright test --grep-invert @live --pass-with-no-tests "$@"
 RA_URL="http://127.0.0.1:$port" RA_FAKERECORDER="$tmp/fakerecorder" RA_FIXTURES="$fixtures" \
-	RA_UDP_ADDR="127.0.0.1:$udp" RA_MEDIA="$tmp/media" \
+	RA_UDP_ADDR="127.0.0.1:$udp" RA_MEDIA="$tmp/media" RA_HEARTBEATS_HELD="$held" \
+	RA_WEBFIXTURE="$tmp/webfixture" RA_DATABASE_URL="$DATABASE_URL" \
 	npx playwright test --grep @live --workers=1 --pass-with-no-tests "$@"

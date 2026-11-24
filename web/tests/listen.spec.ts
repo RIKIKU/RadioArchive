@@ -28,17 +28,21 @@ test("the Listen page opens at / with Start listening, in ArchiveUx's frame", as
 	await page.goto('/');
 	await expect(page).toHaveTitle('Listen · RadioArchive');
 	await expect(page.getByRole('heading', { level: 1, name: 'Listen' })).toBeVisible();
-	await expect(page.getByRole('button', { name: 'Start listening' })).toBeVisible();
+	// Start listening is in the frame's dock (R44, R81), on every page.
+	await expect(page.getByRole('region', { name: 'Now playing' }).getByRole('button', { name: 'Start listening' })).toBeVisible();
 	// The side menu, with the brand and Listen as the current page.
 	const menu = page.locator('nav.side');
 	await expect(menu.getByRole('link', { name: 'RadioArchive' })).toBeVisible();
 	await expect(menu.getByRole('link', { name: 'Listen' })).toHaveAttribute('aria-current', 'page');
-	// Signed out: Sign in, and no app switcher or dock.
+	// Signed out: Sign in and the playback settings, off by default; no app switcher.
 	await accountMenu(page);
 	await expect(page.getByText('Not signed in')).toBeVisible();
 	await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible();
+	await expect(page.getByRole('checkbox', { name: /Alert sounds/ })).not.toBeChecked();
 	await expect(page.getByRole('link', { name: /^Switch to/ })).toHaveCount(0);
-	await expect(page.locator('section.dock')).toHaveCount(0);
+	// Nothing in the dock before Start listening but the button.
+	await expect(page.locator('section.dock')).toHaveCount(1);
+	await expect(page.locator('section.dock').getByRole('button')).toHaveCount(1);
 	// Any other path outside the API is the app's too.
 	await page.goto('/somewhere/else');
 	await expect(page.getByRole('link', { name: 'RadioArchive' })).toBeVisible();
