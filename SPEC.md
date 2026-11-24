@@ -1,6 +1,6 @@
 # RadioArchive: Specification
 
-**Status:** Draft 0.1 (2026-11-24), not yet approved for implementation
+**Status:** Approved (2026-11-24, by the owner). Version 0.1
 **Owner:** RIKIKU
 
 ## How to use this spec (implementing agent: read first)
