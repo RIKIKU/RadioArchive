@@ -108,3 +108,45 @@ jobs:
       - name: Stop the stack
         if: always()
         run: docker compose down --volumes
+
+  # The recorder plugin (issue #33, SPEC.md R1): trunk-recorder's official
+  # v5.2.1 image with the plugin, built natively on amd64 and on arm64.
+  # Each arch then runs the real trunk-recorder with the plugin against the
+  # synthetic P25 fixture, and a Go test decodes everything the plugin sends
+  # (recorder/plugin/plugintest). The .so is kept as an artifact for native
+  # installs. Nothing is pushed to a registry yet.
+  plugin:
+    name: Recorder plugin (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: Build the image (checks the trunk-recorder pin)
+        run: docker buildx build --load --tag radioarchive-recorder:ci recorder/plugin
+      - name: Export the .so and the fixture generator
+        run: |
+          docker buildx build --target so --output type=local,dest=out/so recorder/plugin
+          docker buildx build --target p25gen --output type=local,dest=out/p25gen recorder/plugin
+          file out/so/libradioarchive.so
+          sha256sum out/so/libradioarchive.so | tee out/so/SHA256SUMS
+      - name: trunk-recorder with the plugin against the P25 fixture
+        env:
+          RADIOARCHIVE_PLUGIN_IMAGE: radioarchive-recorder:ci
+          RADIOARCHIVE_P25GEN: ${{ github.workspace }}/out/p25gen/p25gen
+        run: go test -count=1 -v ./recorder/plugin/plugintest
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: libradioarchive-${{ matrix.arch }}
+          path: out/so/
+          if-no-files-found: error
