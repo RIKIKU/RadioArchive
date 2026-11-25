@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-25, by the owner)
 ---
 
 # 19. Units: aliases, where they're held, and what unit search may find

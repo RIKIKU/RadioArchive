@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-25, by the owner)
 ---
 
 # 30. The setup's export and import

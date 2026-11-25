@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-25, by the owner)
 ---
 
 # 23. Play from here, and live listening after a replay

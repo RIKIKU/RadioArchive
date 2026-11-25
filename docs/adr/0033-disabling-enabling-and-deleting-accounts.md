@@ -1,5 +1,5 @@
 ---
-status: proposed (the parts marked "owner, 2026-11-25" are the owner's decisions)
+status: accepted (2026-11-25, by the owner)
 ---
 
 # 33. Disabling, enabling and deleting accounts

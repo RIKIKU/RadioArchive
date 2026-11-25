@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-25, by the owner)
 ---
 
 # 28. The PowerShell module: its sign-in and its commands
