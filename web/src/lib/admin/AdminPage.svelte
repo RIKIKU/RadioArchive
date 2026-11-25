@@ -14,12 +14,15 @@
 	//   GET /admin/retention's volume state;
 	// - the backup failing (R89: "backup state shows to admins as ArchiveUx
 	//   alerts"), GET /admin/backup's state, when the last backup failed or
-	//   the last good one is more than 36 hours old.
+	//   the last good one is more than 36 hours old;
+	// - an automatic upgrade failing (R87, R89; ADR 0044), GET /admin/upgrade's
+	//   state, when an upgrade failed or a run stopped part way, until a later
+	//   upgrade or the script's clear.
 	import type { Snippet } from 'svelte';
 	import { Banner } from 'archiveux/components';
 	import { onDestroy } from 'svelte';
 	import { page } from '$app/state';
-	import { admin, backupAlert, diskWarning, type Access, type Backup, type Retention } from './api.ts';
+	import { admin, backupAlert, diskWarning, upgradeAlert, type Access, type Backup, type Retention, type Upgrade } from './api.ts';
 
 	/** How often the deployment's state is asked again. */
 	const STATE_MS = 60_000;
@@ -28,12 +31,18 @@
 
 	let warning: string | undefined = $state();
 	let backup: string | undefined = $state();
+	let upgrade: string | undefined = $state();
 	let timer: ReturnType<typeof setInterval> | undefined;
 
 	async function readState() {
-		const [r, b] = await Promise.all([admin<Retention>('GET', '/retention'), admin<Backup>('GET', '/backup')]);
+		const [r, b, u] = await Promise.all([
+			admin<Retention>('GET', '/retention'),
+			admin<Backup>('GET', '/backup'),
+			admin<Upgrade>('GET', '/upgrade')
+		]);
 		if (r.access === 'open') warning = diskWarning(r.body?.disk);
 		if (b.access === 'open') backup = backupAlert(b.body);
+		if (u.access === 'open') upgrade = upgradeAlert(u.body);
 	}
 
 	$effect(() => {
@@ -51,6 +60,7 @@
 {#if access === 'open'}
 	<h1>{title}</h1>
 	{#if backup}<Banner tone="error"><p><strong>Backups are failing.</strong> {backup} See the deploy guide's "Backups".</p></Banner>{/if}
+	{#if upgrade}<Banner tone="error"><p><strong>The automatic upgrade failed.</strong> {upgrade} See the deploy guide's "Automatic upgrades".</p></Banner>{/if}
 	{#if warning}<Banner><p>{warning}</p></Banner>{/if}
 	{@render children()}
 {:else if access === 'checking'}

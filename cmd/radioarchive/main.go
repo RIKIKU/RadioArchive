@@ -2,6 +2,7 @@
 //
 //	radioarchive [serve]                    run the API (the default)
 //	radioarchive healthcheck                GET /healthz on the local API; exit 0 if it answers ok
+//	radioarchive version                    print "radioarchive <version>"
 //	radioarchive recorder add "<name>"      create a recorder and print its client key once
 //	radioarchive recorder list              list recorders
 //	radioarchive recorder rotate-key <name> give a recorder a new key; the old one stops at once
@@ -54,8 +55,11 @@
 //
 //	BACKUP_STATUS_FILE  the backup service's status file, mounted read-only, which
 //	                admins' pages and /metrics show. Unset, there are no backups to show
-//	SETUP_EXPORT_DIR    a folder the setup export (R53) is written to hourly, for
-//	                the backup service to keep beside each night's dumps
+//	SETUP_EXPORT_DIR    a folder the setup export (R53) is written to when it changes,
+//	                for the backup service to keep beside each night's dumps
+//	AUTO_UPGRADE_STATUS_FILE  the automatic upgrade's status file (ADR 0044), mounted
+//	                read-only, which admins' pages and /metrics show. Unset or
+//	                missing, automatic upgrades are off
 //
 // Listeners' sign-in (ADR 0009), on when AUTHENTIK_URL is set:
 //
@@ -104,6 +108,7 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/telemetry"
+	"github.com/RIKIKU/RadioArchive/internal/upgrade"
 	"github.com/RIKIKU/RadioArchive/internal/version"
 	"github.com/RIKIKU/RadioArchive/web"
 )
@@ -120,6 +125,10 @@ func main() {
 		err = serve(log)
 	case "healthcheck":
 		err = healthcheck()
+	case "version":
+		// For the automatic upgrade (ADR 0044): which version is running.
+		fmt.Println("radioarchive " + version.Version)
+		return
 	case "recorder":
 		err = recorderMain(os.Args[2:], os.Stdout)
 		if err != nil {
@@ -128,7 +137,7 @@ func main() {
 		}
 		return
 	default:
-		err = fmt.Errorf("unknown command %q (want serve, healthcheck or recorder)", cmd)
+		err = fmt.Errorf("unknown command %q (want serve, healthcheck, version or recorder)", cmd)
 	}
 	if err != nil {
 		log.Error(cmd+" failed", "error", err)
@@ -296,6 +305,10 @@ func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate
 		admin.WithBackup(ops.backup)
 		reg.Add(ops.backup)
 	}
+	if ops.upgrade != nil {
+		admin.WithUpgrade(ops.upgrade)
+		reg.Add(ops.upgrade)
+	}
 	return server.New(st, log, server.WithRecorders(rs), server.WithPublic(public.New(g, log, public.WithLocation(deploymentZone()))),
 		server.WithAccount(acc), server.WithAdmin(admin), server.WithApp(web.New()),
 		// Admins are exempt, by the same check as the admin API's (R70).
@@ -309,6 +322,7 @@ type operations struct {
 	metricsToken string
 	backup       *backup.Reader
 	exportDir    string
+	upgrade      *upgrade.Reader
 }
 
 // operationsFromEnv reads METRICS_TOKEN (or its file), BACKUP_STATUS_FILE
@@ -321,6 +335,9 @@ func operationsFromEnv(getenv func(string) string) (operations, error) {
 	ops := operations{metricsToken: mt, exportDir: getenv("SETUP_EXPORT_DIR")}
 	if f := getenv("BACKUP_STATUS_FILE"); f != "" {
 		ops.backup = backup.New(f, nil)
+	}
+	if f := getenv("AUTO_UPGRADE_STATUS_FILE"); f != "" {
+		ops.upgrade = upgrade.New(f, nil)
 	}
 	return ops, nil
 }

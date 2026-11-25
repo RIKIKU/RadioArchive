@@ -25,6 +25,7 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/retention"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/db"
+	autoupgrade "github.com/RIKIKU/RadioArchive/internal/upgrade"
 )
 
 // AdminPath prefixes the admin API (SPEC.md R51).
@@ -122,6 +123,8 @@ type Admin struct {
 	cop  *http.CrossOriginProtection
 	// backup is the backup's state (ADR 0041); nil serves none.
 	backup *backup.Reader
+	// upgrade is the automatic upgrade's state (ADR 0044); nil serves none.
+	upgrade *autoupgrade.Reader
 }
 
 // WithClock gives the admin API its clock, for the talkgroup table's 30
@@ -244,6 +247,9 @@ func WithAdmin(a *Admin) Option {
 		}
 		if a.backup != nil {
 			api.handle(AdminRoute, "GET "+AdminPath+"/backup", a.serve(a.getBackup))
+		}
+		if a.upgrade != nil {
+			api.handle(AdminRoute, "GET "+AdminPath+"/upgrade", a.serve(a.getUpgrade))
 		}
 		if a.accs != nil {
 			api.handle(AdminRoute, "GET "+AdminPath+"/accounts", a.serve(a.listAccounts))

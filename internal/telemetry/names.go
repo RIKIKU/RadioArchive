@@ -104,6 +104,12 @@ var (
 	BackupNights = &Desc{Name: "radioarchive_backup_nights", Type: Gauge,
 		Help: "Nights of backups kept in the backup folder."}
 
+	// Automatic upgrades (R87; ADR 0044), from the upgrade script's status.
+	UpgradeFailing = &Desc{Name: "radioarchive_auto_upgrade_failing", Type: Gauge,
+		Help: "1 when an automatic upgrade failed (rolled back or not), or a run stopped part way, until a later upgrade or clear."}
+	UpgradeLastCheck = &Desc{Name: "radioarchive_auto_upgrade_last_check_timestamp_seconds", Type: Gauge,
+		Help: "When the automatic upgrade last checked for a release."}
+
 	// The process.
 	MemoryBytes = &Desc{Name: "radioarchive_process_memory_bytes", Type: Gauge, Labels: []string{"kind"},
 		Help: "The Go runtime's memory: heap in use, and everything it holds from the system (sys)."}
@@ -124,5 +130,6 @@ var All = []*Desc{
 	LiveDelay, LiveFrames, LiveEvents, LiveSockets, LiveSocketsLimit, LiveFull, ZipsOpen, LimitHits,
 	DiskBytes, DiskFree, DiskState, DiskMinFree, Retention, VolumeFull, NightlyLast,
 	BackupFailing, BackupLastGood, BackupBytes, BackupNights,
+	UpgradeFailing, UpgradeLastCheck,
 	MemoryBytes, Goroutines, StartTime,
 }
