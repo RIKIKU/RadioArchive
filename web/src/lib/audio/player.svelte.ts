@@ -126,7 +126,9 @@ export class Player {
 	/** Hold: only this talkgroup's calls are heard until it's switched off (R44). */
 	hold: { talkgroup: EventTalkgroup; key: TalkgroupKey } | undefined = $state();
 	/** The feed notices that are on (R15, R71). */
-	notices: Record<NoticeKind, boolean> = $state({ recorders: false, radio_full: false });
+	notices: Record<NoticeKind, boolean> = $state({ recorders: false, radio_full: false, too_many_live: false });
+	/** The server's message for the too_many_live notice, naming the limit (ADR 0039). */
+	liveLimit = $state('');
 	/** The last call heard to its end, to play again from its recording. */
 	last: CallInfo | undefined = $state();
 	/** Why listening couldn't start, if it couldn't. */
@@ -206,7 +208,8 @@ export class Player {
 			withdrawn: (id) => this.#withdraw(id),
 			frame: (id, seq, p) => this.#frame(id, seq, p),
 			connected: (on) => (this.connected = on),
-			notice: (kind, on) => {
+			notice: (kind, on, message) => {
+				if (kind === 'too_many_live' && on && message) this.liveLimit = message;
 				if (this.notices[kind] !== on) this.notices = { ...this.notices, [kind]: on };
 			}
 		});
@@ -236,7 +239,7 @@ export class Player {
 		this.paused = false;
 		this.#pausedForReplay = false;
 		this.hold = undefined;
-		this.notices = { recorders: false, radio_full: false };
+		this.notices = { recorders: false, radio_full: false, too_many_live: false };
 		this.connected = false;
 		this.phase = 'stopped';
 	}

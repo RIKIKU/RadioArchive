@@ -25,6 +25,7 @@
 	import { dockIcons } from '#lib/audio/icons.ts';
 	import type { Profile } from '#lib/account/profile.ts';
 	import { adminGroup } from '#lib/admin/menu.ts';
+	import { tryingAgain } from '#lib/limits.ts';
 
 	let { children } = $props();
 
@@ -152,6 +153,9 @@
 		<!-- The live feed's notices (R15, R81), above the dock, while they're on. -->
 		<div class="notice-place" aria-live="polite">
 			{#if player.notices.recorders}<p class="feed-notice">Some talkgroups aren't being received right now.</p>{/if}
+			<!-- A refused socket (R71; ADR 0037, 0039): the feed tries again by itself. -->
+			{#if player.notices.radio_full}<p class="feed-notice limit">The radio is full right now. Trying again…</p>{/if}
+			{#if player.notices.too_many_live}<p class="feed-notice limit">{tryingAgain(player.liveLimit)}</p>{/if}
 		</div>
 	{/snippet}
 	{#snippet account()}

@@ -32,6 +32,7 @@
 		type Index,
 		type Talkgroup
 	} from '#lib/listening/set.ts';
+	import { limitText, refusedBy } from '#lib/limits.ts';
 	import { sendListeningSet } from '#lib/live/listening-set.ts';
 
 	// Shared with the account, which saves the set to it when signed in.
@@ -39,6 +40,8 @@
 
 	let ix: Index | undefined = $state();
 	let loading: 'loading' | 'failed' | 'done' = $state('loading');
+	// A limit's message for what failed (ADR 0039), in place of the page's own.
+	let limited: string | undefined = $state();
 
 	// A fireground link's outcome.
 	type Fireground = { kind: 'added' | 'in-set'; talkgroup: Talkgroup } | { kind: 'unavailable' } | { kind: 'failed' };
@@ -65,13 +68,14 @@
 		loading = 'loading';
 		try {
 			const r = await fetch('/api/v1/catalogue', { headers: { Accept: 'application/json' } });
-			if (!r.ok) throw new Error(String(r.status));
+			if (!r.ok) throw await refusedBy(r);
 			const next = indexOf((await r.json()) as Catalogue);
 			listening.settle(next);
 			ix = next;
 			loading = 'done';
 			return next;
-		} catch {
+		} catch (err) {
+			limited = limitText(err);
 			loading = 'failed';
 			return undefined;
 		}
@@ -89,11 +93,12 @@
 				fireground = { kind: 'unavailable' };
 				return;
 			}
-			if (!r.ok) throw new Error(String(r.status));
+			if (!r.ok) throw await refusedBy(r);
 			const body = (await r.json()) as { talkgroup: Talkgroup };
 			const t = (at && find(at, body.talkgroup)) ?? body.talkgroup;
 			fireground = { kind: listening.addForSession(t), talkgroup: t };
-		} catch {
+		} catch (err) {
+			limited = limitText(err);
 			fireground = { kind: 'failed' };
 		}
 	}
@@ -155,7 +160,7 @@
 {#if fireground?.kind === 'unavailable'}
 	<p class="alert" role="status">This channel isn't available.</p>
 {:else if fireground?.kind === 'failed'}
-	<p class="error" role="alert">Couldn't look up that channel. Reload the page to try again.</p>
+	<p class="error" role="alert">{limited ?? "Couldn't look up that channel. Reload the page to try again."}</p>
 {:else if fireground}
 	<p class="ok" role="status">
 		{#if fireground.kind === 'added'}
@@ -188,7 +193,7 @@
 {#if loading === 'loading'}
 	<p class="status" role="status">Loading talkgroups…</p>
 {:else if loading === 'failed'}
-	<p class="error" role="alert">Couldn't load the talkgroups.</p>
+	<p class="error" role="alert">{limited ?? "Couldn't load the talkgroups."}</p>
 	<button type="button" class="secondary" onclick={loadCatalogue}>Try again</button>
 {:else if ix}
 	<section aria-labelledby="set-heading">

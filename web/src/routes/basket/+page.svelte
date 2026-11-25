@@ -26,6 +26,7 @@
 	import { dockIcons } from '#lib/audio/icons.ts';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import { indexOf, keyOf, resolve, type Catalogue, type Index } from '#lib/listening/set.ts';
+	import { limitText, refusedBy } from '#lib/limits.ts';
 	import { sendListeningSet } from '#lib/live/listening-set.ts';
 	import { basketState } from '#lib/basket/state.svelte.ts';
 	import {
@@ -47,6 +48,7 @@
 	} from '#lib/basket/basket.ts';
 	import { callInfoOf, clock, nameOf, startOf, talkgroupOf, unitsOf, zoneLabel, type RecentCall } from '#lib/recent/search.ts';
 	import ShareButton from '#lib/share/ShareButton.svelte';
+	import DownloadLink from '#lib/call/DownloadLink.svelte';
 	import { shareOf } from '#lib/share/conversation.ts';
 
 	/** How often calls waiting for their recording are asked about again; and the rest. */
@@ -66,20 +68,24 @@
 	// Each call's details, as last asked; null: unavailable. Missing: not asked yet.
 	let details: Map<string, RecentCall | null> = $state.raw(new Map());
 	let checkFailed = $state(false);
+	// A limit's message for what failed (ADR 0039), in place of the page's own.
+	let limited: string | undefined = $state();
+	let checkLimited: string | undefined = $state();
 	let now = $state(Date.now());
 
 	async function loadCatalogue() {
 		loading = 'loading';
 		try {
 			const r = await fetch('/api/v1/catalogue', { headers: { Accept: 'application/json' } });
-			if (!r.ok) throw new Error(String(r.status));
+			if (!r.ok) throw await refusedBy(r);
 			const c = (await r.json()) as Catalogue & { time_zone?: string };
 			const next = indexOf(c);
 			listening.settle(next);
 			timeZone = c.time_zone || 'UTC';
 			ix = next;
 			loading = 'done';
-		} catch {
+		} catch (err) {
+			limited = limitText(err);
 			loading = 'failed';
 		}
 	}
@@ -94,7 +100,7 @@
 				headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
 				body: JSON.stringify({ ids: chunk })
 			});
-			if (!r.ok) throw new Error(String(r.status));
+			if (!r.ok) throw await refusedBy(r);
 			const body = (await r.json()) as { calls: RecentCall[] };
 			const got = new Map(body.calls.map((c) => [c.id, c]));
 			for (const id of chunk) out.set(id, got.get(id) ?? null);
@@ -119,7 +125,8 @@
 				for (const [id, c] of got) next.set(id, c);
 				details = next;
 				checkFailed = false;
-			} catch {
+			} catch (err) {
+				checkLimited = limitText(err);
 				checkFailed = true;
 			} finally {
 				asking = false;
@@ -279,8 +286,8 @@
 			{:else}
 				{#each [{ which: 'all' as const, parts: o.all, calls: o.allCalls, text: o.last ? `Download ${what} again` : `Download ${what}` }, ...(o.last && o.freshCalls ? [{ which: 'fresh' as const, parts: o.fresh, calls: o.freshCalls, text: 'Download new since last time' }] : [])] as d (d.which)}
 					{#if d.parts.length === 1}
-						<a class="button {d.which === 'all' && o.last ? 'secondary' : ''}" href={d.parts[0].url} download onclick={() => downloaded(s)}
-							><Icon svg={dockIcons.download} /><span>{d.text}</span><span class="count">({plural(d.calls, 'call')})</span></a
+						<DownloadLink class="button {d.which === 'all' && o.last ? 'secondary' : ''}" href={d.parts[0].url} ondownload={() => downloaded(s)}
+							><Icon svg={dockIcons.download} /><span>{d.text}</span><span class="count">({plural(d.calls, 'call')})</span></DownloadLink
 						>
 					{:else}
 						{@const open = inParts?.key === scopeKey(s) && inParts.which === d.which}
@@ -299,7 +306,7 @@
 				<p>Too big for one download, so it comes in {parts.length} zips. Download each one:</p>
 				<ol>
 					{#each parts as p (p.part)}
-						<li><a class="button secondary" href={p.url} download onclick={() => downloaded(s)}><span>Part {p.part} of {p.parts}</span><span class="count">({plural(p.calls, 'call')})</span></a></li>
+						<li><DownloadLink href={p.url} ondownload={() => downloaded(s)}><span>Part {p.part} of {p.parts}</span><span class="count">({plural(p.calls, 'call')})</span></DownloadLink></li>
 					{/each}
 				</ol>
 			</section>
@@ -355,7 +362,7 @@
 			</div>
 			<div class="item-actions">
 				{#if c.recording}
-					<a class="button secondary" href={downloadURL(c)} download aria-label="Download: {nameOf(c)}, {start}"><span>Download</span></a>
+					<DownloadLink href={downloadURL(c)} label="Download: {nameOf(c)}, {start}"><span>Download</span></DownloadLink>
 				{/if}
 				{#if others.length}
 					<label class="visually-hidden" for="put-{conv?.id ?? 'loose'}-{c.id}">Add {nameOf(c)}, {start}, to a conversation</label>
@@ -418,7 +425,7 @@
 {/snippet}
 
 {#if loading === 'failed'}
-	<p class="error" role="alert">Couldn't load the talkgroups.</p>
+	<p class="error" role="alert">{limited ?? "Couldn't load the talkgroups."}</p>
 	<button type="button" class="secondary" onclick={loadCatalogue}>Try again</button>
 {:else if !b.calls.length && !b.conversations.length}
 	<section class="empty" aria-labelledby="empty-heading">
@@ -433,7 +440,7 @@
 			{#if gone}{plural(gone, 'call')} no longer available.{/if}
 			<span class="meta">Times are {zoneLabel(timeZone)} time.</span>
 		</p>
-		{#if checkFailed}<p class="error" role="alert">Couldn't check the calls just now. It tries again in a moment.</p>{/if}
+		{#if checkFailed}<p class="error" role="alert">{checkLimited ?? "Couldn't check the calls just now. It tries again in a moment."}</p>{/if}
 		{@render downloads({ kind: 'basket' }, 'the basket')}
 		<div class="clear">
 			{#if clearing}
@@ -551,9 +558,9 @@
 	.downloads .last {
 		flex-basis: 100%;
 	}
-	.downloads a,
+	.downloads :global(a),
 	.downloads button,
-	.parts a {
+	.parts :global(a) {
 		gap: var(--space-xs);
 	}
 	.count {

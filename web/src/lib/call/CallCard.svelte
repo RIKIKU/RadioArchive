@@ -8,6 +8,7 @@
 	// call the gate holds back never reaches it.
 	import { Icon } from 'archiveux/components';
 	import ShareButton from '#lib/share/ShareButton.svelte';
+	import DownloadLink from '#lib/call/DownloadLink.svelte';
 	import AddToBasket from '#lib/basket/AddToBasket.svelte';
 	import { callPath } from '#lib/share/link.ts';
 	import type { Index } from '#lib/listening/set.ts';
@@ -64,7 +65,7 @@
 			<button type="button" class="play" aria-label="{playing ? 'Play again' : 'Play'}: {said}" onclick={() => onplay(call)}>
 				<Icon name="play" /><span>{playing ? 'Play again' : 'Play'}</span>
 			</button>
-			<a class="button secondary" href="/api/v1/calls/{encodeURIComponent(call.id)}/download" download aria-label="Download: {said}"><span>Download</span></a>
+			<DownloadLink href="/api/v1/calls/{encodeURIComponent(call.id)}/download" label="Download: {said}"><span>Download</span></DownloadLink>
 		{/if}
 		<ShareButton callId={call.id} label={said} />
 		<AddToBasket callId={call.id} label={said} />

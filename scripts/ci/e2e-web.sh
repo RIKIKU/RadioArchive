@@ -48,11 +48,13 @@ set -eu
 cd "$(dirname "$0")/../.."
 
 port=${RA_E2E_PORT:-18090}
+lport=${RA_E2E_LIMITS_PORT:-18093}
 akport=${RA_E2E_AUTHENTIK_PORT:-18091}
 udp=${RA_E2E_UDP_PORT:-19890}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/radioarchive-web.XXXXXX")
 db=""
 pid=""
+lpid=""
 ak=""
 client=""
 pulse=""
@@ -64,9 +66,11 @@ cleanup() {
 	[ -z "$client" ] || kill "$client" 2>/dev/null || true
 	[ -z "$pulse" ] || pulseaudio --kill 2>/dev/null || true
 	[ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+	[ -z "$lpid" ] || kill "$lpid" 2>/dev/null || true
 	[ -z "$ak" ] || kill "$ak" 2>/dev/null || true
 	[ -z "$db" ] || docker rm -f -v "$db" >/dev/null 2>&1 || true
 	if [ "$rc" -ne 0 ] && [ -f "$tmp/api.log" ]; then tail -n 50 "$tmp/api.log" >&2; fi
+	if [ "$rc" -ne 0 ] && [ -f "$tmp/api-limits.log" ]; then tail -n 20 "$tmp/api-limits.log" >&2; fi
 	if [ "$rc" -ne 0 ] && [ -f "$tmp/client.log" ]; then tail -n 50 "$tmp/client.log" >&2; fi
 	rm -rf "$tmp"
 }
@@ -196,8 +200,21 @@ cd web
 # The admin pages' tests (issue #111) sign in through the made-up
 # Authentik, as the fixture's admin or, with its person cookie, a listener.
 export RA_AUTHENTIK_URL="http://127.0.0.1:$akport"
-RA_URL="http://127.0.0.1:$port" npx playwright test --grep-invert @live --pass-with-no-tests "$@"
+RA_URL="http://127.0.0.1:$port" npx playwright test --grep-invert '@live|@limits' --pass-with-no-tests "$@"
 RA_URL="http://127.0.0.1:$port" RA_FAKERECORDER="$tmp/fakerecorder" RA_FIXTURES="$fixtures" RA_CLIENT_HELD="$clientheld" \
 	RA_UDP_ADDR="127.0.0.1:$udp" RA_MEDIA="$tmp/media" RA_HEARTBEATS_HELD="$held" \
 	RA_WEBFIXTURE="$tmp/webfixture" RA_DATABASE_URL="$DATABASE_URL" RA_RECORDINGS="$tmp/recordings" \
 	npx playwright test --grep @live --workers=1 --pass-with-no-tests "$@"
+# A20's browser half (issue #142): a binary of its own on the same
+# database, at the default limits, behind 127.0.0.1 as its trusted proxy so
+# each test is a client of its own by X-Forwarded-For, with zips sent at
+# 1 KB/s so the tests' own are still being sent when the page asks for
+# another. The radio being full is the whole radio's, so one at a time.
+cd ..
+TZ=Australia/Melbourne DATABASE_URL=$DATABASE_URL LISTEN_ADDR="127.0.0.1:$lport" RECORDINGS_DIR="$tmp/recordings" \
+	TRUSTED_PROXY=127.0.0.1 LIMIT_ZIP_SPEED=0.001 "$tmp/radioarchive" serve >"$tmp/api-limits.log" 2>&1 &
+lpid=$!
+wait_for 120 "the limits' API" node -e "fetch(process.argv[1]).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))" \
+	"http://127.0.0.1:$lport/healthz"
+cd web
+RA_URL="http://127.0.0.1:$lport" npx playwright test --grep @limits --workers=1 --pass-with-no-tests "$@"

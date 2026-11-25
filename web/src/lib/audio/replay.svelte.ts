@@ -24,6 +24,7 @@
 import { decoding, type OpusStream, type Pcm } from './decoder.ts';
 import { readOggOpus } from './ogg.ts';
 import type { CallInfo } from './player.svelte.ts';
+import { limitText, refusedBy } from '../limits.ts';
 
 /** A call to replay: what the dock shows of it, its recording, and when it started, as shown (when). */
 export interface ReplayItem {
@@ -219,7 +220,7 @@ export class Replay {
 		try {
 			const [dec, body] = await Promise.all([
 				decoding(),
-				fetch(url).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
+				fetch(url).then(async (r) => (r.ok ? r.arrayBuffer() : Promise.reject(await refusedBy(r))))
 			]);
 			packets = readOggOpus(body).packets;
 			await resumed;
@@ -236,7 +237,7 @@ export class Replay {
 			this.#halt();
 			this.#begin();
 			this.list = undefined;
-			this.failure = String(err).includes('404') ? "This call isn't available any more." : "Couldn't play that call. Try again.";
+			this.failure = limitText(err) ?? (String(err).includes('404') ? "This call isn't available any more." : "Couldn't play that call. Try again.");
 			this.onend?.();
 			return;
 		}
