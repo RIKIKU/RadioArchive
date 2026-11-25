@@ -31,6 +31,9 @@
 //	                Unset, every request counts as its connecting address
 //	LIMIT_REQUESTS  public API requests a minute per client (default 120)
 //	LIMIT_PLAYBACK  recording playback requests a minute per client (default 600)
+//	LIMIT_LIVE_PER_CLIENT  listener WebSockets open at once per client (default 4)
+//	LIMIT_LIVE_TOTAL       listener WebSockets open at once in all (default 50). At
+//	                either, a new one is refused; open ones are never dropped
 //
 // A client is one IPv4 address or one IPv6 /64. Signed-in admins and the
 // recorder client are never limited; signed-in listeners are, as everyone

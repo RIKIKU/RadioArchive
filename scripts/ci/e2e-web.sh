@@ -127,7 +127,7 @@ ak=$!
 # 127.0.0.1, so the heavy-use limits are raised (SPEC.md section 6.11, ADR
 # 0036).
 TZ=Australia/Melbourne DATABASE_URL=$DATABASE_URL LISTEN_ADDR="127.0.0.1:$port" RECORDINGS_DIR="$tmp/recordings" RECORDER_NOTICE_AFTER=3s \
-	LIMIT_REQUESTS=100000 LIMIT_PLAYBACK=100000 \
+	LIMIT_REQUESTS=100000 LIMIT_PLAYBACK=100000 LIMIT_LIVE_PER_CLIENT=100000 LIMIT_LIVE_TOTAL=100000 \
 	APP_URL="http://127.0.0.1:$port" AUTHENTIK_URL="http://127.0.0.1:$akport" OIDC_CLIENT_SECRET="$secret" INITIAL_ADMIN_EMAIL="$admin_email" \
 	AUTHENTIK_API_TOKEN="$api_token" "$tmp/radioarchive" serve >"$tmp/api.log" 2>&1 &
 pid=$!
