@@ -22,11 +22,14 @@ async function recorders(page: Page) {
 	await expect(recorderCard(page, 'Bench')).toContainText(/Connected since /);
 }
 
-test('@live A27: Bench disconnected shows on the Recorders page and the listener, and clears when it reconnects', async ({ page, browser }) => {
+test('@live A27: Bench disconnected shows on the Recorders page and the listener, and clears when it reconnects', async ({ page }) => {
 	test.setTimeout(2 * 60_000);
-	await recorders(page);
-	const listener = await (await browser.newContext()).newPage();
+	// The Listen page, listening before anyone signs in (the feed answers
+	// everyone alike, P3), then the Recorders page in a second tab.
+	const listener = page;
 	await listen(listener);
+	page = await listener.context().newPage();
+	await recorders(page);
 	const bench = recorderCard(page, 'Bench');
 	const back = clientDisconnected();
 	try {
@@ -40,7 +43,7 @@ test('@live A27: Bench disconnected shows on the Recorders page and the listener
 	await expect(bench).toContainText(/Connected since /, { timeout: 60_000 });
 	await expect(bench).not.toContainText('Disconnected');
 	await expect(listener.getByText(NOTICE)).toHaveCount(0, { timeout: 30_000 });
-	await listener.context().close();
+	await page.close();
 });
 
 test('@live A27: a decode rate of 0 shows on the Recorders page, and clears when it decodes again', async ({ page }) => {
