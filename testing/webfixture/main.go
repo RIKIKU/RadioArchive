@@ -60,6 +60,16 @@
 // `calls` stores made-up calls as Bench's, by the hour before now, with
 // recordings (silent Ogg/Opus files) on the volume (calls.go). Each run
 // adds them again, at times from its own now.
+//
+//	go run ./testing/webfixture <database URL> overlap <recorder name> <other recorder name> <recordings dir>
+//
+// The Recorders page's tests (issue #111) need two recorders' overlapping
+// calls (R13): `overlap` attaches the recorder's `ex` to EX too, as a
+// second recorder on the same network would be, and stores a copy, as its
+// call, of each of the other recorder's calls on hidden 1003 from the last
+// 24 hours (the `calls` command's three), at the same times, with
+// recordings (overlap.go). They're 1003's, so no listener's page shows
+// them.
 package main
 
 import (
@@ -108,12 +118,14 @@ func main() {
 		(len(os.Args) == 5 && (os.Args[2] == "call-end" || os.Args[2] == "call-delete"))
 	a19 := (len(os.Args) == 8 && os.Args[2] == "call-dated") || (len(os.Args) == 4 && os.Args[2] == "retention") ||
 		(len(os.Args) == 5 && os.Args[2] == "nightly")
-	if len(os.Args) != 2 && len(os.Args) != 3 && !talkgroup && !calls && !one && !a16 && !a19 {
+	overlap := len(os.Args) == 6 && os.Args[2] == "overlap"
+	if len(os.Args) != 2 && len(os.Args) != 3 && !talkgroup && !calls && !one && !a16 && !a19 && !overlap {
 		fmt.Fprintln(os.Stderr, "usage: webfixture <database URL> [recorder name]\n       webfixture <API URL> talkgroup <ID> state|delay|alert|led <value>\n"+
 			"       webfixture <database URL> calls <recorder name> <recordings dir>\n       webfixture <database URL> call <recorder name> <recordings dir> <talkgroup> <unit>\n"+
 			"       webfixture <database URL> call-start <recorder name> <talkgroup> <unit>\n       webfixture <database URL> call-end|call-delete <call ID> <recordings dir>\n"+
 			"       webfixture <database URL> call-dated <recorder name> <recordings dir> <talkgroup> <unit> <age>\n"+
-			"       webfixture <API URL> retention <days>\n       webfixture <database URL> nightly <recordings dir> <ahead>")
+			"       webfixture <API URL> retention <days>\n       webfixture <database URL> nightly <recordings dir> <ahead>\n"+
+			"       webfixture <database URL> overlap <recorder name> <other recorder name> <recordings dir>")
 		os.Exit(2)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -193,6 +205,13 @@ func main() {
 	if calls {
 		if err := storeCalls(ctx, conn, os.Args[3], os.Args[4], time.Now()); err != nil {
 			fmt.Fprintln(os.Stderr, "webfixture: calls:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if overlap {
+		if err := storeOverlap(ctx, conn, os.Args[3], os.Args[4], os.Args[5]); err != nil {
+			fmt.Fprintln(os.Stderr, "webfixture: overlap:", err)
 			os.Exit(1)
 		}
 		return

@@ -2723,6 +2723,82 @@ func (q *Queries) RecorderKeyIsCurrent(ctx context.Context, arg RecorderKeyIsCur
 	return current, err
 }
 
+const recorderOverlaps = `-- name: RecorderOverlaps :many
+WITH w AS (
+    SELECT c.recorder_id, c.system_id, c.talkgroup, c.started_at, c.ended_at
+    FROM calls c
+    WHERE c.started_at >= $1::timestamptz AND c.started_at < $2::timestamptz
+      AND c.ended_at IS NOT NULL
+), span AS (
+    SELECT coalesce(max(w.ended_at - w.started_at), interval '0') AS longest FROM w
+), o AS (
+    SELECT a.recorder_id AS first_id, b.recorder_id AS second_id, a.system_id, a.talkgroup, count(*) AS calls
+    FROM w a
+    CROSS JOIN span
+    JOIN calls b ON b.talkgroup = a.talkgroup AND b.system_id = a.system_id AND b.recorder_id > a.recorder_id
+     AND b.ended_at IS NOT NULL
+     AND b.started_at >= greatest($1::timestamptz, a.started_at - span.longest)
+     AND b.started_at < $2::timestamptz
+     AND b.started_at <= a.ended_at AND b.ended_at >= a.started_at
+    GROUP BY a.recorder_id, b.recorder_id, a.system_id, a.talkgroup
+)
+SELECT o.system_id::bigint AS system_id, s.label AS system_label, o.talkgroup::integer AS talkgroup,
+       ra.name AS first_recorder, rb.name AS second_recorder, o.calls::bigint AS calls
+FROM o
+JOIN recorders ra ON ra.id = o.first_id
+JOIN recorders rb ON rb.id = o.second_id
+JOIN systems s ON s.id = o.system_id
+ORDER BY o.calls DESC, o.system_id, o.talkgroup, ra.name, rb.name
+`
+
+type RecorderOverlapsParams struct {
+	Since pgtype.Timestamptz
+	Until pgtype.Timestamptz
+}
+
+type RecorderOverlapsRow struct {
+	SystemID       int64
+	SystemLabel    string
+	Talkgroup      int32
+	FirstRecorder  string
+	SecondRecorder string
+	Calls          int64
+}
+
+// Overlapping calls (R13; ADR 0027): two ended calls from two recorders on
+// the same system and talkgroup (the talkgroup each was recorded on, not
+// its patch) whose times overlap, ends included, both starting in
+// [since, until). Each pair of calls counts once, under the pair of
+// recorders. The longest call in the window bounds how far before a call
+// the other can start, so the other side reads calls (talkgroup,
+// started_at) in a range.
+func (q *Queries) RecorderOverlaps(ctx context.Context, arg RecorderOverlapsParams) ([]RecorderOverlapsRow, error) {
+	rows, err := q.db.Query(ctx, recorderOverlaps, arg.Since, arg.Until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RecorderOverlapsRow
+	for rows.Next() {
+		var i RecorderOverlapsRow
+		if err := rows.Scan(
+			&i.SystemID,
+			&i.SystemLabel,
+			&i.Talkgroup,
+			&i.FirstRecorder,
+			&i.SecondRecorder,
+			&i.Calls,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recorderQuiet = `-- name: RecorderQuiet :one
 SELECT quiet_after_minutes FROM recorders WHERE name = $1 AND retired_at IS NULL
 `
