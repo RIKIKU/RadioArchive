@@ -1,0 +1,135 @@
+{
+  "format": "radioarchive-setup",
+  "version": 1,
+  "systems": [
+    {
+      "id": 1,
+      "label": "EX",
+      "name": "Example network",
+      "auto_create": false,
+      "alert": null,
+      "led_colour": null,
+      "sort_order": 0,
+      "talkgroups": [
+        {
+          "id": 1001,
+          "label": "DISP N",
+          "name": "Dispatch North",
+          "tag": "dispatch",
+          "groups": [
+            "North"
+          ],
+          "state": "public",
+          "unreviewed": false,
+          "type": "D",
+          "frequency": null,
+          "delay_minutes": 0,
+          "alert": null,
+          "led_colour": null,
+          "sort_order": 0,
+          "fireground_channel": null
+        },
+        {
+          "id": 1002,
+          "label": "FG 41",
+          "name": "Fireground 41",
+          "tag": "fireground",
+          "groups": [],
+          "state": "public",
+          "unreviewed": false,
+          "type": "D",
+          "frequency": null,
+          "delay_minutes": 0,
+          "alert": null,
+          "led_colour": null,
+          "sort_order": 0,
+          "fireground_channel": 41
+        },
+        {
+          "id": 1003,
+          "label": "ADMIN",
+          "name": "Admin",
+          "tag": "admin",
+          "groups": [
+            "North"
+          ],
+          "state": "hidden",
+          "unreviewed": false,
+          "type": "D",
+          "frequency": null,
+          "delay_minutes": 0,
+          "alert": null,
+          "led_colour": null,
+          "sort_order": 0,
+          "fireground_channel": 43
+        },
+        {
+          "id": 1004,
+          "label": "TG 1004",
+          "name": "",
+          "tag": "dispatch",
+          "groups": [],
+          "state": "ignored",
+          "unreviewed": false,
+          "type": "D",
+          "frequency": null,
+          "delay_minutes": 0,
+          "alert": null,
+          "led_colour": null,
+          "sort_order": 0,
+          "fireground_channel": 44
+        }
+      ],
+      "units": [
+        {
+          "from": 5001,
+          "to": 5001,
+          "alias": "Engine 1"
+        },
+        {
+          "from": 5100,
+          "to": 5199,
+          "alias": "Portables"
+        },
+        {
+          "from": 9000,
+          "to": 9009,
+          "alias": "Covert fleet"
+        },
+        {
+          "from": 9003,
+          "to": 9003,
+          "alias": "Covert radio"
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "name": "North",
+      "alert": null,
+      "led_colour": null,
+      "sort_order": 0
+    }
+  ],
+  "tags": [
+    {
+      "name": "admin",
+      "alert": null,
+      "led_colour": null,
+      "sort_order": 0
+    },
+    {
+      "name": "dispatch",
+      "alert": null,
+      "led_colour": null,
+      "sort_order": 0
+    },
+    {
+      "name": "fireground",
+      "alert": null,
+      "led_colour": null,
+      "sort_order": 0
+    }
+  ]
+}

@@ -8,8 +8,8 @@ LONG DESCRIPTION
     The RadioArchive module does from PowerShell what the radio's admin
     pages do: systems, talkgroups, units, groups and tags, attachments,
     rejected calls, recorders' quiet thresholds, retention, accounts (roles,
-    disabling, enabling and deleting), and saving any call's recording,
-    hidden talkgroups included.
+    disabling, enabling and deleting), importing and exporting the setup,
+    and saving any call's recording, hidden talkgroups included.
     It uses the same admin API as the browser, with the same rules, and
     the radio knows each change came from the module, and from whom, for
     its audit log.
@@ -66,6 +66,34 @@ OBJECTS AND THE PIPELINE
 
     Every change supports -WhatIf and -Confirm. Set- and Remove- commands
     output nothing unless -PassThru is given.
+
+IMPORT AND EXPORT
+    Export-RadioArchiveTalkgroup -Path talkgroups.csv
+
+    saves every talkgroup with every field the import takes. Edit the
+    file, then
+
+    Import-Csv -Path talkgroups.csv | Import-RadioArchiveTalkgroup -WhatIf
+
+    previews it: each row's result (New, Changed, Unchanged or Skipped)
+    and the fields it changes; nothing is changed. Without -WhatIf the
+    whole file is applied at once, or not at all. The same goes for units,
+    systems, groups and tags (Export- and Import-RadioArchiveUnit,
+    -System, -Group, -Tag), and for trunk-recorder's talkgroup CSV:
+
+    Import-Csv -Path talkgroups.csv | Import-RadioArchiveTalkgroup -SystemId 1
+
+    A talkgroup that exists changes only its label, name, tag, groups,
+    fireground channel number and sort order. -Update also changes its
+    delay, alert, LED colour, type and frequency, and a system's, group's
+    or tag's own settings; it asks first. An import never changes a
+    talkgroup's state, -Update or not: hide and show talkgroups with
+    Set-RadioArchiveTalkgroup -State. Nothing is deleted.
+
+    Export-RadioArchiveSetup -Path setup.json and
+    Import-RadioArchiveSetup -Path setup.json do the same for the whole
+    setup in one JSON file. Exports hold hidden and ignored talkgroups:
+    keep them as you would the admin pages.
 
 ERRORS
     A refusal from the radio is an error whose ErrorId is the radio's

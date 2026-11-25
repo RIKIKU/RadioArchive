@@ -2127,8 +2127,13 @@ SET label = $1,
     tag_id = COALESCE($3, tag_id),
     sort_order = $4,
     fireground_channel = $5,
+    delay_minutes = $6,
+    alert = $7,
+    led_colour = $8,
+    type = $9,
+    frequency = $10,
     updated_at = now()
-WHERE system_id = $6 AND talkgroup_id = $7
+WHERE system_id = $11 AND talkgroup_id = $12
 `
 
 type ImportUpdateTalkgroupParams struct {
@@ -2137,13 +2142,20 @@ type ImportUpdateTalkgroupParams struct {
 	TagID             *int64
 	SortOrder         int32
 	FiregroundChannel *int32
+	DelayMinutes      int32
+	Alert             *string
+	LedColour         *string
+	Type              string
+	Frequency         *int64
 	SystemID          int64
 	TalkgroupID       int32
 }
 
-// A talkgroup the import changes: only R52's fields (label, name, tag,
-// fireground channel number, and sort order when given; groups apart).
-// Never state, unreviewed, delay, alert, LED colour, type or frequency.
+// A talkgroup the import changes: R52's fields (label, name, tag,
+// fireground channel number, and sort order when given; groups apart),
+// and with the import's update option its delay, alert, LED colour, type
+// and frequency too; the caller passes what it has for those it keeps.
+// Never state or unreviewed (owner, 2026-11-25; ADR 0035).
 func (q *Queries) ImportUpdateTalkgroup(ctx context.Context, arg ImportUpdateTalkgroupParams) error {
 	_, err := q.db.Exec(ctx, importUpdateTalkgroup,
 		arg.Label,
@@ -2151,6 +2163,11 @@ func (q *Queries) ImportUpdateTalkgroup(ctx context.Context, arg ImportUpdateTal
 		arg.TagID,
 		arg.SortOrder,
 		arg.FiregroundChannel,
+		arg.DelayMinutes,
+		arg.Alert,
+		arg.LedColour,
+		arg.Type,
+		arg.Frequency,
 		arg.SystemID,
 		arg.TalkgroupID,
 	)

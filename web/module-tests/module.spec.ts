@@ -373,6 +373,151 @@ test('a 1003 recording is saved byte for byte', async () => {
 	expect(readFileSync(file).equals(readFileSync(expected!))).toBe(true);
 });
 
+// ------------------------------------------------------------ M4's end-to-end checks (issue #117)
+
+/** Each import result as one line: kind, ID, result, reason, [changed fields], [fields not changed], applied. */
+const rows = `ForEach-Object -Process { 'ROW ' + $_.Kind + ' ' + $_.Id + ' ' + $_.Result + ' ' + $_.Reason + ' [' + ($_.Fields -join ',') + '] [' + (@($_.NotChanged | ForEach-Object -Process { $_.Field }) -join ',') + '] ' + $_.Applied }`;
+const setupOf = (systems: unknown[]) => JSON.stringify({ format: 'radioarchive-setup', version: 1, systems });
+
+test('A24: the module previews an import and changes nothing until it is confirmed; state never changes, even with -Update; the setup and the CSV round-trip', async ({ request }) => {
+	const dir = join(root, 'a24');
+	mkdirSync(dir);
+	const a24 = join(dir, 'a24.json');
+	writeFileSync(a24, setupOf([{ id: 1, talkgroups: [
+		{ id: 1001, label: 'DISP North', name: 'Dispatch Northern', tag: 'dispatch', groups: ['North'] },
+		{ id: 1003, label: 'ADMIN', name: 'Admin', tag: 'admin', state: 'public' },
+		{ id: 1005, label: 'DISP S', name: 'Dispatch South', tag: 'dispatch' },
+		{ id: 1006, label: '1006', tag: 'dispatch' }
+	] }]));
+	const update = join(dir, 'update.json');
+	writeFileSync(update, setupOf([{ id: 1, talkgroups: [{ id: 1001, state: 'hidden', delay_minutes: 2 }, { id: 1003, state: 'public', delay_minutes: 1 }] }]));
+	const p = (name: string) => join(dir, name);
+	try {
+		const r = await window(deviceHome, `'PREVIEW'
+Import-RadioArchiveSetup -Path '${a24}' -WhatIf | Where-Object -Property Kind -EQ Talkgroup | Where-Object -Property SystemId -EQ 1 | ${rows}
+'BEFORE ' + (Get-RadioArchiveTalkgroup -SystemId 1 -Id 1001).Name + ' ' + @(Get-RadioArchiveTalkgroup -SystemId 1 -Id 1005).Count
+'APPLY'
+Import-RadioArchiveSetup -Path '${a24}' -Confirm:$false | Where-Object -Property Kind -EQ Talkgroup | Where-Object -Property SystemId -EQ 1 | ${rows}
+'UPDATE'
+Import-RadioArchiveSetup -Path '${update}' -Update -Confirm:$false | Where-Object -Property Kind -EQ Talkgroup | Where-Object -Property Id -In '1001', '1003' | ${rows}
+Get-RadioArchiveTalkgroup -SystemId 1 -Id 1001, 1003, 1005 | ForEach-Object -Process { 'NOW ' + $_.Id + ' ' + $_.Label + ' ' + $_.State + ' ' + $_.DelayMinutes }
+Get-RadioArchiveAuditLog -SystemId 1 -Id 1005 -First 1 | ForEach-Object -Process { 'AUDIT ' + $_.Via + ' ' + $_.AccountId + ' ' + $_.Action }
+$null = Export-RadioArchiveSetup -Path '${p('one.json')}' 3>$null
+Import-RadioArchiveSetup -Path '${p('one.json')}' | Group-Object -Property Result | ForEach-Object -Process { 'TRIP ' + $_.Name }
+$null = Export-RadioArchiveSetup -Path '${p('two.json')}' 3>$null
+$null = Export-RadioArchiveTalkgroup -Path '${p('talkgroups.csv')}' 3>$null
+Import-Csv -Path '${p('talkgroups.csv')}' | Import-RadioArchiveTalkgroup -Update | Group-Object -Property Result | ForEach-Object -Process { 'CSV ' + $_.Name }`).done;
+		expect(r.out).not.toContain('FAILED');
+		const [preview, applied, updated] = [/PREVIEW([\s\S]*)BEFORE/, /APPLY([\s\S]*)UPDATE/, /UPDATE([\s\S]*?)NOW/].map((re) => re.exec(r.out)![1]);
+		// The preview: 1 changed (label and name), 1 new, 1003 unchanged in
+		// state, 1002 and 1004 kept, 1006 skipped as a placeholder.
+		expect(preview).toContain('ROW Talkgroup 1001 Changed  [label,name] [] False');
+		expect(preview).toContain('ROW Talkgroup 1003 Unchanged  [] [state] False');
+		expect(preview).toMatch(/ROW Talkgroup 1005 New {2}\[[^\]]*\] \[\] False/);
+		expect(preview).toContain('ROW Talkgroup 1002 Kept  [] [] False');
+		expect(preview).toContain('ROW Talkgroup 1006 Skipped Placeholder [] [] False');
+		// Nothing changed until it was confirmed.
+		expect(r.out).toContain('BEFORE Dispatch North 0');
+		expect(applied).toContain('ROW Talkgroup 1001 Changed  [label,name] [] True');
+		expect(applied).toMatch(/ROW Talkgroup 1005 New {2}\[[^\]]*\] \[\] True/);
+		// -Update takes the delay, never the state.
+		expect(updated).toContain('ROW Talkgroup 1001 Changed  [delay_minutes] [state] True');
+		expect(updated).toContain('ROW Talkgroup 1003 Changed  [delay_minutes] [state] True');
+		expect(r.out).toContain('NOW 1001 DISP North Public 2');
+		expect(r.out).toContain('NOW 1003 ADMIN Hidden 1');
+		expect(r.out).toContain('NOW 1005 DISP S Public 0');
+		expect(r.out).toContain(`AUDIT Import ${admin.id} Created`);
+		const catalogue = await (await request.get('/api/v1/catalogue')).text();
+		expect(catalogue).toContain('Dispatch Northern');
+		expect(catalogue).toContain('Dispatch South');
+		expect(catalogue).not.toContain('ADMIN');
+		// The round trip: its own export imports as all unchanged and exports
+		// the same bytes; so does the talkgroup CSV.
+		expect(r.out.match(/^TRIP .*$/gm)).toEqual(['TRIP Unchanged']);
+		expect(readFileSync(p('two.json')).equals(readFileSync(p('one.json')))).toBe(true);
+		expect(r.out.match(/^CSV .*$/gm)).toEqual(['CSV Unchanged']);
+	} finally {
+		// A window after one that began with -WhatIf: the sign-in it renewed
+		// was saved, -WhatIf or not.
+		const after = await window(deviceHome, `Set-RadioArchiveTalkgroup -SystemId 1 -Id 1001 -Label 'DISP N' -Name 'Dispatch North' -DelayMinutes 0
+Set-RadioArchiveTalkgroup -SystemId 1 -Id 1003 -DelayMinutes 0`).done;
+		expect(after.out).not.toContain('FAILED');
+	}
+});
+
+test('A26: 1001 renamed in the browser, hidden with the module and an attachment added: the Audit log page shows each, with who and when', async () => {
+	const tg = '/api/v1/admin/systems/1/talkgroups/1001';
+	const start = Date.now();
+	try {
+		expect((await owner.page.request.patch(tg, { data: { label: 'DISP A26' } })).ok()).toBe(true);
+		const r = await window(deviceHome, `Set-RadioArchiveTalkgroup -SystemId 1 -Id 1001 -State Hidden -Confirm:$false
+Add-RadioArchiveAttachment -Recorder Bench -ShortName a26 -SystemId 1 -Confirm:$false | Format-List -Property Recorder, ShortName`).done;
+		expect(r.out).not.toContain('FAILED');
+	} finally {
+		await owner.page.request.patch(tg, { data: { label: 'DISP N', state: 'public' } });
+		await owner.page.request.delete('/api/v1/admin/recorders/Bench/attachments/a26');
+	}
+	const page = owner.page;
+	const table = page.getByRole('table', { name: 'Audit log' });
+	const when = async (row: ReturnType<typeof table.getByRole>) => {
+		const at = Date.parse((await row.locator('time').getAttribute('datetime'))!);
+		expect(at).toBeGreaterThanOrEqual(start - 2000);
+		expect(at).toBeLessThanOrEqual(Date.now() + 2000);
+	};
+	await page.goto('/admin/audit?kind=talkgroup&thing=1/1001');
+	const renamed = table.getByRole('row').filter({ hasText: 'Label DISP N → DISP A26' }).first();
+	await expect(renamed).toContainText('Browser');
+	await when(renamed);
+	const hidden = table.getByRole('row').filter({ hasText: 'State public → hidden' }).first();
+	await expect(hidden).toContainText('PowerShell module');
+	await when(hidden);
+	await page.goto('/admin/audit?kind=attachment');
+	const attached = table.getByRole('row').filter({ hasText: 'Bench / a26 attached to EX' }).first();
+	await expect(attached).toContainText('PowerShell module');
+	await when(attached);
+	// Who: the owner in the browser, the other admin with the module.
+	type Entry = { who: { id: string }; via: string; changes: { field: string; after: unknown }[] };
+	const entries = async (q: string) => ((await (await page.request.get(`/api/v1/admin/audit?${q}`)).json()) as { entries: Entry[] }).entries;
+	const tgEntries = await entries('kind=talkgroup&thing=1/1001&limit=10');
+	expect(tgEntries.find((e) => e.changes.some((c) => c.field === 'label' && c.after === 'DISP A26'))?.who.id).toBe(owner.id);
+	expect(tgEntries.find((e) => e.via === 'module' && e.changes.some((c) => c.field === 'state' && c.after === 'hidden'))?.who.id).toBe(admin.id);
+	expect((await entries('kind=attachment&limit=10')).find((e) => e.via === 'module')?.who.id).toBe(admin.id);
+});
+
+test("section 9, step 2: the first admin signs in with the module, creates a system, imports the fixture setup and attaches the shell's recorder", async ({ browser, request }) => {
+	// The stack's own fixture system is EX (1), so the fixture goes into a
+	// system of its own, 9 "EX9", its fireground numbers moved by 100 (a
+	// number is one talkgroup's, R100).
+	const fixture = JSON.parse(readFileSync(resolve(fileURLToPath(new URL('.', import.meta.url)), '../../testing/setup/fixture.json'), 'utf8')) as {
+		systems: { id: number; label: string; talkgroups: { fireground_channel: number | null }[] }[];
+	};
+	const sys = fixture.systems[0];
+	sys.id = 9;
+	sys.label = 'EX9';
+	for (const t of sys.talkgroups) if (t.fireground_channel !== null) t.fireground_channel += 100;
+	const home = await userHome('first-admin', true);
+	const file = join(home, 'fixture.json');
+	writeFileSync(file, JSON.stringify(fixture, null, 2));
+	const w = window(home, `${connect} | Format-List -Property Email, Role
+if (-not @(Get-RadioArchiveSystem | Where-Object -Property SystemId -EQ 9)) { New-RadioArchiveSystem -SystemId 9 -Label EX9 -Name 'Example network' | ForEach-Object -Process { 'SYSTEM ' + $_.SystemId + ' ' + $_.Label } }
+Import-RadioArchiveSetup -Path '${file}' -Confirm:$false | Where-Object -Property SystemId -EQ 9 | Group-Object -Property Kind, Result | ForEach-Object -Process { 'GOT ' + $_.Name + ' ' + $_.Count }
+Add-RadioArchiveAttachment -Recorder Step2 -ShortName ex9 -SystemId 9 -Confirm:$false | ForEach-Object -Process { 'ATTACHED ' + $_.Recorder + ' / ' + $_.ShortName + ' ' + $_.SystemLabel }
+Get-RadioArchiveTalkgroup -SystemId 9 | ForEach-Object -Process { 'TG ' + $_.Id + ' ' + $_.State + ' ' + $_.FiregroundChannel }`);
+	await signInInBrowser(browser, await browserURL(w), owner.email);
+	const r = await w.done;
+	expect(r.out).not.toContain('FAILED');
+	expect(r.out).toMatch(/Role\s*:\s*Admin/);
+	expect(r.out).toContain('SYSTEM 9 EX9');
+	expect(r.out).toContain('GOT Talkgroup, New 4');
+	expect(r.out).toContain('GOT Unit, New 4');
+	expect(r.out).toContain('ATTACHED Step2 / ex9 EX9');
+	for (const line of ['TG 1001 Public ', 'TG 1002 Public 141', 'TG 1003 Hidden 143', 'TG 1004 Ignored 144']) expect(r.out).toContain(line);
+	// Hidden 9/1003 is the admin's alone.
+	const catalogue = await (await request.get('/api/v1/catalogue')).text();
+	expect(catalogue).not.toContain('ADMIN');
+	expect(holds(r.out, r.secrets)).toBe(false);
+});
+
 test('an admin demoted is refused at their next command', async () => {
 	await setRole(owner, admin, 'listener');
 	try {

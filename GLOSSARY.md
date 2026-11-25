@@ -156,6 +156,10 @@ _Avoid_: Config, catalogue (the catalogue is the public's part of it)
 What an import would do, row by row (new, changed with the fields, unchanged, kept, skipped and why), worked out without changing anything, and fingerprinted as its **plan**. An import applies only with the plan of a preview that still holds.
 _Avoid_: Dry-run report, diff
 
+**Update (an import's)**:
+An import asked to make what exists take every field the file gives otherwise, not just a talkgroup's label, name, tag, groups, fireground channel number and sort order. Even then a talkgroup's state and unreviewed never change: an old file can't make a hidden talkgroup public.
+_Avoid_: Overwrite, sync
+
 **Placeholder row**:
 A row in an imported file whose label is just its talkgroup ID, as trunk-recorder's files carry for talkgroups nobody named. The import skips it.
 _Avoid_: Unreviewed talkgroup (that's a talkgroup the radio made itself)

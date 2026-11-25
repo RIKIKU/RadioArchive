@@ -35,8 +35,8 @@ function Get-RadioArchiveTalkgroup {
     .OUTPUTS
     RadioArchive.Talkgroup. SystemId, Id, Label, Name, Tag, Group (the
     group names), State (Public, Hidden or Ignored), Unreviewed,
-    DelayMinutes, Alert, LedColour, SortOrder, FiregroundChannel,
-    LastHeardAt, Calls30Days, CreatedAt and UpdatedAt. Alert and LedColour
+    DelayMinutes, Alert, LedColour, SortOrder, FiregroundChannel, Type
+    (such as trunk-recorder's mode), Frequency (hertz), LastHeardAt, Calls30Days, CreatedAt and UpdatedAt. Alert and LedColour
     are the talkgroup's own: null takes them from its tag, groups or system.
 
     .LINK
