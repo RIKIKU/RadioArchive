@@ -106,8 +106,7 @@
 		<button type="button" class="secondary" onclick={onclose}>Close</button>
 	</div>
 	<p class="meta">
-		Its calls and calls patched with it, newest first, whatever their state. They play here only, never in the listener.{#if talkgroup.state !== 'public'}
-			Listeners can't hear any of them while it's {talkgroup.state}.{/if}
+		Its calls and calls patched with it, newest first, whatever their state. They play here only, never in the listener.{talkgroup.state !== 'public' ? ` Listeners can't hear any of them while it's ${talkgroup.state}.` : ''}
 	</p>
 	<p class="said" role="status">{said}</p>
 	{#if replay.call}
