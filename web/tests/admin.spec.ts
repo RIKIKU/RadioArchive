@@ -77,7 +77,8 @@ test("the Recorders page: each recorder's state, the overlap on 1003, the quiet 
 	// Ridge has never connected; it recorded 1003's three calls as Bench did.
 	const ridge = recorderCard(page, 'Ridge');
 	await expect(ridge).toContainText('Never connected');
-	await expect(ridge).toContainText('OK');
+	await expect(ridge.getByText('OK', { exact: true })).toBeVisible();
+	await expect(ridge.getByText('Warning', { exact: true })).toHaveCount(0);
 	await expect(page.getByRole('list', { name: 'Overlapping calls' })).toHaveText('Bench and Ridge both recorded TG 1003: 3 overlapping calls in the last 24 h');
 	// Keys are the shell's alone (R10).
 	expect(await page.locator('main').innerText()).not.toMatch(/\bkeys?\b|hash|rotat/i);
@@ -155,7 +156,7 @@ test('the disk warning: on every admin page below 15 % free, and on no listener 
 	await lowDisk(page);
 	for (const path of adminPaths) {
 		await page.goto(path);
-		await expect(page.locator('main .disk-warning')).toHaveText(DISK);
+		await expect(page.getByRole('main').getByText(DISK, { exact: true })).toBeVisible();
 	}
 	for (const path of ['/', '/recent', '/basket']) {
 		await page.goto(path);
@@ -166,7 +167,15 @@ test('the disk warning: on every admin page below 15 % free, and on no listener 
 	await page.unrouteAll();
 	await page.goto('/admin/recorders');
 	await expect(page.getByRole('heading', { level: 1, name: 'Recorders' })).toBeVisible();
-	await expect(page.locator('main .disk-warning')).toHaveCount(0);
+	await expect(page.getByRole('main').getByText(/^The recordings volume has/)).toHaveCount(0);
+});
+
+test("the admin pages say so when the server can't be reached, as an alert", async ({ page }) => {
+	await signIn(page, 'admin');
+	await page.route('**/api/v1/admin/recorders', (route) => route.abort());
+	await page.goto('/admin/recorders');
+	await expect(page.getByRole('heading', { level: 1, name: 'Recorders' })).toBeVisible();
+	await expect(page.getByRole('main').getByRole('alert')).toHaveText("Couldn't reach the server just now. Try again in a minute.");
 });
 
 for (const look of looks)
@@ -184,7 +193,7 @@ for (const look of looks)
 				await page.goto('/admin/recorders');
 				await expect(recorderCard(page, 'Bench')).toBeVisible();
 				await expect(page.getByRole('list', { name: 'Overlapping calls' })).toBeVisible();
-				await expect(page.locator('main .disk-warning')).toBeVisible();
+				await expect(page.getByRole('main').getByText(DISK, { exact: true })).toBeVisible();
 				await axe(page, width);
 				await shot(page, `recorders-${tag}`);
 				if (width === 375) {

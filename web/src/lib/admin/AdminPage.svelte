@@ -9,8 +9,10 @@
 	//
 	// The disk warning (R88: "a warning shows to admins at 15 % free") is
 	// GET /admin/retention's volume state, as an alert that stays (ArchiveUx
-	// section 4, "Alerts"), on every admin page and on no listener page.
+	// section 4, "Alerts": a Banner), on every admin page and on no listener
+	// page.
 	import type { Snippet } from 'svelte';
+	import { Banner } from 'archiveux/components';
 	import { onDestroy } from 'svelte';
 	import { page } from '$app/state';
 	import { admin, diskWarning, type Access, type Retention } from './api.ts';
@@ -42,7 +44,7 @@
 
 {#if access === 'open'}
 	<h1>{title}</h1>
-	{#if warning}<p class="alert disk-warning">{warning}</p>{/if}
+	{#if warning}<Banner><p>{warning}</p></Banner>{/if}
 	{@render children()}
 {:else if access === 'checking'}
 	<h1>{title}</h1>
@@ -55,19 +57,10 @@
 	<h1>This page is for admins</h1>
 {:else}
 	<h1>{title}</h1>
-	<p class="alert" role="alert">Couldn't reach the server just now. Try again in a minute.</p>
+	<Banner tone="error" role="alert"><p>Couldn't reach the server just now. Try again in a minute.</p></Banner>
 {/if}
 
 <style>
-	/* An alert that stays (ArchiveUx section 4): the warning fill, no edge. */
-	.alert {
-		max-width: var(--measure);
-		margin: 0 0 var(--space-lg);
-		padding: var(--space-sm) var(--space-md);
-		background: var(--warn-bg);
-		color: var(--warn-fg);
-		border-radius: var(--radius);
-	}
 	.meta {
 		color: var(--muted);
 		font-size: var(--text-sm);
