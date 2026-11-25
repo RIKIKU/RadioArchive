@@ -92,11 +92,11 @@ func binaryServer(t *testing.T, ctx context.Context, authentikURL string, more e
 	if err != nil {
 		t.Fatal(err)
 	}
-	mt, err := metricsToken(env.get)
+	ops, err := operationsFromEnv(env.get)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if api, _, err = apiHandler(st, log, rs, g, job, sc, lc, mt); err != nil {
+	if api, _, _, err = apiHandler(st, log, rs, g, job, sc, lc, ops); err != nil {
 		t.Fatal(err)
 	}
 	return st, logs, srv, api

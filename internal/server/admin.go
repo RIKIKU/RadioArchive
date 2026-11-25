@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/RIKIKU/RadioArchive/internal/account"
+	"github.com/RIKIKU/RadioArchive/internal/backup"
 	"github.com/RIKIKU/RadioArchive/internal/recordings"
 	"github.com/RIKIKU/RadioArchive/internal/retention"
 	"github.com/RIKIKU/RadioArchive/internal/store"
@@ -119,6 +120,8 @@ type Admin struct {
 	now  func() time.Time
 	accs AccountRoles
 	cop  *http.CrossOriginProtection
+	// backup is the backup's state (ADR 0041); nil serves none.
+	backup *backup.Reader
 }
 
 // WithClock gives the admin API its clock, for the talkgroup table's 30
@@ -238,6 +241,9 @@ func WithAdmin(a *Admin) Option {
 		}
 		if a.ls != nil {
 			api.handle(AdminRoute, "DELETE "+AdminPath+"/listeners/{subject}/sessions", a.serve(a.endListenerSessions))
+		}
+		if a.backup != nil {
+			api.handle(AdminRoute, "GET "+AdminPath+"/backup", a.serve(a.getBackup))
 		}
 		if a.accs != nil {
 			api.handle(AdminRoute, "GET "+AdminPath+"/accounts", a.serve(a.listAccounts))

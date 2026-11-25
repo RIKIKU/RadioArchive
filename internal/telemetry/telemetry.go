@@ -362,5 +362,5 @@ func number(v float64) string {
 	case math.IsNaN(v):
 		return "NaN"
 	}
-	return strconv.FormatFloat(v, 'g', -1, 64)
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }

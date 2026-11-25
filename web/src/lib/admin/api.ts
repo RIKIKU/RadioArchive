@@ -81,6 +81,24 @@ export interface Disk {
 	message?: string;
 }
 
+/** GET /api/v1/admin/backup (R89; ADR 0041): the nightly backup's state. */
+export interface Backup {
+	state: 'ok' | 'failing' | 'pending' | 'off';
+	last_run_at: string | null;
+	last_run_ok: boolean;
+	running: boolean;
+	last_good_at: string | null;
+	last_good_night?: string;
+	last_good_bytes: number;
+	nights: number;
+	/** Why backups are failing, in words, when they are. */
+	message?: string;
+}
+
+/** The backup alert admins see on every admin page (R89), or nothing. */
+export const backupAlert = (b: Backup | null | undefined): string | undefined =>
+	b && b.state === 'failing' && b.message ? b.message : undefined;
+
 /** The disk warning admins see on every admin page (R88), or nothing. */
 export const diskWarning = (d: Disk | null | undefined): string | undefined => (d && d.state !== 'ok' && d.message ? d.message : undefined);
 

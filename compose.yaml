@@ -113,11 +113,17 @@ services:
       # The bearer token /metrics asks for (R90, ADR 0040). Unset, /metrics
       # answers 404.
       METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # The backup's state, for admins and /metrics, and the setup export it
+      # keeps beside each night's dumps (R89, ADR 0041).
+      BACKUP_STATUS_FILE: /var/lib/radioarchive/backup-status/status.json
+      SETUP_EXPORT_DIR: /var/lib/radioarchive/setup-export
     ports:
       - "127.0.0.1:${API_PORT:-8080}:8080"
     volumes:
       # Recordings are files on a volume, never in the database (R20).
       - recordings:/var/lib/radioarchive/recordings
+      - backup-status:/var/lib/radioarchive/backup-status:ro
+      - setup-export:/var/lib/radioarchive/setup-export
     depends_on:
       db:
         condition: service_healthy
@@ -153,6 +159,35 @@ services:
       start_interval: 1s
       retries: 5
 
+  # The nightly backup (R89, ADR 0041): both databases, call data left
+  # out, each night restore-checked, into BACKUP_DIR. Recordings are never
+  # backed up.
+  backup:
+    image: postgres:18
+    restart: unless-stopped
+    entrypoint: [sh, /usr/local/bin/radioarchive-backup]
+    command: [serve]
+    # A hash of the script it mounts (deploy/compose_test.go).
+    labels:
+      radioarchive.config: "e86475d4f319a444"
+    environment:
+      PGHOST: db
+      PGUSER: radioarchive
+      PGPASSWORD: ${POSTGRES_PASSWORD:-radioarchive}
+      TZ: ${TZ:-UTC}
+      BACKUP_AT: ${BACKUP_AT:-04:00}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_UID: ${BACKUP_UID:-0}
+      BACKUP_GID: ${BACKUP_GID:-0}
+    volumes:
+      - ./deploy/backup/backup.sh:/usr/local/bin/radioarchive-backup:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+      - backup-status:/status
+      - setup-export:/setup-export:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
   authentik-server:
     <<: *authentik
     command: server
@@ -178,3 +213,5 @@ services:
 volumes:
   db:
   recordings:
+  backup-status:
+  setup-export:

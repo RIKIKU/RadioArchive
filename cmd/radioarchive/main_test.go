@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/RIKIKU/RadioArchive/internal/backup"
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/limits"
 	"github.com/RIKIKU/RadioArchive/internal/public"
@@ -87,7 +89,8 @@ func TestIntegrationBinaryRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	api, _, err := apiHandler(st, log, rs, gate.New(st, dir, log), job, sc, limits.Defaults(), "")
+	api, _, _, err := apiHandler(st, log, rs, gate.New(st, dir, log), job, sc, limits.Defaults(),
+		operations{backup: backup.New(filepath.Join(dir, "status.json"), nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +105,7 @@ func TestIntegrationBinaryRoutes(t *testing.T) {
 	for _, want := range []string{"GET /api/v1/admin/systems", "PUT /api/v1/admin/retention", "PATCH /api/v1/admin/recorders/{recorder}",
 		"DELETE /api/v1/admin/listeners/{subject}/sessions", "GET /api/v1/admin/accounts", "PATCH /api/v1/admin/accounts/{subject}", "DELETE /api/v1/admin/accounts/{subject}",
 		"GET /api/v1/admin/calls/{call}/recording", "GET /api/v1/admin/audit", "GET /api/v1/admin/overlaps",
-		"GET /api/v1/admin/setup", "POST /api/v1/admin/import"} {
+		"GET /api/v1/admin/setup", "POST /api/v1/admin/import", "GET /api/v1/admin/backup"} {
 		if !slices.Contains(admin, want) {
 			t.Errorf("the binary doesn't serve admin route %s; it serves %q", want, admin)
 		}

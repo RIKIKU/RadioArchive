@@ -1,39 +1,45 @@
 <script lang="ts">
-	// The frame of every admin page (SPEC.md R84, R88; ADR 0027), inside
-	// ArchiveUx's frame: the page's heading, the recordings volume's warning,
+	// The frame of every admin page (SPEC.md R84, R88, R89; ADR 0027, 0041),
+	// inside ArchiveUx's frame: the page's heading, the deployment's alerts,
 	// and the page itself once the admin API has answered it as an admin's.
 	//
 	// The admin API is the guard (ADR 0025): access comes from the answer to
 	// the page's own data. Signed out, the page offers sign-in; signed in
 	// but not an admin, it says "This page is for admins" and nothing else.
 	//
-	// The disk warning (R88: "a warning shows to admins at 15 % free") is
-	// GET /admin/retention's volume state, as an alert that stays (ArchiveUx
-	// section 4, "Alerts": a Banner), on every admin page and on no listener
-	// page.
+	// The deployment's alerts stay until what they say is fixed (ArchiveUx
+	// section 4, "Alerts": a Banner), on every admin page and on no
+	// listener page:
+	// - the disk warning (R88: "a warning shows to admins at 15 % free"),
+	//   GET /admin/retention's volume state;
+	// - the backup failing (R89: "backup state shows to admins as ArchiveUx
+	//   alerts"), GET /admin/backup's state, when the last backup failed or
+	//   the last good one is more than 36 hours old.
 	import type { Snippet } from 'svelte';
 	import { Banner } from 'archiveux/components';
 	import { onDestroy } from 'svelte';
 	import { page } from '$app/state';
-	import { admin, diskWarning, type Access, type Retention } from './api.ts';
+	import { admin, backupAlert, diskWarning, type Access, type Backup, type Retention } from './api.ts';
 
-	/** How often the volume's state is asked again. */
-	const DISK_MS = 60_000;
+	/** How often the deployment's state is asked again. */
+	const STATE_MS = 60_000;
 
 	let { title, access, children }: { title: string; access: Access; children: Snippet } = $props();
 
 	let warning: string | undefined = $state();
+	let backup: string | undefined = $state();
 	let timer: ReturnType<typeof setInterval> | undefined;
 
-	async function readDisk() {
-		const a = await admin<Retention>('GET', '/retention');
-		if (a.access === 'open') warning = diskWarning(a.body?.disk);
+	async function readState() {
+		const [r, b] = await Promise.all([admin<Retention>('GET', '/retention'), admin<Backup>('GET', '/backup')]);
+		if (r.access === 'open') warning = diskWarning(r.body?.disk);
+		if (b.access === 'open') backup = backupAlert(b.body);
 	}
 
 	$effect(() => {
 		if (access !== 'open' || timer) return;
-		void readDisk();
-		timer = setInterval(() => void readDisk(), DISK_MS);
+		void readState();
+		timer = setInterval(() => void readState(), STATE_MS);
 	});
 	onDestroy(() => clearInterval(timer));
 
@@ -44,6 +50,7 @@
 
 {#if access === 'open'}
 	<h1>{title}</h1>
+	{#if backup}<Banner tone="error"><p><strong>Backups are failing.</strong> {backup} See the deploy guide's "Backups".</p></Banner>{/if}
 	{#if warning}<Banner><p>{warning}</p></Banner>{/if}
 	{@render children()}
 {:else if access === 'checking'}

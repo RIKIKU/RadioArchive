@@ -94,6 +94,16 @@ var (
 	NightlyLast = &Desc{Name: "radioarchive_nightly_last_run_timestamp_seconds", Type: Gauge, Labels: []string{"status"},
 		Help: "When the nightly run last finished, ok or failed."}
 
+	// Backups (R89; ADR 0041), from the backup service's status file.
+	BackupFailing = &Desc{Name: "radioarchive_backup_failing", Type: Gauge,
+		Help: "1 when the last backup failed, or the last good one is more than 36 hours old (R89)."}
+	BackupLastGood = &Desc{Name: "radioarchive_backup_last_good_timestamp_seconds", Type: Gauge,
+		Help: "When the last good backup was made."}
+	BackupBytes = &Desc{Name: "radioarchive_backup_last_good_bytes", Type: Gauge,
+		Help: "The size of the last good backup's dumps."}
+	BackupNights = &Desc{Name: "radioarchive_backup_nights", Type: Gauge,
+		Help: "Nights of backups kept in the backup folder."}
+
 	// The process.
 	MemoryBytes = &Desc{Name: "radioarchive_process_memory_bytes", Type: Gauge, Labels: []string{"kind"},
 		Help: "The Go runtime's memory: heap in use, and everything it holds from the system (sys)."}
@@ -113,5 +123,6 @@ var All = []*Desc{
 	CallsRejected, FramesRefused, RejectedUnattached, RejectedTalkgroup, RecordingsMissing, OverlappingCalls,
 	LiveDelay, LiveFrames, LiveEvents, LiveSockets, LiveSocketsLimit, LiveFull, ZipsOpen, LimitHits,
 	DiskBytes, DiskFree, DiskState, DiskMinFree, Retention, VolumeFull, NightlyLast,
+	BackupFailing, BackupLastGood, BackupBytes, BackupNights,
 	MemoryBytes, Goroutines, StartTime,
 }
