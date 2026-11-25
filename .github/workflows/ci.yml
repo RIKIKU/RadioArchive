@@ -352,6 +352,40 @@ jobs:
           cat .e2e-auto-upgrade/install/auto-upgrade/status/auto-upgrade.log 2>/dev/null || true
           jq . .e2e-auto-upgrade/install/auto-upgrade/status/status.json 2>/dev/null || true
 
+  # SPEC.md section 9 on a clean runner (issue #155): the release's files as
+  # release-assets.sh writes them, the images built under their names, the
+  # deploy guide's steps and its nginx example in front, the fake recorder in
+  # place of a radio, then the first admin's setup and a listener in a
+  # browser (scripts/ci/e2e-section9.sh). The whole output is the evidence.
+  section9:
+    name: Section 9 on a clean runner, from the release's files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: Steps 1 to 3
+        timeout-minutes: 40
+        shell: bash
+        env:
+          RA_PLAYWRIGHT_IMAGE: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
+        run: |
+          set -o pipefail
+          sh scripts/ci/e2e-section9.sh 2>&1 | tee section9-evidence.log
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: section9-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            section9-evidence.log
+            web/playwright-report/
+            web/test-results/
+          if-no-files-found: ignore
+          retention-days: 30
+
   # The PowerShell module (issue #116, ADR 0028, docs/powershell-guidelines.md):
   # PSScriptAnalyzer with zero findings, the meta-tests, the unit tests with
   # the API mocked and the sign-in tests (the DPAPI file on Windows; a

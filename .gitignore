@@ -16,4 +16,5 @@ web/playwright-report/
 # The monitoring check's copy of PagerArchive's stack (scripts/ci/e2e-monitoring.sh).
 /.e2e-monitoring/
 /.e2e-auto-upgrade/
+/.e2e-section9/
 /compose.override.yaml
