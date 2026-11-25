@@ -134,13 +134,37 @@ test -n "$key"
 "$tmp/webfixture" "$DATABASE_URL" Bench
 
 # Bench's recorder client, beside the fake recorder's "trunk-recorder".
-SERVER_URL="http://127.0.0.1:$port" CLIENT_KEY="$key" UDP_ADDR="127.0.0.1:$udp" QUEUE_DIR="$tmp/queue" \
-	"$tmp/radioarchive-client" >"$tmp/client.log" 2>&1 &
+# The Recorders page's A27 test (issue #111) drops its connection: while
+# the file named in RA_CLIENT_HELD exists, the client is stopped, and it
+# starts again once the file goes, as a client host back on the network
+# would reconnect.
+clientheld="$tmp/client-held"
+(
+	c=""
+	trap '[ -z "$c" ] || kill "$c" 2>/dev/null; exit 0' TERM
+	while :; do
+		if [ -e "$clientheld" ]; then
+			sleep 0.5
+			continue
+		fi
+		SERVER_URL="http://127.0.0.1:$port" CLIENT_KEY="$key" UDP_ADDR="127.0.0.1:$udp" QUEUE_DIR="$tmp/queue" \
+			"$tmp/radioarchive-client" >>"$tmp/client.log" 2>&1 &
+		c=$!
+		while kill -0 "$c" 2>/dev/null && [ ! -e "$clientheld" ]; do sleep 0.5; done
+		kill "$c" 2>/dev/null || true
+		wait "$c" 2>/dev/null || true
+	done
+) &
 client=$!
 wait_for 60 "the recorder client's live connection" grep -q '"live connection open"' "$tmp/client.log"
 # The archive the Recent calls page's tests search (issue #79): made-up
 # calls as Bench's, with their recordings on the volume.
 "$tmp/webfixture" "$DATABASE_URL" calls Bench "$tmp/recordings"
+# The Recorders page's overlap (R13, issue #111): a second recorder, Ridge,
+# on the same network, never connected, which recorded hidden 1003's three
+# calls too.
+DATABASE_URL=$DATABASE_URL "$tmp/radioarchive" recorder add Ridge >/dev/null
+"$tmp/webfixture" "$DATABASE_URL" overlap Ridge Bench "$tmp/recordings"
 
 fixtures=$(pwd)/testing/fakerecorder/testdata/fixtures
 
@@ -161,8 +185,11 @@ beats=$!
 sleep 6
 
 cd web
+# The admin pages' tests (issue #111) sign in through the made-up
+# Authentik, as the fixture's admin or, with its person cookie, a listener.
+export RA_AUTHENTIK_URL="http://127.0.0.1:$akport"
 RA_URL="http://127.0.0.1:$port" npx playwright test --grep-invert @live --pass-with-no-tests "$@"
-RA_URL="http://127.0.0.1:$port" RA_FAKERECORDER="$tmp/fakerecorder" RA_FIXTURES="$fixtures" \
+RA_URL="http://127.0.0.1:$port" RA_FAKERECORDER="$tmp/fakerecorder" RA_FIXTURES="$fixtures" RA_CLIENT_HELD="$clientheld" \
 	RA_UDP_ADDR="127.0.0.1:$udp" RA_MEDIA="$tmp/media" RA_HEARTBEATS_HELD="$held" \
 	RA_WEBFIXTURE="$tmp/webfixture" RA_DATABASE_URL="$DATABASE_URL" RA_RECORDINGS="$tmp/recordings" \
 	npx playwright test --grep @live --workers=1 --pass-with-no-tests "$@"

@@ -2,15 +2,84 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/db"
 )
+
+// OverlapWindow is how far back the Recorders page looks for overlapping
+// calls (R13: "in the last 24 h").
+const OverlapWindow = 24 * time.Hour
+
+// Overlap is two recorders' overlapping calls on one system's talkgroup
+// (R13; ADR 0027): Recorders are the two by name, in name order, and
+// Message is R13's words for it.
+type Overlap struct {
+	SystemID    int64     `json:"system_id"`
+	SystemLabel string    `json:"system_label"`
+	Talkgroup   int32     `json:"talkgroup"`
+	Recorders   [2]string `json:"recorders"`
+	Calls       int64     `json:"calls"`
+	Message     string    `json:"message"`
+}
+
+// Overlaps is GET /api/v1/admin/overlaps: the last 24 hours' overlapping
+// calls, the most first. Since is where the 24 hours begin.
+type Overlaps struct {
+	Since    time.Time `json:"since"`
+	Overlaps []Overlap `json:"overlaps"`
+}
+
+// overlaps counts, over the 24 hours up to the admin API's clock, the
+// calls two recorders recorded on the same system and talkgroup at
+// overlapping times. Reading changes nothing, so it's neither audited nor
+// logged per request.
+func (a *Admin) overlaps(r *http.Request, _ string) (int, any, error) {
+	until := a.now().UTC()
+	since := until.Add(-OverlapWindow)
+	// Custom plans, in a read-only transaction, as the recent calls run
+	// (ADR 0013): with the window's bounds unknown, the generic plan joins
+	// the day's calls to every call of their talkgroups and filters, over
+	// a minute on a month's calls instead of a tenth of a second (ADR 0027).
+	ctx := r.Context()
+	tx, err := a.st.Pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return 0, nil, dbErr("overlaps", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, "SET LOCAL plan_cache_mode = force_custom_plan"); err != nil {
+		return 0, nil, dbErr("overlaps", err)
+	}
+	rows, err := a.st.WithTx(tx).RecorderOverlaps(ctx, db.RecorderOverlapsParams{
+		Since: pgtype.Timestamptz{Time: since, Valid: true}, Until: pgtype.Timestamptz{Time: until, Valid: true}})
+	if err != nil {
+		return 0, nil, dbErr("overlaps", err)
+	}
+	out := Overlaps{Since: since, Overlaps: make([]Overlap, 0, len(rows))}
+	for _, o := range rows {
+		names := [2]string{o.FirstRecorder, o.SecondRecorder}
+		if names[1] < names[0] {
+			names[0], names[1] = names[1], names[0]
+		}
+		calls := "1 overlapping call"
+		if o.Calls != 1 {
+			calls = fmt.Sprintf("%d overlapping calls", o.Calls)
+		}
+		out.Overlaps = append(out.Overlaps, Overlap{SystemID: o.SystemID, SystemLabel: o.SystemLabel, Talkgroup: o.Talkgroup,
+			Recorders: names, Calls: o.Calls,
+			Message: fmt.Sprintf("%s and %s both recorded TG %d: %s in the last 24 h", names[0], names[1], o.Talkgroup, calls)})
+	}
+	return http.StatusOK, out, nil
+}
 
 // The Recorders page's data (SPEC.md R14; ADR 0010): each active
 // recorder's state and signals, and its quiet threshold, the one thing an

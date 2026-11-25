@@ -201,6 +201,7 @@ func WithAdmin(a *Admin) Option {
 			{"PUT /recorders/{recorder}/attachments/{short_name}", a.attach},
 			{"DELETE /recorders/{recorder}/attachments/{short_name}", a.detach},
 			{"GET /rejections", a.rejections},
+			{"GET /overlaps", a.overlaps},
 			{"GET /groups", a.listGroups},
 			{"POST /groups", a.createGroup},
 			{"PATCH /groups/{group}", a.patchGroup},

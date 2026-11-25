@@ -46,6 +46,30 @@ type Provider struct {
 	// unverified makes the ID tokens say the email isn't proven
 	// (email_verified false); they say it is unless SetIdentity says not.
 	unverified bool
+	// people are the others a standalone provider signs in, by the value
+	// of the browser's PersonCookie (AddPerson).
+	people map[string]Person
+}
+
+// Person is someone a standalone provider can sign in besides its own
+// Subject, with their address proven.
+type Person struct{ Subject, Email, Name string }
+
+// PersonCookie names, on the provider's own /authorize, which of its
+// AddPerson people a browser signs in as. A browser without it signs in as
+// the provider's Subject.
+const PersonCookie = "fakeauthentik_person"
+
+// AddPerson lets a standalone provider sign in p too: a browser whose
+// PersonCookie is key signs in as p. Each browser chooses its own, so
+// tests running side by side don't change each other's sign-ins.
+func (p *Provider) AddPerson(key string, person Person) {
+	p.mu.Lock()
+	if p.people == nil {
+		p.people = map[string]Person{}
+	}
+	p.people[key] = person
+	p.mu.Unlock()
 }
 
 // SetIdentity makes the next sign-ins someone else's, as another person
@@ -56,7 +80,10 @@ func (p *Provider) SetIdentity(subject, email, name string, verified bool) {
 	p.mu.Unlock()
 }
 
-type grant struct{ challenge, nonce string }
+type grant struct {
+	challenge, nonce string
+	person           *Person // someone else than Subject (AddPerson)
+}
 
 // New starts a provider for ClientID with clientSecret, closed when the
 // test ends.
@@ -93,6 +120,20 @@ func Standalone(url, clientSecret, subject, email, name string, logf func(format
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if c, err := r.Cookie(PersonCookie); err == nil {
+			p.mu.Lock()
+			who, ok := p.people[c.Value]
+			if ok {
+				g := p.codes[code]
+				g.person = &who
+				p.codes[code] = g
+			}
+			p.mu.Unlock()
+			if !ok {
+				http.Error(w, "no such person", http.StatusBadRequest)
+				return
+			}
 		}
 		bq := back.Query()
 		bq.Set("code", code)
@@ -156,6 +197,9 @@ func build(clientSecret, subject, email, name string, logf func(format string, a
 			nonce = p.nonce
 		}
 		sub, email, name, verified := p.Subject, p.Email, p.Name, !p.unverified
+		if g.person != nil {
+			sub, email, name, verified = g.person.Subject, g.person.Email, g.person.Name, true
+		}
 		p.mu.Unlock()
 		sum := sha256.Sum256([]byte(v))
 		id, secret, _ := r.BasicAuth()

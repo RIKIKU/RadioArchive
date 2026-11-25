@@ -25,6 +25,8 @@ export function env(name: string): string {
 export interface PlannedCall {
 	unit: number;
 	talkgroup?: number;
+	/** trunk-recorder's shortName for the system (`ex`, attached to EX, if not given). */
+	shortName?: string;
 	atMs: number;
 	/** Fixture PCM files, played one after another. */
 	pcm: { file: string; ms: number }[];
@@ -66,7 +68,7 @@ export async function sendCalls(calls: PlannedCall[]): Promise<Map<number, numbe
 	for (const c of calls) {
 		const name = `u${c.unit}`;
 		const num = callNum++;
-		scenario.calls[name] = { sys_num: 0, call_num: num, start_time: Math.floor((epoch + c.atMs) / 1000), short_name: 'ex', talkgroup: c.talkgroup ?? 1001, freq: 851012500 };
+		scenario.calls[name] = { sys_num: 0, call_num: num, start_time: Math.floor((epoch + c.atMs) / 1000), short_name: c.shortName ?? 'ex', talkgroup: c.talkgroup ?? 1001, freq: 851012500 };
 		scenario.events.push({ at_ms: c.atMs, type: 'transmission', call: name, unit: c.unit });
 		let at = c.atMs;
 		for (const p of c.pcm) {
@@ -101,6 +103,17 @@ export function recorderDeaf(): () => void {
 		child.kill('SIGINT');
 		rmSync(held, { force: true });
 	};
+}
+
+/**
+ * The recorder client's connection drops (A27): the client is stopped while
+ * the file RA_CLIENT_HELD exists (scripts/ci/e2e-web.sh), until the
+ * returned function is called, which starts it again.
+ */
+export function clientDisconnected(): () => void {
+	const held = env('RA_CLIENT_HELD');
+	writeFileSync(held, '');
+	return () => rmSync(held, { force: true });
 }
 
 /**

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -302,12 +303,30 @@ func (f *a10World) fireground(id string) string {
 
 // appBuild stands in for the browser app's build (web/build) in the
 // server's tests, which don't build the frontend. The browser tests
-// (web/tests) and e2e-a10.sh run the real one, in the binary.
+// (web/tests) and e2e-a10.sh run the real one, in the binary. Its script
+// holds the admin menu's words, as the real build's does: the menu's
+// "Admin" (R84) is the frame's, which every visitor's browser gets, and
+// not 1003's name (ADR 0027).
 var appBuild = fstest.MapFS{
 	"index.html": {Data: []byte(`<!doctype html>
 <html lang="en-AU"><head><title>RadioArchive</title><script type="module" src="/_app/immutable/start.js"></script></head>
 <body><div style="display: contents"></div></body></html>`)},
-	"_app/immutable/start.js": {Data: []byte("export {};\n")},
+	"_app/immutable/start.js": {Data: []byte(`export const admin = { id: "admin", label: "Admin", entries: ["Recorders", "Settings"] };` + "\n")},
+}
+
+// appChrome is the app's own files under _app, as built: the UI chrome
+// every page ships, the same whoever asks and whatever a path names. A10's
+// literal check doesn't apply inside them (ADR 0027): each is blanked as
+// a whole file, byte for byte, so anything an answer holds besides one of
+// them, a page built from the shell included, is still checked.
+func appChrome() []string {
+	var out []string
+	for name, f := range appBuild {
+		if strings.HasPrefix(name, "_app/") {
+			out = append(out, string(f.Data))
+		}
+	}
+	return out
 }
 
 func callListProbes(method string) []a10Probe {
@@ -596,6 +615,13 @@ func (f *a10World) leaks(a answer) []string {
 		text = strings.ReplaceAll(text, id, "<public call>")
 		raw = strings.ReplaceAll(raw, id, "<public call>")
 	}
+	// The app's own files are chrome, not data (appChrome). text has the
+	// body quoted, so a file is blanked there in its quoted form.
+	for _, c := range appChrome() {
+		q := strconv.Quote(c)
+		text = strings.ReplaceAll(text, q[1:len(q)-1], "<the app's file>")
+		raw = strings.ReplaceAll(raw, c, "<the app's file>")
+	}
 	var out []string
 	for _, s := range f.secrets {
 		if strings.Contains(text, s) || strings.Contains(raw, s) {
@@ -608,6 +634,37 @@ func (f *a10World) leaks(a answer) []string {
 		}
 	}
 	return out
+}
+
+// TestA10CheckScope: the literal check passes the app's own files, which
+// carry the admin menu's "Admin" (R84; ADR 0027), and still fails any data
+// answer, page or file that holds 1003's name or its audio beside them.
+func TestA10CheckScope(t *testing.T) {
+	f := &a10World{secrets: []string{"1003", "Admin", "ADMIN", `"admin"`}, secretAudio: [][]byte{[]byte("OggS-1003")}}
+	script := string(appBuild["_app/immutable/start.js"].Data)
+	shell := string(appBuild["index.html"].Data)
+	if !strings.Contains(script, `"Admin"`) {
+		t.Fatal("the stand-in build has no admin menu to scope out")
+	}
+	js := http.Header{"Content-Type": {"text/javascript"}}
+	for _, c := range []struct {
+		why  string
+		body string
+		want []string
+	}{
+		{"the app's script, with the admin menu", script, nil},
+		{"the shell page", shell, nil},
+		{"a data answer naming 1003", `{"talkgroups":[{"id":1003,"name":"Admin"}]}`, []string{"1003", "Admin"}},
+		{"its label", `{"label":"ADMIN"}`, []string{"ADMIN"}},
+		{"the app's script with 1003's name after it", script + `{"name":"Admin"}`, []string{"Admin"}},
+		{"part of the app's script", script[:len(script)-2], []string{"Admin", `"admin"`}},
+		{"a page with 1003's name in its preview", strings.Replace(shell, "</head>", `<meta property="og:title" content="Admin" /></head>`, 1), []string{"Admin"}},
+		{"1003's audio beside the script", script + "OggS-1003", []string{"1003", "hidden audio"}},
+	} {
+		if got := f.leaks(answer{status: 200, header: js, body: []byte(c.body)}); !slices.Equal(got, c.want) {
+			t.Errorf("%s: leaks %q, want %q", c.why, got, c.want)
+		}
+	}
 }
 
 // TestIntegrationA10 is SPEC.md A10 for storage and the API (M1): with 1003

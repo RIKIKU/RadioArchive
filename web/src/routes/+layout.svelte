@@ -24,6 +24,7 @@
 	import { basketState } from '#lib/basket/state.svelte.ts';
 	import { dockIcons } from '#lib/audio/icons.ts';
 	import type { Profile } from '#lib/account/profile.ts';
+	import { adminGroup } from '#lib/admin/menu.ts';
 
 	let { children } = $props();
 
@@ -135,10 +136,16 @@
 	]);
 	const bar = $derived([top[0], { ...top[1], label: 'Recent' }, top[2]]);
 	const brand = { name: 'RadioArchive', mark: 'RA', href: '/' };
+
+	// R84's Admin section (ADR 0027), for an admin only: a group of the side
+	// menu, and on phones a group of the bottom bar's More. It opens
+	// nothing by itself: each admin page follows the admin API's answer.
+	const groups = $derived(acct.who?.admin ? [adminGroup()] : []);
+	let opened: Record<string, boolean> = $state({});
 </script>
 
 <Frame dockLabel="Now playing">
-	{#snippet menu()}<Menu {brand} current={page.url.pathname} {top} />{/snippet}
+	{#snippet menu()}<Menu {brand} current={page.url.pathname} {top} {groups} open={opened} ontoggle={(id, was) => (opened = { ...opened, [id]: !was })} />{/snippet}
 	{#snippet start()}<a class="brand" href="/">RadioArchive</a>{/snippet}
 	{#snippet dock()}<Dock {player} />{/snippet}
 	{#snippet notices()}
@@ -174,7 +181,7 @@
 			{/snippet}
 		</AccountMenu>
 	{/snippet}
-	{#snippet bottomBar()}<BottomBar entries={bar} current={page.url.pathname} />{/snippet}
+	{#snippet bottomBar()}<BottomBar entries={bar} {groups} current={page.url.pathname} />{/snippet}
 
 	{#if notice === 'signin-failed'}
 		<p class="alert" role="alert">Couldn't sign you in. Try again from the account menu. Listening works as before.</p>

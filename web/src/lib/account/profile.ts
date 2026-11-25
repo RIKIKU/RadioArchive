@@ -24,7 +24,12 @@ export interface Profile {
 export interface AccountState {
 	/** Whether listeners can sign in here. */
 	signin: boolean;
-	account: { id: string; name?: string; email?: string } | null;
+	/**
+	 * admin: the account is an admin (ADR 0025), so the frame shows the
+	 * Admin menu (ADR 0027). It opens nothing: the admin API checks every
+	 * request itself.
+	 */
+	account: { id: string; name?: string; email?: string; admin?: boolean } | null;
 	profile: Profile | null;
 	/** Whether the account can hold settings (an administrator's can't). */
 	saves: boolean;

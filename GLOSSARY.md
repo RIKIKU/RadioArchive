@@ -173,3 +173,7 @@ _Avoid_: Outage banner, recorder alert
 **Attachment**:
 An admin's link from one recorder's system, as trunk-recorder names it (its `shortName`), to the system its calls are filed under.
 _Avoid_: Mapping, binding, assignment
+
+**Overlapping calls**:
+Two recorders' calls on the same system and talkgroup whose times overlap: both recorded the same call, so their coverage overlaps. The Recorders page counts them over the last 24 hours; both copies are kept.
+_Avoid_: Duplicates, double calls
