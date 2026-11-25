@@ -43,6 +43,13 @@
 // recorder client are never limited; signed-in listeners are, as everyone
 // is (P3). No address is logged.
 //
+// Metrics (SPEC.md R90, ADR 0040), for the monitoring stack:
+//
+//	METRICS_TOKEN   the bearer token /metrics asks for, at least 16 characters, or
+//	                METRICS_TOKEN_FILE naming a file holding it. Unset, /metrics
+//	                answers 404. The reverse proxy denies /metrics
+//	                (docs/deploy.md); Alloy scrapes it from inside
+//
 // Listeners' sign-in (ADR 0009), on when AUTHENTIK_URL is set:
 //
 //	APP_URL                 the radio's public URL, e.g. https://radio.example.org
@@ -88,6 +95,7 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/retention"
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
+	"github.com/RIKIKU/RadioArchive/internal/telemetry"
 	"github.com/RIKIKU/RadioArchive/internal/version"
 	"github.com/RIKIKU/RadioArchive/web"
 )
@@ -207,7 +215,14 @@ func serve(log *slog.Logger) error {
 	if !sc.on() {
 		log.Warn("listener sign-in is off: AUTHENTIK_URL isn't set. Listening works as ever; nobody can save to an account")
 	}
-	handler, acc, err := apiHandler(st, log, rs, g, job, sc, lc)
+	mt, err := metricsToken(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if mt == "" {
+		log.Info("metrics are off: METRICS_TOKEN isn't set, so /metrics answers 404")
+	}
+	handler, acc, err := apiHandler(st, log, rs, g, job, sc, lc, mt)
 	if err != nil {
 		return err
 	}
@@ -246,7 +261,10 @@ func serve(log *slog.Logger) error {
 // admin hears and sees exactly what anyone does (P3). With sign-in off,
 // nobody is an admin, and every admin route answers 401. The account is
 // returned for serve to run its hourly sweep of expired sessions.
-func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate, job *retention.Job, sc signInConfig, lc limits.Config) (*server.API, *account.Service, error) {
+//
+// The metrics (ADR 0040) are at /metrics, for the bearer of metricsToken;
+// with none, /metrics answers 404.
+func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate, job *retention.Job, sc signInConfig, lc limits.Config, metricsToken string) (*server.API, *account.Service, error) {
 	acc, err := sc.service(g, st, log)
 	if err != nil {
 		return nil, nil, err
@@ -261,10 +279,28 @@ func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate
 	}
 	// The deployment's clock: the talkgroup table's 30 days (ADR 0026).
 	admin.WithClock(time.Now).WithRetention(job).WithRecorders(rs).WithListenerSessions(acc).WithAccounts(acc)
+	reg := telemetry.NewRegistry(telemetry.All)
+	reg.Add(telemetry.Process(version.Version, time.Now()), rs, g.Live(), lim, job)
 	return server.New(st, log, server.WithRecorders(rs), server.WithPublic(public.New(g, log, public.WithLocation(deploymentZone()))),
 		server.WithAccount(acc), server.WithAdmin(admin), server.WithApp(web.New()),
 		// Admins are exempt, by the same check as the admin API's (R70).
-		server.WithLimits(lim, acc)), acc, nil
+		server.WithLimits(lim, acc), server.WithMetrics(reg, metricsToken)), acc, nil
+}
+
+// metricsToken is METRICS_TOKEN, or the contents of METRICS_TOKEN_FILE: ""
+// when neither is set, and metrics are off.
+func metricsToken(getenv func(string) string) (string, error) {
+	if getenv("METRICS_TOKEN") == "" && getenv("METRICS_TOKEN_FILE") == "" {
+		return "", nil
+	}
+	t, err := secret(getenv, "METRICS_TOKEN")
+	if err != nil {
+		return "", err
+	}
+	if len(t) < 16 {
+		return "", errors.New("METRICS_TOKEN must be at least 16 characters: openssl rand -hex 32 makes one")
+	}
+	return t, nil
 }
 
 // deploymentZone is TZ's zone, loaded by its name so the public API can tell

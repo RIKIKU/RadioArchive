@@ -24,12 +24,14 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/account"
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	"github.com/RIKIKU/RadioArchive/internal/gate"
+	"github.com/RIKIKU/RadioArchive/internal/limits"
 	"github.com/RIKIKU/RadioArchive/internal/opus"
 	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/internal/recorderclient"
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/storetest"
+	"github.com/RIKIKU/RadioArchive/internal/telemetry"
 	"github.com/RIKIKU/RadioArchive/internal/version"
 	"github.com/RIKIKU/RadioArchive/testing/fakerecorder"
 )
@@ -124,6 +126,11 @@ type rig struct {
 
 	client  *recorderclient.Client
 	stopCli func()
+
+	// Set before serverUp: the heavy-use limits in front of the public
+	// API, and the metrics token that turns on /metrics (A32).
+	lim          *limits.Limits
+	metricsToken string
 }
 
 // testAdmin stands in for admin sign-in (account.Service, ADR 0025): a
@@ -298,8 +305,22 @@ func (r *rig) serverUp(t *testing.T) {
 	}
 	r.addr = ln.Addr().String()
 	r.api = "http://" + r.addr
-	srv := &http.Server{Handler: server.New(r.st, r.log, server.WithRecorders(rs), server.WithAdmin(admin),
-		server.WithPublic(public.New(g, r.log))),
+	opts := []server.Option{server.WithRecorders(rs), server.WithAdmin(admin)}
+	if r.lim != nil {
+		opts = append(opts, server.WithLimits(r.lim, testAdmin{}))
+	}
+	opts = append(opts, server.WithPublic(public.New(g, r.log)))
+	if r.metricsToken != "" {
+		// As the binary wires them (ADR 0040), but for the nightly job's,
+		// which the rig doesn't run.
+		reg := telemetry.NewRegistry(telemetry.All)
+		reg.Add(telemetry.Process(r.serverVersion, time.Now()), rs, g.Live())
+		if r.lim != nil {
+			reg.Add(r.lim)
+		}
+		opts = append(opts, server.WithMetrics(reg, r.metricsToken))
+	}
+	srv := &http.Server{Handler: server.New(r.st, r.log, opts...),
 		// Live sockets are hijacked, so Close doesn't end them; cancelling
 		// their requests' context does.
 		BaseContext: func(net.Listener) context.Context { return ctx }}

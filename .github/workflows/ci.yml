@@ -238,6 +238,22 @@ jobs:
           sh scripts/ci/e2e-a1.sh radioarchive-client:ci
       - name: A10 end to end (the binary's public API shows nothing of hidden 1003)
         run: sh scripts/ci/e2e-a10.sh radioarchive-client:ci
+      - name: The metrics (R90) and no names in them or the API's log (A32)
+        # After A1 and A10 put the fixture's calls through the real images:
+        # /metrics answers only with the token, and neither it nor the
+        # API's log names a fixture talkgroup or unit (ADR 0040).
+        run: |
+          token=$(sed -n 's/^METRICS_TOKEN=//p' .env)
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/metrics)
+          test "$code" = 401 || { echo "FAIL: /metrics without the token answered $code" >&2; exit 1; }
+          curl --fail -sS -H "Authorization: Bearer $token" http://127.0.0.1:8080/metrics > metrics.txt
+          grep -q '^radioarchive_build_info{version=' metrics.txt
+          grep -q '^radioarchive_telemetry_dropped_total 0$' metrics.txt
+          docker compose logs --no-color api > api.log
+          if grep -nE 'Dispatch North|DISP N|Fireground 41|FG 41|Engine 1|Portables' metrics.txt api.log; then
+            echo "FAIL: a fixture name is in the metrics or the API's log" >&2; exit 1
+          fi
+          echo "ok: $(grep -c '^radioarchive_' metrics.txt) samples, no fixture names"
       - name: Listener sign-in end to end (A33, with Authentik and Mailpit)
         # In Playwright's image at the version web/package-lock.json locks,
         # on the runner's network, against the stack started above.

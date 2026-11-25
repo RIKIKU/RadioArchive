@@ -148,7 +148,7 @@ func newEnvAt(t *testing.T, serverVersion string, more ...server.Option) *env {
 	go e.live.Run(ctx)
 	e.rs, err = server.NewRecorders(st, log, server.RecordersConfig{
 		RecordingsDir: e.dir, Live: tee{e.sink, e.live}, ServerVersion: serverVersion,
-		Notice: e.live, Now: e.clock.now})
+		Notice: e.live, Now: e.clock.now, FreshMetrics: true})
 	if err != nil {
 		t.Fatal(err)
 	}

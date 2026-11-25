@@ -20,6 +20,7 @@ import (
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/db"
+	"github.com/RIKIKU/RadioArchive/internal/telemetry"
 	"github.com/RIKIKU/RadioArchive/internal/version"
 )
 
@@ -57,6 +58,9 @@ type RecordersConfig struct {
 	NoticeAfter time.Duration
 	// Now is the signals' clock (default time.Now). Tests control it.
 	Now func() time.Time
+	// FreshMetrics makes every scrape read the database afresh, rather
+	// than reusing a read for up to a few minutes (ADR 0040). For tests.
+	FreshMetrics bool
 }
 
 // Counters are the recorder endpoints' totals, for metrics (R90) and tests.
@@ -70,6 +74,9 @@ type Counters struct {
 	ClientsOutOfDate atomic.Uint64 // live sockets opened by a client one minor version behind (R6)
 	Uploads          sync.Map      // status -> *atomic.Uint64
 	Rejected         sync.Map      // reason -> *atomic.Uint64: calls refused, each counted once (R90)
+	// LiveDelay is each live call's delay from its first PCM to its first
+	// frame passed on (R38).
+	LiveDelay *telemetry.Hist
 }
 
 func (c *Counters) upload(status string) { inc(&c.Uploads, status) }
@@ -113,7 +120,8 @@ type Recorders struct {
 	Stat Counters
 	Sig  SignalCounters
 
-	sig *signals
+	sig     *signals
+	metrics *metricsCache
 
 	mu       sync.Mutex
 	sessions map[int64]*session // by recorder ID: one connection per client key
@@ -144,7 +152,7 @@ func NewRecorders(st *store.Store, log *slog.Logger, cfg RecordersConfig) (*Reco
 		cfg.Now = time.Now
 	}
 	return &Recorders{st: st, log: log, cfg: cfg, sessions: map[int64]*session{}, listening: make(chan struct{}),
-		sig: newSignals(cfg.Now, cfg.NoticeAfter)}, nil
+		sig: newSignals(cfg.Now, cfg.NoticeAfter), metrics: newMetricsCache(cfg.FreshMetrics), Stat: Counters{LiveDelay: telemetry.NewHist(telemetry.LiveDelay)}}, nil
 }
 
 // Listening is closed once Run is listening for key changes.
@@ -255,11 +263,11 @@ func (rs *Recorders) unregister(s *session) {
 
 // heartbeat takes the client's heartbeat for the recorder's signals, if s
 // is still its socket.
-func (rs *Recorders) heartbeat(s *session, systems []cp.SystemRate) {
+func (rs *Recorders) heartbeat(s *session, systems []cp.SystemRate, queue cp.QueueState) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	if rs.sessions[s.rec.ID] == s {
-		rs.sig.heartbeat(s.rec.ID, systems)
+		rs.sig.heartbeat(s.rec.ID, systems, queue)
 	}
 }
 

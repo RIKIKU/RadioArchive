@@ -423,6 +423,15 @@ JOIN recorders rb ON rb.id = o.second_id
 JOIN systems s ON s.id = o.system_id
 ORDER BY o.calls DESC, o.system_id, o.talkgroup, ra.name, rb.name;
 
+-- name: CountMissingRecordings :one
+-- Calls that ended in [ended_after, ended_before) with no recording yet
+-- (R19; ADR 0040). No call lasts a day, so the started_at bound lets the
+-- index read only the window.
+SELECT count(*)::bigint AS calls FROM calls
+WHERE recording_path IS NULL AND ended_at IS NOT NULL
+  AND ended_at >= sqlc.arg(ended_after)::timestamptz AND ended_at < sqlc.arg(ended_before)::timestamptz
+  AND started_at >= sqlc.arg(ended_after)::timestamptz - interval '1 day';
+
 -- name: TalkgroupRejections :many
 SELECT j.system_id::bigint AS system_id, j.talkgroup, j.reason, count(*) AS calls,
        max(j.rejected_at)::timestamptz AS last_at

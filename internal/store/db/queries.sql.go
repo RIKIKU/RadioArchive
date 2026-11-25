@@ -508,6 +508,28 @@ func (q *Queries) CountAuditEntriesPast(ctx context.Context, days int32) (int64,
 	return count, err
 }
 
+const countMissingRecordings = `-- name: CountMissingRecordings :one
+SELECT count(*)::bigint AS calls FROM calls
+WHERE recording_path IS NULL AND ended_at IS NOT NULL
+  AND ended_at >= $1::timestamptz AND ended_at < $2::timestamptz
+  AND started_at >= $1::timestamptz - interval '1 day'
+`
+
+type CountMissingRecordingsParams struct {
+	EndedAfter  pgtype.Timestamptz
+	EndedBefore pgtype.Timestamptz
+}
+
+// Calls that ended in [ended_after, ended_before) with no recording yet
+// (R19; ADR 0040). No call lasts a day, so the started_at bound lets the
+// index read only the window.
+func (q *Queries) CountMissingRecordings(ctx context.Context, arg CountMissingRecordingsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countMissingRecordings, arg.EndedAfter, arg.EndedBefore)
+	var calls int64
+	err := row.Scan(&calls)
+	return calls, err
+}
+
 const countRecordingsBefore = `-- name: CountRecordingsBefore :one
 
 SELECT count(*) FROM calls

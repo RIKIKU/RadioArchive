@@ -46,8 +46,9 @@ type RouteKind int
 // path names, a call link (ADR 0017): it lives where app routes do, can
 // only come from internal/public's pages, reads through the gate, and its
 // handler sees no cookie or credential either; the server writes the app's
-// page around what it says, in the asker's look. New refuses any other
-// route.
+// page around what it says, in the asker's look. The metrics route is
+// MetricsPath alone, behind its own bearer token (ADR 0040), never limited
+// and never public. New refuses any other route.
 const (
 	HealthRoute RouteKind = iota
 	RecorderRoute
@@ -56,10 +57,11 @@ const (
 	AppRoute
 	AccountRoute
 	PageRoute
+	MetricsRoute
 )
 
 func (k RouteKind) String() string {
-	return [...]string{"health", "recorder", "admin", "public", "app", "account", "page"}[k]
+	return [...]string{"health", "recorder", "admin", "public", "app", "account", "page", "metrics"}[k]
 }
 
 // Route is one route the API serves.
@@ -105,7 +107,7 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // apiPath says whether path is the API's rather than the app's: the sign-in
 // hops are the API's too.
 func apiPath(path string) bool {
-	return path == "/healthz" || path == APIPath || under(path, APIPath) ||
+	return path == "/healthz" || path == MetricsPath || path == APIPath || under(path, APIPath) ||
 		path == account.AuthPath || under(path, account.AuthPath)
 }
 
@@ -127,6 +129,8 @@ func (a *API) handle(kind RouteKind, pattern string, h http.Handler) {
 	switch kind {
 	case HealthRoute:
 		fits = path == "/healthz"
+	case MetricsRoute:
+		fits = path == MetricsPath
 	case RecorderRoute:
 		fits = under(path, RecorderPath)
 	case AdminRoute:

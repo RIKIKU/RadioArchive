@@ -110,6 +110,9 @@ services:
       LIMIT_ZIPS_TOTAL: ${LIMIT_ZIPS_TOTAL:-}
       LIMIT_ZIP_SPEED: ${LIMIT_ZIP_SPEED:-}
       LIMIT_ZIP_SPEED_TOTAL: ${LIMIT_ZIP_SPEED_TOTAL:-}
+      # The bearer token /metrics asks for (R90, ADR 0040). Unset, /metrics
+      # answers 404.
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
     ports:
       - "127.0.0.1:${API_PORT:-8080}:8080"
     volumes:

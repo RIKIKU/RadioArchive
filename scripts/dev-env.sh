@@ -29,6 +29,7 @@ AUTHENTIK_ADMIN_EMAIL=akadmin@example.test
 AUTHENTIK_ADMIN_PASSWORD=$(secret 24)
 OIDC_CLIENT_SECRET=$(secret 60)
 AUTHENTIK_API_TOKEN=$(secret 60)
+METRICS_TOKEN=$(secret 40)
 LISTENER_SIGNUP=${LISTENER_SIGNUP:-true}
 INITIAL_ADMIN_EMAIL=${INITIAL_ADMIN_EMAIL:-owner-$(secret 8 | tr 'A-Z' 'a-z')@example.test}
 # The test stack raises the heavy-use limits (SPEC.md section 6.11): its
