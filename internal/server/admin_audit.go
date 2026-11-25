@@ -48,7 +48,8 @@ type AuditEntry struct {
 }
 
 // AuditPage is GET /api/v1/admin/audit: a page of entries, and the cursor
-// for the next (null on the last).
+// for the next (null on the last). Newest first, or oldest first with
+// order=oldest (ADR 0032), the cursor going on in the same order.
 type AuditPage struct {
 	Entries []AuditEntry `json:"entries"`
 	Next    *string      `json:"next"`
@@ -93,6 +94,13 @@ func (a *Admin) auditLog(r *http.Request, _ string) (int, any, error) {
 		}
 		f.Limit = n
 	}
+	switch v.Get("order") {
+	case "", "newest":
+	case "oldest":
+		f.Oldest = true
+	default:
+		return 0, nil, refuseAdmin(http.StatusBadRequest, "invalid_order", "order must be newest or oldest.")
+	}
 	if s := v.Get("cursor"); s != "" {
 		at, id, ok := parseAuditCursor(s)
 		if !ok {
@@ -122,5 +130,31 @@ func (a *Admin) auditLog(r *http.Request, _ string) (int, any, error) {
 			Who: AuditWho{ID: e.By.Subject, Name: e.By.Name, Email: e.By.Email}, Via: e.By.Via,
 			Kind: e.Kind, Thing: e.Thing, Label: e.Label, Action: e.Action, Changes: changes})
 	}
+	return http.StatusOK, out, nil
+}
+
+// AuditAdminsPath lists who has entries, for the Audit log page's "who"
+// filter (ADR 0032).
+const AuditAdminsPath = AuditPath + "/admins"
+
+// auditAdmins is GET /api/v1/admin/audit/admins: everyone with an entry,
+// by the name and email of their latest (an account changed or deleted
+// since still has its entries), sorted by name. The system, whose entries
+// are the nightly prune's, is one ("system").
+func (a *Admin) auditAdmins(r *http.Request, _ string) (int, any, error) {
+	rows, err := a.st.AuditAdmins(r.Context())
+	if err != nil {
+		return 0, nil, err
+	}
+	out := make([]AuditWho, 0, len(rows))
+	for _, x := range rows {
+		out = append(out, AuditWho{ID: x.Subject, Name: x.Name, Email: x.Email})
+	}
+	slices.SortStableFunc(out, func(x, y AuditWho) int {
+		if c := strings.Compare(strings.ToLower(x.Name), strings.ToLower(y.Name)); c != 0 {
+			return c
+		}
+		return strings.Compare(x.ID, y.ID)
+	})
 	return http.StatusOK, out, nil
 }

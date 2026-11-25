@@ -27,7 +27,14 @@ const (
 	ViaModule = "module"
 	// ViaImport: the setup import (issue #115).
 	ViaImport = "import"
+	// ViaNightly: the nightly run's prune of the audit log itself (ADR
+	// 0032), by SystemSubject. Only the database's prune writes it;
+	// Audited refuses it.
+	ViaNightly = "nightly"
 )
+
+// SystemSubject is who the nightly prune's entry names: no account.
+const SystemSubject = "system"
 
 // The kinds of thing an admin changes.
 const (
@@ -40,11 +47,18 @@ const (
 	AuditRecorder   = "recorder"
 	AuditRetention  = "retention"
 	AuditAccount    = "account"
+	// AuditAudit is the audit log itself: the nightly prune's entry
+	// (ADR 0032).
+	AuditAudit = "audit"
 )
 
 // AuditKinds are the kinds, in the order the Audit log page lists them.
 var AuditKinds = []string{AuditSystem, AuditTalkgroup, AuditUnit, AuditGroup, AuditTag, AuditAttachment,
-	AuditRecorder, AuditRetention, AuditAccount}
+	AuditRecorder, AuditRetention, AuditAccount, AuditAudit}
+
+// AuditRetentionThing is the audit log's own retention setting's thing,
+// beside the recordings' (""), both of kind retention.
+const AuditRetentionThing = "audit"
 
 // What an entry says happened to its thing.
 const (
@@ -276,6 +290,9 @@ type AuditFilter struct {
 	// before. Zero for the first page.
 	AfterAt time.Time
 	AfterID int64
+	// Oldest lists oldest first; the cursor is then the last entry of the
+	// page before in that order.
+	Oldest bool
 	// Limit is the page's size.
 	Limit int
 }
@@ -294,15 +311,21 @@ func optTime(t time.Time) pgtype.Timestamptz {
 	return ts(t)
 }
 
-// AuditEntries are the entries f selects, newest first. It writes nothing:
-// reading the audit log isn't in it.
+// AuditEntries are the entries f selects, newest first (oldest first with
+// f.Oldest). It writes nothing: reading the audit log isn't in it.
 func (s *Store) AuditEntries(ctx context.Context, f AuditFilter) ([]AuditEntry, error) {
 	p := db.ListAuditEntriesParams{Subject: optString(f.Subject), Kind: optString(f.Kind), Thing: optString(f.Thing),
 		Since: optTime(f.Since), Until: optTime(f.Until), PageSize: int32(f.Limit)}
 	if !f.AfterAt.IsZero() {
 		p.AfterAt, p.AfterID = ts(f.AfterAt), &f.AfterID
 	}
-	rows, err := s.ListAuditEntries(ctx, p)
+	var rows []db.AuditLog
+	var err error
+	if f.Oldest {
+		rows, err = s.ListAuditEntriesOldest(ctx, db.ListAuditEntriesOldestParams(p))
+	} else {
+		rows, err = s.ListAuditEntries(ctx, p)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read the audit log: %s", SafeError(err))
 	}
@@ -316,4 +339,45 @@ func (s *Store) AuditEntries(ctx context.Context, f AuditFilter) ([]AuditEntry, 
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// AuditAdmin is someone with an entry: their account's subject, with the
+// name and email of their latest entry. The system's prune is one.
+type AuditAdmin struct {
+	Subject, Name, Email string
+}
+
+// AuditAdmins is everyone with an entry, for the Audit log page's "who"
+// filter. It writes nothing.
+func (s *Store) AuditAdmins(ctx context.Context) ([]AuditAdmin, error) {
+	rows, err := s.ListAuditAdmins(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the audit log: %s", SafeError(err))
+	}
+	out := make([]AuditAdmin, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, AuditAdmin{Subject: r.Subject, Name: r.AdminName, Email: r.AdminEmail})
+	}
+	return out, nil
+}
+
+// AuditPrune is what one prune of the audit log did (ADR 0032).
+type AuditPrune struct {
+	// Deleted is how many entries went: those from before Cutoff, the
+	// database's now less Days.
+	Deleted int64
+	Cutoff  time.Time
+	Days    int
+}
+
+// PruneAuditLog deletes the entries past the audit log's retention period
+// and, when any went, writes one entry saying how many and from before
+// when, as the system (ViaNightly). It's the nightly run's; nothing else
+// can delete an entry (migration 00026).
+func (s *Store) PruneAuditLog(ctx context.Context) (AuditPrune, error) {
+	r, err := s.Queries.PruneAuditLog(ctx)
+	if err != nil {
+		return AuditPrune{}, fmt.Errorf("prune the audit log: %s", SafeError(err))
+	}
+	return AuditPrune{Deleted: r.Deleted, Cutoff: r.Cutoff.Time, Days: int(r.Days)}, nil
 }
