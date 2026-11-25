@@ -28,7 +28,7 @@ export const adminPages: AdminEntry[] = [
 	{ href: '/admin/recorders', label: 'Recorders', svg: adminIcons.recorders, text: 'Recorders, their signals and overlapping calls' },
 	{ href: '/admin/accounts', label: 'Accounts', svg: adminIcons.accounts, text: 'Who has signed in: roles, disabling and deleting' },
 	{ href: '/admin/audit', label: 'Audit log', svg: adminIcons.audit, text: 'Every admin change: who, how, when and what' },
-	{ href: '/admin/settings', label: 'Settings', svg: adminIcons.settings, text: 'Retention and the recordings volume' }
+	{ href: '/admin/settings', label: 'Settings', svg: adminIcons.settings, text: 'Retention, the recordings volume and the setup export' }
 ];
 
 /** The Admin group, for ArchiveUx's Menu and BottomBar. */

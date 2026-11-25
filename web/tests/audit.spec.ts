@@ -11,7 +11,7 @@
 // that change what other tests see (saving the period, renaming 1001) are
 // admin-live.spec.ts's.
 import { test, expect, type Page } from '@playwright/test';
-import { axe, looks, saveLook, shot, signIn, themes, widths } from './admin.ts';
+import { axe, inLook, looks, ownLook, saveLook, shot, signIn, themes, widths } from './admin.ts';
 
 const table = (page: Page) => page.getByRole('table', { name: 'Audit log' });
 const body = (page: Page) => table(page).getByRole('rowgroup').last().getByRole('row');
@@ -202,31 +202,37 @@ for (const look of looks)
 			test(`axe: the Audit log page, its calendar and filters, and Settings' audit period asking, ${look}, ${theme}, ${width}px`, async ({ page, context, baseURL }) => {
 				test.setTimeout(90_000);
 				await saveLook(context, baseURL!, look, theme);
+				await ownLook(page);
 				await signIn(page, 'admin');
 				await page.setViewportSize({ width, height: 900 });
 				const tag = `${look}-${theme}-${width}`;
 
 				await page.goto('/admin/audit?who=fixture-second-admin');
 				await expect(body(page)).toHaveCount(3);
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await shot(page, `audit-${tag}`);
 
 				// The made-up past, oldest first, with a row's History.
 				await page.goto('/admin/audit?order=oldest');
 				await expect(body(page).first()).toContainText('Deleted 12 entries');
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await body(page).filter({ hasText: 'Label DISP → DISP N' }).getByRole('button', { name: /^History of / }).click();
 				await expect(page.getByRole('button', { name: 'Show every talkgroup' })).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await shot(page, `audit-history-${tag}`);
 
 				await page.getByRole('button', { name: 'Dates', exact: true }).click();
 				await expect(page.getByRole('dialog')).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await page.keyboard.press('Escape');
 
 				await page.goto('/admin/audit?who=nobody-at-all');
 				await expect(page.getByText('No changes match these filters.')).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 
 				// Settings, asking before a shorter audit period deletes entries; cancelled.
@@ -236,11 +242,13 @@ for (const look of looks)
 				await page.getByRole('button', { name: "Save the audit log's retention" }).click();
 				const confirm = page.getByRole('region', { name: 'Delete 3 audit log entries?' });
 				await expect(confirm).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await shot(page, `settings-audit-${tag}`);
 				await confirm.getByRole('button', { name: 'Cancel' }).click();
 				await page.getByRole('textbox', { name: /Keep audit log entries/ }).fill('');
 				await page.getByRole('button', { name: "Save the audit log's retention" }).click();
 				await expect(page.locator('#audit-days-error')).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 			});

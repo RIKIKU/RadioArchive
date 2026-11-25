@@ -9,7 +9,8 @@
 // and both themes at 375 px and 1,280 px. The tests that change what other
 // tests see (retention, a recorder's connection) are admin-live.spec.ts's.
 import { test, expect, type Page } from '@playwright/test';
-import { axe, looks, recorderCard, saveLook, shot, signIn, themes, widths } from './admin.ts';
+import { readFileSync } from 'node:fs';
+import { axe, inLook, looks, ownLook, recorderCard, saveLook, shot, signIn, themes, widths } from './admin.ts';
 
 const side = (page: Page) => page.locator('nav.side');
 const adminPaths = ['/admin/talkgroups', '/admin/units', '/admin/systems', '/admin/recorders', '/admin/accounts', '/admin/audit', '/admin/settings'];
@@ -151,6 +152,29 @@ async function lowDisk(page: Page) {
 }
 const DISK = 'The recordings volume has 12 % free. Below 5 %, the oldest recordings are deleted early.';
 
+test('Settings: the setup export downloads the whole setup, hidden 1003 too, and says so (R53, issue #117)', async ({ page }) => {
+	await signIn(page, 'admin');
+	await page.goto('/admin/settings');
+	const link = page.getByRole('link', { name: 'Download the setup' });
+	await expect(link).toHaveAccessibleDescription('It holds hidden and ignored talkgroups too: keep it as you would these pages.');
+	const [download] = await Promise.all([page.waitForEvent('download'), link.click()]);
+	expect(download.suggestedFilename()).toMatch(/^radioarchive-setup-\d{4}-\d{2}-\d{2}\.json$/);
+	const text = readFileSync(await download.path(), 'utf8');
+	expect(text.endsWith('}\n')).toBe(true);
+	const setup = JSON.parse(text) as { format: string; version: number; systems: { label: string; talkgroups: { id: number; state: string }[] }[] };
+	expect(setup.format).toBe('radioarchive-setup');
+	expect(setup.version).toBe(1);
+	const ex = setup.systems.find((s) => s.label === 'EX');
+	expect(ex?.talkgroups.find((t) => t.id === 1003)?.state).toBe('hidden');
+	// What the module's Export-RadioArchiveSetup saves: the route's bytes.
+	const api = await page.request.get('/api/v1/admin/setup');
+	expect(api.headers()['cache-control']).toBe('no-store');
+	expect(JSON.parse(await api.text()).format).toBe('radioarchive-setup');
+	// Signed out, no setup.
+	await page.context().clearCookies();
+	expect((await page.request.get('/api/v1/admin/setup')).status()).toBe(401);
+});
+
 test('the disk warning: on every admin page below 15 % free, and on no listener page (R88)', async ({ page }) => {
 	await signIn(page, 'admin');
 	await lowDisk(page);
@@ -184,6 +208,7 @@ for (const look of looks)
 			test(`axe: the admin menu, the Recorders page and Settings with its confirmation, ${look}, ${theme}, ${width}px`, async ({ page, context, baseURL }) => {
 				test.setTimeout(90_000);
 				await saveLook(context, baseURL!, look, theme);
+				await ownLook(page);
 				await signIn(page, 'admin');
 				await page.setViewportSize({ width, height: 900 });
 				await lowDisk(page);
@@ -194,11 +219,13 @@ for (const look of looks)
 				await expect(recorderCard(page, 'Bench')).toBeVisible();
 				await expect(page.getByRole('list', { name: 'Overlapping calls' })).toBeVisible();
 				await expect(page.getByRole('main').getByText(DISK, { exact: true })).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await shot(page, `recorders-${tag}`);
 				if (width === 375) {
 					await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'More' }).click();
 					await expect(page.getByRole('dialog', { name: 'More' }).getByRole('link', { name: 'Settings' })).toBeVisible();
+					await inLook(page, look, theme);
 					await axe(page, width);
 					await shot(page, `menu-${tag}`);
 					await page.keyboard.press('Escape');
@@ -211,6 +238,7 @@ for (const look of looks)
 				await ridge.getByRole('textbox', { name: 'Quiet after (minutes)' }).fill('0');
 				await ridge.getByRole('button', { name: 'Save the quiet signal' }).click();
 				await expect(ridge.locator('.field-error')).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 
 				// Settings, asking before it shortens retention; cancelled.
@@ -219,19 +247,23 @@ for (const look of looks)
 				await page.getByRole('button', { name: 'Save', exact: true }).click();
 				const confirm = page.getByRole('region', { name: /^Delete \d+ recordings?\?$/ });
 				await expect(confirm).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await shot(page, `settings-${tag}`);
 				await confirm.getByRole('button', { name: 'Cancel' }).click();
 				await page.getByRole('textbox', { name: /Retention period/ }).fill('');
 				await page.getByRole('button', { name: 'Save', exact: true }).click();
 				await expect(page.locator('#days-error')).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 
 				// The page a listener or a signed-out visitor gets.
 				await page.context().clearCookies();
 				await saveLook(context, baseURL!, look, theme);
+				await ownLook(page);
 				await page.unrouteAll();
 				await page.goto('/admin/settings');
 				await expect(page.getByRole('heading', { level: 1, name: 'This page is for admins' })).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 			});

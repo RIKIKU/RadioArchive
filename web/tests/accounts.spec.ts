@@ -6,7 +6,7 @@
 // change each other's accounts. The test with Authentik unreachable changes
 // what every test's Authentik answers, so it's @live (one at a time).
 import { test, expect, type Browser, type Locator, type Page } from '@playwright/test';
-import { authentikUsersDown, axe, looks, newPerson, saveLook, shot, signIn, signInAsPerson, themes, widths } from './admin.ts';
+import { authentikUsersDown, axe, inLook, looks, newPerson, ownLook, saveLook, shot, signIn, signInAsPerson, themes, widths } from './admin.ts';
 
 /** An account's row on the page, by the name it goes by. */
 const row = (page: Page, name: string) => page.getByRole('row').filter({ has: page.getByRole('rowheader', { name, exact: true }) });
@@ -193,6 +193,7 @@ for (const look of looks)
 				test.setTimeout(180_000);
 				const sam = await personIn(browser, 'axe');
 				await saveLook(context, baseURL!, look, theme);
+				await ownLook(page);
 				await signIn(page, 'admin');
 				await page.setViewportSize({ width, height: 900 });
 				const tag = `${look}-${theme}-${width}`;
@@ -201,20 +202,24 @@ for (const look of looks)
 				const r = row(page, sam.name);
 				await expect(r).toBeVisible();
 				await page.getByRole('searchbox', { name: 'Search by name or email' }).fill('');
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await shot(page, `accounts-${tag}`);
 
 				await openMore(r, sam.name);
 				await expect(r.getByRole('button', { name: 'Delete account…' })).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await shot(page, `accounts-more-${tag}`);
 				await r.getByRole('button', { name: 'Delete account…' }).click();
 				const ask = width === 375 ? page.getByRole('dialog', { name: `Delete ${sam.name}'s account?` }) : page.getByRole('region', { name: `Delete ${sam.name}'s account?` });
 				await expect(ask).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await shot(page, `accounts-delete-${tag}`);
 				await ask.getByRole('button', { name: 'Cancel' }).click();
 				await expect(page.getByText(`Nothing changed for ${sam.name}.`)).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await sam.page.context().close();
 			});

@@ -1,8 +1,9 @@
 <script lang="ts">
-	// The Settings page (SPEC.md R88, R54; ADR 0005, 0027, 0032), an admin
-	// page: the retention period in days, the recordings volume's state, and
-	// how long the audit log keeps its entries (owner, 2026-11-25), which
-	// asks first only when a shorter period deletes entries, naming how many.
+	// The Settings page (SPEC.md R88, R54, R53; ADR 0005, 0027, 0032, 0035),
+	// an admin page: the retention period in days, the recordings volume's
+	// state, how long the audit log keeps its entries (owner, 2026-11-25),
+	// which asks first only when a shorter period deletes entries, naming
+	// how many, and the setup export's download.
 	//
 	// Lengthening the period just saves. Shortening it is answered 409
 	// confirm_shorter_retention with how many recordings the next nightly
@@ -203,6 +204,11 @@
 		await focusField();
 	}
 
+	// The setup export's file (R53; ADR 0030, 0035): GET /admin/setup's
+	// bytes as they are, saved as radioarchive-setup-<date>.json, the date
+	// in the deployment's time zone.
+	const exportName = $derived(`radioarchive-setup-${new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())}.json`);
+
 	const gb = (bytes: number) => `${(bytes / 1e9).toLocaleString('en-AU', { maximumFractionDigits: 1 })} GB`;
 </script>
 
@@ -298,6 +304,13 @@
 			{/if}
 			<p class="audit-status" role="status">{auditStatus}</p>
 		{/if}
+
+		<h2>Setup export</h2>
+		<p class="export">
+			Every system with its talkgroups and units, and the groups and tags, with every field, as one JSON file: the file the PowerShell module's Import-RadioArchiveSetup reads, here or on another radio. Recorders, accounts, calls and the audit log aren't in it.
+		</p>
+		<p class="meta export" id="export-hint">It holds hidden and ignored talkgroups too: keep it as you would these pages.</p>
+		<p><a class="button" href="/api/v1/admin/setup" download={exportName} aria-describedby="export-hint">Download the setup</a></p>
 	{:else}
 		<p class="meta" role="status">Loading…</p>
 	{/if}
@@ -308,7 +321,8 @@
 		color: var(--muted);
 		font-size: var(--text-sm);
 	}
-	.retention {
+	.retention,
+	.export {
 		max-width: var(--measure);
 	}
 	.retention input {

@@ -11,7 +11,7 @@
 // listener sees are talkgroups-live.spec.ts's; the edits here are to hidden
 // 1003, and the refusals change nothing.
 import { test, expect, type Page } from '@playwright/test';
-import { axe, looks, saveLook, shot, signIn, themes, widths } from './admin.ts';
+import { axe, inLook, looks, ownLook, saveLook, shot, signIn, themes, widths } from './admin.ts';
 
 interface Row {
 	system_id: number;
@@ -405,11 +405,13 @@ for (const look of looks)
 			test(`axe: the Talkgroups page with a row open for editing and a problem, its recordings, and asking, ${look}, ${theme}, ${width}px`, async ({ page, context, baseURL }) => {
 				test.setTimeout(90_000);
 				await saveLook(context, baseURL!, look, theme);
+				await ownLook(page);
 				await signIn(page, 'admin');
 				await page.setViewportSize({ width, height: 900 });
 				const tag = `${look}-${theme}-${width}`;
 				await page.goto('/admin/talkgroups');
 				await expect(row(page, 1001)).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await shot(page, `table-${tag}`);
 
@@ -420,10 +422,12 @@ for (const look of looks)
 				await editor.getByRole('textbox', { name: 'Delay (minutes) required' }).fill('');
 				await editor.getByRole('button', { name: 'Save' }).click();
 				await expect(editor.locator('#tg-delay_minutes-error')).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await editor.getByRole('textbox', { name: 'Delay (minutes) required' }).fill('0');
 				await editor.getByRole('button', { name: 'Save' }).click();
 				await expect(editor.locator('#tg-fireground_channel-error')).toContainText('Fireground 41');
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await shot(page, `edit-${tag}`);
 				await editor.getByRole('button', { name: 'Cancel' }).click();
@@ -434,15 +438,18 @@ for (const look of looks)
 				const panel = page.getByRole('region', { name: 'Recordings: 1003 Admin' });
 				await panel.getByRole('button', { name: /^Play the call of / }).first().click();
 				await expect(panel.getByText(/^Playing the call of /)).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await shot(page, `recordings-${tag}`);
 				await panel.getByRole('button', { name: 'Close' }).click();
 
 				// The row's More actions open, then asking in a dialog.
 				await page.getByRole('button', { name: 'More actions: 1002 Fireground 41' }).click();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await page.getByRole('button', { name: 'Ignore…' }).click();
 				await expect(page.getByRole('dialog', { name: 'Ignore 1002 Fireground 41?' })).toBeVisible();
+				await inLook(page, look, theme);
 				await axe(page, width);
 				await shot(page, `ask-${tag}`);
 				await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
