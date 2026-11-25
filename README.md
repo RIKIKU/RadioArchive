@@ -26,6 +26,25 @@ before Authentik was added needs dropping once: `docker compose down --volumes`.
 `sh scripts/ci/e2e-signin.sh` runs the sign-in browser tests (`web/signin-tests`)
 against the whole stack.
 
+### Admins
+
+An admin is an account whose role is admin in RadioArchive's own database,
+never an Authentik group (`docs/adr/0025-admin-accounts-roles-and-admin-sign-in.md`).
+Set `INITIAL_ADMIN_EMAIL` in `.env` to the first admin's address. While no
+admin exists, the account that signs in with that address (in any case)
+becomes one, as long as Authentik has proven the address: a standalone
+deployment's sign-up proves it with the emailed code. Once an admin exists
+the setting does nothing; admins promote and demote others with
+`PATCH /api/v1/admin/accounts/{id}` (`{"role": "admin"}` or `{"role": "listener"}`).
+
+With `LISTENER_SIGNUP=false` nobody can sign up, so the operator makes the
+first admin's user in Authentik's admin interface (http://localhost:9000/if/admin/,
+as `akadmin`): Directory, Users, Create, with the address as both username
+and email, path `users/radioarchive`, and the attribute
+`radioarchive_email_proven: <the same address>`, which says the operator
+vouches for it. Then set a password for the user (Set password) and sign in
+to the radio with it.
+
 `sqlc generate` regenerates `internal/store/db` from `internal/store/queries.sql`; CI fails if it's out of date.
 
 ### The browser app
@@ -102,5 +121,5 @@ system, and its talkgroup is in that system's list (or the system's
 auto-create is on) and isn't ignored (`SPEC.md` R11, R12, R16-R18, R21;
 `docs/adr/0003-systems-attachments-and-rejected-calls.md`). Systems,
 talkgroups and attachments are managed through the admin API
-(`/api/v1/admin`), which the binary serves once admin sign-in (Authentik)
-arrives; until then only the tests use it.
+(`/api/v1/admin`), which answers a signed-in admin's browser session (see
+Admins, above).

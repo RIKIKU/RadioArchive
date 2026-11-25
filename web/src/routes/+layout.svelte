@@ -86,13 +86,14 @@
 	}
 
 	// What a sign-in or sign-out came back to say, once.
-	type Notice = 'signin-failed' | 'signin-unavailable' | 'signed-out' | 'signed-out-here';
+	type Notice = 'signin-failed' | 'signin-unavailable' | 'signin-disabled' | 'signed-out' | 'signed-out-here';
 	let notice: Notice | undefined = $state();
 	function readNotice() {
 		const url = new URL(page.url.href);
 		const p = url.searchParams;
 		if (p.get('signin') === 'failed') notice = 'signin-failed';
 		else if (p.get('signin') === 'unavailable') notice = 'signin-unavailable';
+		else if (p.get('signin') === 'disabled') notice = 'signin-disabled';
 		else if (p.get('signed_out') === '1') notice = p.get('authentik') === 'unreachable' ? 'signed-out-here' : 'signed-out';
 		if (!notice) return;
 		for (const k of ['signin', 'signed_out', 'authentik']) p.delete(k);
@@ -177,6 +178,8 @@
 
 	{#if notice === 'signin-failed'}
 		<p class="alert" role="alert">Couldn't sign you in. Try again from the account menu. Listening works as before.</p>
+	{:else if notice === 'signin-disabled'}
+		<p class="alert" role="alert">This account has been turned off here, so you weren't signed in. Listening works as before.</p>
 	{:else if notice === 'signin-unavailable'}
 		<p class="alert" role="alert">Signing in isn't available right now. Listening works as before.</p>
 	{:else if notice === 'signed-out'}

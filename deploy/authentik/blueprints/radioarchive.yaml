@@ -1,12 +1,14 @@
-# RadioArchive as an OIDC client of Authentik (SPEC.md R103, ADR 0009, ADR 0021).
+# RadioArchive as an OIDC client of Authentik (SPEC.md R103, ADR 0009, ADR 0021,
+# ADR 0025).
 #
 # This file is the part of RadioArchive's Authentik setup that both
 # deployments load: standalone, beside radioarchive-standalone.yaml, and in
 # the combined deployment (R103, R105), in PagerArchive's Authentik, which
 # keeps its own sign-in, enrolment and brand. So it holds only what is
-# RadioArchive's own: its OIDC provider and application and its sign-out
-# flow. Authentik keeps only who listeners are; their saved settings are in
-# RadioArchive's database (ADR 0021). Nothing here names a flow of the
+# RadioArchive's own: its OIDC provider and application, its email
+# mapping and its sign-out flow. Authentik keeps only who people are;
+# listeners' saved settings, and who is a radio admin, are in RadioArchive's
+# database (ADR 0021, ADR 0025). Nothing here names a flow of the
 # standalone file.
 #
 # Applied automatically when mounted under /blueprints in the Authentik
@@ -50,11 +52,30 @@ entries:
       order: 10
 
   # ------------------------------------------------------------------ OIDC
+  # The email scope, as the radio's: Authentik's own mapping always says
+  # email_verified false. This one says true while the user's address is
+  # the one an emailed code proved (radioarchive-standalone.yaml's sign-up
+  # records it in the radioarchive_email_proven attribute), ignoring case.
+  # The API makes only a proven INITIAL_ADMIN_EMAIL the first admin
+  # (ADR 0025). An operator who creates a user by hand vouches for the
+  # address by setting that attribute to it (README.md).
+  - model: authentik_providers_oauth2.scopemapping
+    id: scope-email
+    identifiers:
+      name: radioarchive-email
+    attrs:
+      scope_name: email
+      description: Email address
+      expression: |
+        email = request.user.email or ""
+        proven = str(request.user.attributes.get("radioarchive_email_proven") or "")
+        return {"email": email, "email_verified": email != "" and proven.lower() == email.lower()}
+
   # A confidential client: the radio's API holds the secret, and also sends
   # a PKCE challenge (S256) with every sign-in. The application's policy
-  # below refuses a sign-in without one. The same client can serve the
-  # admin's sign-in later (M4): an admin is a signed-in user in the
-  # radioarchive-admins group (R55), which the API will check for itself.
+  # below refuses a sign-in without one. Admins sign in with the same
+  # client: who is an admin is the radio's own database's to say (ADR
+  # 0025), never an Authentik group's.
   - model: authentik_providers_oauth2.oauth2provider
     id: provider
     identifiers:
@@ -79,7 +100,7 @@ entries:
       access_token_validity: minutes=5
       property_mappings:
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
-        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-email]]
+        - !KeyOf scope-email
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
   - model: authentik_core.application
     id: app

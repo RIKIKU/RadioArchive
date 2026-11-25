@@ -27,7 +27,7 @@ x-authentik: &authentik
   # so changed blueprints take effect, as PagerArchive's. A test
   # (deploy/compose_test.go) checks it and prints the right value.
   labels:
-    radioarchive.config: "6775357a82fee978"
+    radioarchive.config: "56348cb2a0a01346"
   environment:
     AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?set AUTHENTIK_SECRET_KEY in .env}
     AUTHENTIK_POSTGRESQL__HOST: db
@@ -88,6 +88,10 @@ services:
       AUTHENTIK_URL: ${AUTHENTIK_URL}
       AUTHENTIK_INTERNAL_URL: http://authentik-server:9000
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      # The first admin's address (ADR 0025): while no admin exists, the
+      # account signing in with it, proven by its emailed code, is made
+      # admin. Admins' roles live in the radio's database, not Authentik.
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
     ports:
       - "127.0.0.1:${API_PORT:-8080}:8080"
     volumes:

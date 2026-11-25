@@ -25,6 +25,10 @@ type ListenerSession struct {
 	// LastUsed is when it was last renewed, Expires when it ends unless
 	// it's used again.
 	LastUsed, Expires time.Time
+	// Role and Status are its account's, as they are now (ADR 0025): read
+	// with the session, never kept with it. StartListenerSession ignores
+	// them.
+	Role, Status string
 }
 
 func ts(t time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: t, Valid: true} }
@@ -43,8 +47,9 @@ func (s *Store) StartListenerSession(ctx context.Context, idHash []byte, se List
 	return nil
 }
 
-// ListenerSession is the session kept under idHash, nil when there's none
-// live at now: never made, ended, or expired.
+// ListenerSession is the session kept under idHash, with its account's
+// role and status, nil when there's none live at now: never made, ended,
+// expired, or its account has no row.
 func (s *Store) ListenerSession(ctx context.Context, idHash []byte, now time.Time) (*ListenerSession, error) {
 	r, err := s.GetListenerSession(ctx, db.GetListenerSessionParams{IDHash: idHash, At: ts(now)})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -54,7 +59,7 @@ func (s *Store) ListenerSession(ctx context.Context, idHash []byte, now time.Tim
 		return nil, fmt.Errorf("read the listener's session: %s", SafeError(err))
 	}
 	return &ListenerSession{Issuer: r.Issuer, Subject: r.Subject, Name: r.Name, Email: r.Email,
-		LastUsed: r.LastUsedAt.Time, Expires: r.ExpiresAt.Time}, nil
+		LastUsed: r.LastUsedAt.Time, Expires: r.ExpiresAt.Time, Role: r.Role, Status: r.Status}, nil
 }
 
 // RenewListenerSession marks the session used at now, live until expires.

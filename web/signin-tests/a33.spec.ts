@@ -16,7 +16,7 @@ async function accessible(page: Page) {
 const MAILPIT = process.env.RA_MAILPIT_URL ?? 'http://localhost:8025';
 
 type Entry = { system?: number; id: number; priority?: boolean };
-type Account = { signin: boolean; account: { id: string; name?: string; email?: string } | null; profile: { talkgroups: Entry[]; look?: string } | null; saves: boolean };
+type Account = { signin: boolean; account: { id: string; name?: string; email?: string; admin: boolean } | null; profile: { talkgroups: Entry[]; look?: string } | null; saves: boolean };
 
 /** A new made-up address for each account. */
 const address = (who: string) => `${who}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}@example.test`;
@@ -203,6 +203,39 @@ test('signed in or not, the catalogue and the public API answer the same (P3, R1
 	const body = await (await page.request.get('/api/v1/account')).text();
 	expect(body).not.toContain('1003');
 	expect(body).not.toContain('Admin');
+});
+
+// The first admin (ADR 0025): INITIAL_ADMIN_EMAIL, typed in another case,
+// signs up through Authentik's pages; its emailed code proves the address,
+// so the account is an admin, and the admin API answers it. As an admin,
+// the public API and the catalogue answer exactly as they do anyone, so
+// hidden 1003 is absent (A13, the listener half). Another account is a
+// listener, which the admin API refuses.
+test('the first admin: INITIAL_ADMIN_EMAIL, proven by its code, is an admin who hears and sees what anyone does', async ({ browser, request, baseURL }) => {
+	const initial = process.env.RA_INITIAL_ADMIN_EMAIL;
+	test.skip(!initial, 'RA_INITIAL_ADMIN_EMAIL is not set');
+	const page = await browserWith(browser, [{ id: 1001 }]);
+	await signUp(page, request, baseURL!, initial!.toUpperCase());
+	await expect.poll(async () => (await account(page)).account?.admin, { timeout: 15_000 }).toBe(true);
+	const systems = await page.request.get('/api/v1/admin/systems');
+	expect(systems.status()).toBe(200);
+	expect(await systems.text()).toContain('Example network');
+	const hidden = await page.request.get('/api/v1/admin/systems/1/talkgroups/1003');
+	expect(hidden.status()).toBe(200);
+	for (const path of ['/api/v1/catalogue', '/api/v1/catalogue/search?q=admin', '/api/v1/fireground/41', '/api/v1/fireground/43', '/api/v1/recent-calls']) {
+		const asAdmin = await page.request.get(path);
+		const anyone = await request.get(path);
+		expect(asAdmin.status(), path).toBe(anyone.status());
+		const body = await asAdmin.text();
+		expect(body, path).toBe(await anyone.text());
+		expect(body, path).not.toContain('1003');
+	}
+	// Signed out, the admin API wants a sign-in; another account is a listener.
+	expect((await request.get('/api/v1/admin/systems')).status()).toBe(401);
+	const other = await browserWith(browser, []);
+	await signUp(other, request, baseURL!, address('not-admin'));
+	expect((await account(other)).account?.admin).toBe(false);
+	expect((await other.request.get('/api/v1/admin/systems')).status()).toBe(403);
 });
 
 test('clearing empties the account and leaves the browser its set; signing out ends both sessions', async ({ browser, request, baseURL }) => {

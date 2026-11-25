@@ -283,14 +283,19 @@ entries:
       subject: Your RadioArchive code
       template: radioarchive/code.html # deploy/authentik/templates
   # Reached only after the emailed code was entered: the next user write
-  # activates the user, and changes nothing else.
+  # activates the user, and records the address the code proved, which the
+  # radio's email mapping (radioarchive.yaml) reports as email_verified
+  # while it is still the user's address (ADR 0025). It changes nothing
+  # else.
   - model: authentik_policies_expression.expressionpolicy
     id: signup-activate-policy
     identifiers:
       name: radioarchive-signup-activate
     attrs:
       expression: |
-        request.context["flow_plan"].context["prompt_data"] = {"is_active": True}
+        plan = request.context["flow_plan"]
+        user = plan.context.get("pending_user") or request.user
+        plan.context["prompt_data"] = {"is_active": True, "attributes.radioarchive_email_proven": user.email or ""}
         return True
   - model: authentik_stages_user_write.userwritestage
     id: signup-activate

@@ -124,6 +124,18 @@ _Avoid_: Play next, autoplay, continue
 The calls a listener has marked, and the conversations they've grouped them into, kept to download later.
 _Avoid_: Cart, queue, playlist
 
+**Account**:
+Someone who has signed in to the radio at least once, as the radio records them: who they are in Authentik, their role and their status.
+_Avoid_: User, profile, login
+
+**Admin**:
+An account whose role is admin and whose status is active, in the radio's own records; being an admin of anything else, PagerArchive or Authentik included, doesn't make one.
+_Avoid_: Superuser, operator, moderator
+
+**First admin**:
+The account that signs in with the deployment's configured initial admin address, proven by Authentik, while no admin exists.
+_Avoid_: Owner, root, bootstrap admin
+
 ## Deployment
 
 **Combined deployment**:

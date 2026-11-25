@@ -22,6 +22,9 @@ import (
 type signInConfig struct {
 	appURL, authentikURL, internalURL *url.URL
 	clientID, clientSecret            string
+	// initialAdmin is INITIAL_ADMIN_EMAIL: the first admin's address
+	// (ADR 0025), "" for none.
+	initialAdmin string
 }
 
 func (c signInConfig) on() bool { return c.authentikURL != nil }
@@ -71,6 +74,10 @@ func signInFromEnv(getenv func(string) string) (signInConfig, error) {
 	if c.clientSecret, err = secret(getenv, "OIDC_CLIENT_SECRET"); err != nil {
 		return signInConfig{}, err
 	}
+	c.initialAdmin = strings.TrimSpace(getenv("INITIAL_ADMIN_EMAIL"))
+	if c.initialAdmin != "" && (!strings.Contains(c.initialAdmin, "@") || strings.ContainsAny(c.initialAdmin, " \t\r\n")) {
+		return signInConfig{}, errors.New("INITIAL_ADMIN_EMAIL must be one email address, like owner@example.org")
+	}
 	return c, nil
 }
 
@@ -97,7 +104,8 @@ func secret(getenv func(string) string, name string) (string, error) {
 }
 
 // service is the account the settings describe, keeping signed-in
-// listeners' sessions and profiles in the store (ADR 0022, ADR 0021).
+// listeners' sessions, profiles and accounts in the store (ADR 0022, ADR
+// 0021, ADR 0025).
 func (c signInConfig) service(g *gate.Gate, st *store.Store, log *slog.Logger) (*account.Service, error) {
 	if !c.on() {
 		return account.New(account.Config{Log: log})
@@ -112,10 +120,12 @@ func (c signInConfig) service(g *gate.Gate, st *store.Store, log *slog.Logger) (
 			RedirectURL:  c.appURL.JoinPath("auth", "callback").String(),
 			HTTP:         hc,
 		},
-		Sessions:  st,
-		Profiles:  st,
-		Catalogue: g,
-		Secret:    []byte(c.clientSecret),
-		Log:       log,
+		Sessions:     st,
+		Profiles:     st,
+		Accounts:     st,
+		Catalogue:    g,
+		InitialAdmin: c.initialAdmin,
+		Secret:       []byte(c.clientSecret),
+		Log:          log,
 	})
 }

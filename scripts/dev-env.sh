@@ -29,4 +29,5 @@ AUTHENTIK_ADMIN_EMAIL=akadmin@example.test
 AUTHENTIK_ADMIN_PASSWORD=$(secret 24)
 OIDC_CLIENT_SECRET=$(secret 60)
 LISTENER_SIGNUP=${LISTENER_SIGNUP:-true}
+INITIAL_ADMIN_EMAIL=${INITIAL_ADMIN_EMAIL:-owner-$(secret 8 | tr 'A-Z' 'a-z')@example.test}
 EOF

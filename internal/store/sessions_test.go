@@ -23,6 +23,12 @@ func TestIntegrationListenerSessions(t *testing.T) {
 	const iss = "https://auth.example.test/application/o/radioarchive/"
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	hash := func(b byte) []byte { return bytes.Repeat([]byte{b}, 32) }
+	// Every session's account has a row (ADR 0025), as a sign-in makes it.
+	for _, sub := range []string{"42", "43"} {
+		if _, _, err := st.SignInAccount(ctx, store.SignIn{Issuer: iss, Subject: sub, At: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	start := func(h []byte, sub, tok string, expires time.Time) {
 		t.Helper()
 		if err := st.StartListenerSession(ctx, h, store.ListenerSession{Issuer: iss, Subject: sub, Name: "Made Up",
@@ -36,8 +42,20 @@ func TestIntegrationListenerSessions(t *testing.T) {
 
 	se, err := st.ListenerSession(ctx, hash(1), now)
 	if err != nil || se == nil || se.Issuer != iss || se.Subject != "42" || se.Name != "Made Up" ||
-		se.Email != "listener@example.test" || !se.LastUsed.Equal(now) || !se.Expires.Equal(now.Add(time.Hour)) {
+		se.Email != "listener@example.test" || !se.LastUsed.Equal(now) || !se.Expires.Equal(now.Add(time.Hour)) ||
+		se.Role != store.RoleListener || se.Status != store.StatusActive {
 		t.Fatalf("ListenerSession = %+v, %v", se, err)
+	}
+	// A session whose account has no row isn't one.
+	if err := st.StartListenerSession(ctx, hash(8), store.ListenerSession{Issuer: iss, Subject: "44",
+		LastUsed: now, Expires: now.Add(time.Hour)}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if se, err := st.ListenerSession(ctx, hash(8), now); se != nil || err != nil {
+		t.Errorf("a session with no account: %+v, %v", se, err)
+	}
+	if _, err := st.EndListenerSession(ctx, hash(8)); err != nil {
+		t.Fatal(err)
 	}
 	if se, err := st.ListenerSession(ctx, hash(9), now); se != nil || err != nil {
 		t.Errorf("no such session: %+v, %v", se, err)

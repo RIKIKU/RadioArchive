@@ -97,6 +97,17 @@ func (ns NullTalkgroupState) Value() (driver.Value, error) {
 	return string(ns.TalkgroupState), nil
 }
 
+type Account struct {
+	Issuer          string
+	Subject         string
+	Name            string
+	Email           string
+	Role            string
+	Status          string
+	FirstSignedInAt pgtype.Timestamptz
+	LastSignedInAt  pgtype.Timestamptz
+}
+
 type Attachment struct {
 	RecorderID int64
 	ShortName  string

@@ -90,7 +90,12 @@ func (c *Client) AuthURL(a Attempt, extra ...oauth2.AuthCodeOption) (string, err
 type Identity struct {
 	Subject string // Authentik's user ID
 	Email   string
-	Name    string
+	// EmailVerified is the ID token's email_verified: whether Authentik
+	// has proven Email belongs to whoever signed in. Authentik's own
+	// mapping always says false; the radio's blueprint's says true once
+	// the address has been proven by an emailed code (ADR 0025).
+	EmailVerified bool
+	Name          string
 	// IDToken is the raw ID token, kept only to end the Authentik session
 	// on sign-out (id_token_hint). Never sent to a page or logged.
 	IDToken string
@@ -124,11 +129,14 @@ func (c *Client) Finish(ctx context.Context, a Attempt, code string) (Identity, 
 	var claims struct {
 		Email string `json:"email"`
 		Name  string `json:"name"`
+		// Only a JSON true is proven: false, absent, or anything else
+		// isn't.
+		EmailVerified any `json:"email_verified"`
 	}
 	if err := idt.Claims(&claims); err != nil {
 		return Identity{}, fmt.Errorf("%w: id token claims: %v", ErrRefused, err)
 	}
-	return Identity{Subject: idt.Subject, Email: claims.Email, Name: claims.Name, IDToken: raw}, nil
+	return Identity{Subject: idt.Subject, Email: claims.Email, EmailVerified: claims.EmailVerified == true, Name: claims.Name, IDToken: raw}, nil
 }
 
 // oauthReason is an exchange error's OAuth error code, never its body or
