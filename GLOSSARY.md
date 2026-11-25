@@ -140,6 +140,18 @@ _Avoid_: Owner, root, bootstrap admin
 The radio's record of every change an admin makes: who made it, how (browser, module or import), when, and each changed field before and after. Kept a long time, never rewritten, and read only by admins.
 _Avoid_: History, activity log, changelog
 
+**Setup**:
+Everything an admin has set up: systems, their talkgroups and units, groups and tags, with every setting they hold. Not recorders, attachments, accounts or calls. The export writes it whole; the import merges it in.
+_Avoid_: Config, catalogue (the catalogue is the public's part of it)
+
+**Import preview**:
+What an import would do, row by row (new, changed with the fields, unchanged, kept, skipped and why), worked out without changing anything, and fingerprinted as its **plan**. An import applies only with the plan of a preview that still holds.
+_Avoid_: Dry-run report, diff
+
+**Placeholder row**:
+A row in an imported file whose label is just its talkgroup ID, as trunk-recorder's files carry for talkgroups nobody named. The import skips it.
+_Avoid_: Unreviewed talkgroup (that's a talkgroup the radio made itself)
+
 ## Deployment
 
 **Combined deployment**:

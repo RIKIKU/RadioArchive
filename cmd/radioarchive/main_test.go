@@ -100,7 +100,8 @@ func TestIntegrationBinaryRoutes(t *testing.T) {
 	}
 	for _, want := range []string{"GET /api/v1/admin/systems", "PUT /api/v1/admin/retention", "PATCH /api/v1/admin/recorders/{recorder}",
 		"DELETE /api/v1/admin/listeners/{subject}/sessions", "GET /api/v1/admin/accounts", "PATCH /api/v1/admin/accounts/{subject}",
-		"GET /api/v1/admin/calls/{call}/recording", "GET /api/v1/admin/audit", "GET /api/v1/admin/overlaps"} {
+		"GET /api/v1/admin/calls/{call}/recording", "GET /api/v1/admin/audit", "GET /api/v1/admin/overlaps",
+		"GET /api/v1/admin/setup", "POST /api/v1/admin/import"} {
 		if !slices.Contains(admin, want) {
 			t.Errorf("the binary doesn't serve admin route %s; it serves %q", want, admin)
 		}

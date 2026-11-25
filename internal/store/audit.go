@@ -149,6 +149,14 @@ func (s *Store) Audited(ctx context.Context, by Actor, f func(q *db.Queries, au 
 	})
 }
 
+// Changes is what changed from before to after, field by field, as Record
+// would record it (nil before: every field, a creation). The setup
+// import's preview lists the same changes its entries then hold (ADR 0030).
+func Changes(before, after any) ([]FieldChange, error) {
+	_, out, err := diff(before, after)
+	return out, err
+}
+
 // field is one JSON object member, in its order.
 type field struct {
 	name string

@@ -216,7 +216,7 @@ SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.u
        ARRAY(SELECT x.name FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
              WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
              ORDER BY x.sort_order, x.name)::text[] AS groups,
-       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel,
+       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel, t.type, t.frequency,
        t.created_at, t.updated_at,
        l.last_heard_at, COALESCE(n.calls, 0)::bigint AS calls_since
 FROM talkgroups t
@@ -245,6 +245,8 @@ type AdminTalkgroupTableRow struct {
 	LedColour         *string
 	SortOrder         int32
 	FiregroundChannel *int32
+	Type              string
+	Frequency         *int64
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
 	LastHeardAt       pgtype.Timestamptz
@@ -280,6 +282,8 @@ func (q *Queries) AdminTalkgroupTable(ctx context.Context, arg AdminTalkgroupTab
 			&i.LedColour,
 			&i.SortOrder,
 			&i.FiregroundChannel,
+			&i.Type,
+			&i.Frequency,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.LastHeardAt,
@@ -429,6 +433,23 @@ func (q *Queries) CallState(ctx context.Context, arg CallStateParams) (Talkgroup
 	return state, err
 }
 
+const clearFireground = `-- name: ClearFireground :exec
+UPDATE talkgroups SET fireground_channel = NULL
+WHERE system_id = $1 AND talkgroup_id = $2
+`
+
+type ClearFiregroundParams struct {
+	SystemID    int64
+	TalkgroupID int32
+}
+
+// Frees a talkgroup's fireground channel number before an import gives it
+// to another, so two talkgroups can swap numbers in one import.
+func (q *Queries) ClearFireground(ctx context.Context, arg ClearFiregroundParams) error {
+	_, err := q.db.Exec(ctx, clearFireground, arg.SystemID, arg.TalkgroupID)
+	return err
+}
+
 const clearTalkgroupGroups = `-- name: ClearTalkgroupGroups :exec
 DELETE FROM talkgroup_groups
 WHERE system_id = $1 AND talkgroup_id = $2
@@ -563,6 +584,37 @@ func (q *Queries) CreateSystem(ctx context.Context, arg CreateSystemParams) (Cre
 		&i.SortOrder,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createTag = `-- name: CreateTag :one
+INSERT INTO tags (name, alert, led_colour, sort_order)
+VALUES ($1, $2, $3, $4)
+RETURNING id, name, alert, led_colour, sort_order
+`
+
+type CreateTagParams struct {
+	Name      string
+	Alert     *string
+	LedColour *string
+	SortOrder int32
+}
+
+func (q *Queries) CreateTag(ctx context.Context, arg CreateTagParams) (Tag, error) {
+	row := q.db.QueryRow(ctx, createTag,
+		arg.Name,
+		arg.Alert,
+		arg.LedColour,
+		arg.SortOrder,
+	)
+	var i Tag
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Alert,
+		&i.LedColour,
+		&i.SortOrder,
 	)
 	return i, err
 }
@@ -805,6 +857,109 @@ func (q *Queries) EnsureTag(ctx context.Context, name string) (int64, error) {
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const exportTalkgroups = `-- name: ExportTalkgroups :many
+SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.unreviewed,
+       ARRAY(SELECT x.name FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
+             WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
+             ORDER BY x.sort_order, x.name)::text[] AS groups,
+       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel, t.type, t.frequency,
+       t.created_at, t.updated_at
+FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
+ORDER BY t.system_id, t.talkgroup_id
+`
+
+type ExportTalkgroupsRow struct {
+	SystemID          int64
+	TalkgroupID       int32
+	Label             string
+	Name              string
+	Tag               *string
+	State             TalkgroupState
+	Unreviewed        bool
+	Groups            []string
+	DelayMinutes      int32
+	Alert             *string
+	LedColour         *string
+	SortOrder         int32
+	FiregroundChannel *int32
+	Type              string
+	Frequency         *int64
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+// Every talkgroup of every system, by system and ID, as GetTalkgroup reads
+// one.
+func (q *Queries) ExportTalkgroups(ctx context.Context) ([]ExportTalkgroupsRow, error) {
+	rows, err := q.db.Query(ctx, exportTalkgroups)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ExportTalkgroupsRow
+	for rows.Next() {
+		var i ExportTalkgroupsRow
+		if err := rows.Scan(
+			&i.SystemID,
+			&i.TalkgroupID,
+			&i.Label,
+			&i.Name,
+			&i.Tag,
+			&i.State,
+			&i.Unreviewed,
+			&i.Groups,
+			&i.DelayMinutes,
+			&i.Alert,
+			&i.LedColour,
+			&i.SortOrder,
+			&i.FiregroundChannel,
+			&i.Type,
+			&i.Frequency,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const exportUnits = `-- name: ExportUnits :many
+SELECT system_id, first_id, last_id, alias, created_at, updated_at
+FROM units ORDER BY system_id, first_id, last_id
+`
+
+func (q *Queries) ExportUnits(ctx context.Context) ([]Unit, error) {
+	rows, err := q.db.Query(ctx, exportUnits)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Unit
+	for rows.Next() {
+		var i Unit
+		if err := rows.Scan(
+			&i.SystemID,
+			&i.FirstID,
+			&i.LastID,
+			&i.Alias,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const extendLivePatch = `-- name: ExtendLivePatch :one
@@ -1708,7 +1863,7 @@ SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.u
        ARRAY(SELECT x.name FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
              WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
              ORDER BY x.sort_order, x.name)::text[] AS groups,
-       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel,
+       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel, t.type, t.frequency,
        t.created_at, t.updated_at
 FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
 WHERE t.system_id = $1 AND t.talkgroup_id = $2
@@ -1733,6 +1888,8 @@ type GetTalkgroupRow struct {
 	LedColour         *string
 	SortOrder         int32
 	FiregroundChannel *int32
+	Type              string
+	Frequency         *int64
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
 }
@@ -1754,6 +1911,8 @@ func (q *Queries) GetTalkgroup(ctx context.Context, arg GetTalkgroupParams) (Get
 		&i.LedColour,
 		&i.SortOrder,
 		&i.FiregroundChannel,
+		&i.Type,
+		&i.Frequency,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1806,6 +1965,117 @@ func (q *Queries) IgnoredInPatch(ctx context.Context, arg IgnoredInPatchParams) 
 	var talkgroup_id int32
 	err := row.Scan(&talkgroup_id)
 	return talkgroup_id, err
+}
+
+const importTalkgroup = `-- name: ImportTalkgroup :exec
+
+INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state, unreviewed,
+                        delay_minutes, alert, led_colour, sort_order, fireground_channel, type, frequency)
+VALUES ($1, $2, $3, $4,
+        $5, $6, $7, $8, $9,
+        $10, $11, $12,
+        $13, $14)
+`
+
+type ImportTalkgroupParams struct {
+	SystemID          int64
+	TalkgroupID       int32
+	Label             string
+	Name              string
+	TagID             *int64
+	State             TalkgroupState
+	Unreviewed        bool
+	DelayMinutes      int32
+	Alert             *string
+	LedColour         *string
+	SortOrder         int32
+	FiregroundChannel *int32
+	Type              string
+	Frequency         *int64
+}
+
+// The setup's import and export (R52, R53; issue #115, ADR 0030).
+// A talkgroup the import creates: every field the file gives, state and
+// unreviewed included (owner, 2026-11-25). Its groups are set apart.
+func (q *Queries) ImportTalkgroup(ctx context.Context, arg ImportTalkgroupParams) error {
+	_, err := q.db.Exec(ctx, importTalkgroup,
+		arg.SystemID,
+		arg.TalkgroupID,
+		arg.Label,
+		arg.Name,
+		arg.TagID,
+		arg.State,
+		arg.Unreviewed,
+		arg.DelayMinutes,
+		arg.Alert,
+		arg.LedColour,
+		arg.SortOrder,
+		arg.FiregroundChannel,
+		arg.Type,
+		arg.Frequency,
+	)
+	return err
+}
+
+const importUnit = `-- name: ImportUnit :exec
+INSERT INTO units (system_id, first_id, last_id, alias)
+VALUES ($1, $2, $3, $4)
+`
+
+type ImportUnitParams struct {
+	SystemID int64
+	FirstID  int64
+	LastID   int64
+	Alias    string
+}
+
+// A unit the import creates. Not an upsert: a unit created meanwhile is a
+// change since the preview (import_changed).
+func (q *Queries) ImportUnit(ctx context.Context, arg ImportUnitParams) error {
+	_, err := q.db.Exec(ctx, importUnit,
+		arg.SystemID,
+		arg.FirstID,
+		arg.LastID,
+		arg.Alias,
+	)
+	return err
+}
+
+const importUpdateTalkgroup = `-- name: ImportUpdateTalkgroup :exec
+UPDATE talkgroups
+SET label = $1,
+    name = $2,
+    tag_id = COALESCE($3, tag_id),
+    sort_order = $4,
+    fireground_channel = $5,
+    updated_at = now()
+WHERE system_id = $6 AND talkgroup_id = $7
+`
+
+type ImportUpdateTalkgroupParams struct {
+	Label             string
+	Name              string
+	TagID             *int64
+	SortOrder         int32
+	FiregroundChannel *int32
+	SystemID          int64
+	TalkgroupID       int32
+}
+
+// A talkgroup the import changes: only R52's fields (label, name, tag,
+// fireground channel number, and sort order when given; groups apart).
+// Never state, unreviewed, delay, alert, LED colour, type or frequency.
+func (q *Queries) ImportUpdateTalkgroup(ctx context.Context, arg ImportUpdateTalkgroupParams) error {
+	_, err := q.db.Exec(ctx, importUpdateTalkgroup,
+		arg.Label,
+		arg.Name,
+		arg.TagID,
+		arg.SortOrder,
+		arg.FiregroundChannel,
+		arg.SystemID,
+		arg.TalkgroupID,
+	)
+	return err
 }
 
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
@@ -2235,7 +2505,7 @@ SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.u
        ARRAY(SELECT x.name FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
              WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
              ORDER BY x.sort_order, x.name)::text[] AS groups,
-       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel,
+       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel, t.type, t.frequency,
        t.created_at, t.updated_at
 FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
 WHERE t.system_id = $1
@@ -2256,6 +2526,8 @@ type ListTalkgroupsRow struct {
 	LedColour         *string
 	SortOrder         int32
 	FiregroundChannel *int32
+	Type              string
+	Frequency         *int64
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
 }
@@ -2284,6 +2556,8 @@ func (q *Queries) ListTalkgroups(ctx context.Context, systemID int64) ([]ListTal
 			&i.LedColour,
 			&i.SortOrder,
 			&i.FiregroundChannel,
+			&i.Type,
+			&i.Frequency,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -2451,6 +2725,17 @@ func (q *Queries) LockFirstAdmin(ctx context.Context) error {
 	return err
 }
 
+const lockImport = `-- name: LockImport :exec
+SELECT pg_advisory_xact_lock(115, 0)
+`
+
+// One import at a time. The two-key form keeps clear of the audit log's
+// and the first admin's keys.
+func (q *Queries) LockImport(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockImport)
+	return err
+}
+
 const notifyRecorderKeyChanged = `-- name: NotifyRecorderKeyChanged :exec
 SELECT pg_notify('radioarchive_recorder_key', $1::bigint::text)
 `
@@ -2486,9 +2771,11 @@ SET label = COALESCE($1, label),
     led_colour = CASE WHEN $9::bool THEN $10::text ELSE led_colour END,
     fireground_channel = CASE WHEN $11::bool
         THEN $12::integer ELSE fireground_channel END,
+    type = COALESCE($13, type),
+    frequency = CASE WHEN $14::bool THEN $15::bigint ELSE frequency END,
     unreviewed = false,
     updated_at = now()
-WHERE system_id = $13 AND talkgroup_id = $14
+WHERE system_id = $16 AND talkgroup_id = $17
 `
 
 type PatchTalkgroupParams struct {
@@ -2504,6 +2791,9 @@ type PatchTalkgroupParams struct {
 	LedColour            *string
 	SetFiregroundChannel bool
 	FiregroundChannel    *int32
+	Type                 *string
+	SetFrequency         bool
+	Frequency            *int64
 	SystemID             int64
 	TalkgroupID          int32
 }
@@ -2526,6 +2816,9 @@ func (q *Queries) PatchTalkgroup(ctx context.Context, arg PatchTalkgroupParams) 
 		arg.LedColour,
 		arg.SetFiregroundChannel,
 		arg.FiregroundChannel,
+		arg.Type,
+		arg.SetFrequency,
+		arg.Frequency,
 		arg.SystemID,
 		arg.TalkgroupID,
 	)
@@ -2562,14 +2855,16 @@ func (q *Queries) PruneRejectedCalls(ctx context.Context, cutoff pgtype.Timestam
 
 const putTalkgroup = `-- name: PutTalkgroup :exec
 INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state,
-                        delay_minutes, alert, led_colour, sort_order, fireground_channel)
+                        delay_minutes, alert, led_colour, sort_order, fireground_channel, type, frequency)
 VALUES ($1, $2, $3, $4,
         $5, $6, $7, $8,
-        $9, $10, $11)
+        $9, $10, $11,
+        $12, $13)
 ON CONFLICT (system_id, talkgroup_id) DO UPDATE
 SET label = EXCLUDED.label, name = EXCLUDED.name, tag_id = EXCLUDED.tag_id, state = EXCLUDED.state,
     delay_minutes = EXCLUDED.delay_minutes, alert = EXCLUDED.alert, led_colour = EXCLUDED.led_colour,
     sort_order = EXCLUDED.sort_order, fireground_channel = EXCLUDED.fireground_channel,
+    type = EXCLUDED.type, frequency = EXCLUDED.frequency,
     unreviewed = false, updated_at = now()
 `
 
@@ -2585,6 +2880,8 @@ type PutTalkgroupParams struct {
 	LedColour         *string
 	SortOrder         int32
 	FiregroundChannel *int32
+	Type              string
+	Frequency         *int64
 }
 
 // An admin's add or full edit. It marks the talkgroup reviewed. Its groups
@@ -2602,6 +2899,8 @@ func (q *Queries) PutTalkgroup(ctx context.Context, arg PutTalkgroupParams) erro
 		arg.LedColour,
 		arg.SortOrder,
 		arg.FiregroundChannel,
+		arg.Type,
+		arg.Frequency,
 	)
 	return err
 }

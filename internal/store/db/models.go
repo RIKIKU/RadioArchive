@@ -284,6 +284,8 @@ type Talkgroup struct {
 	LedColour         *string
 	SortOrder         int32
 	FiregroundChannel *int32
+	Type              string
+	Frequency         *int64
 }
 
 type TalkgroupGroup struct {

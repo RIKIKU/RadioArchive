@@ -177,7 +177,7 @@ func TestIntegrationAuditNotForReads(t *testing.T) {
 	for _, p := range []string{"/systems", fmt.Sprintf("/systems/%d", e.sys), fmt.Sprintf("/systems/%d/talkgroups", e.sys),
 		fmt.Sprintf("/systems/%d/talkgroups/1003", e.sys), fmt.Sprintf("/systems/%d/talkgroups/1003/calls", e.sys),
 		"/talkgroups", fmt.Sprintf("/systems/%d/units", e.sys), fmt.Sprintf("/systems/%d/units/5001", e.sys),
-		"/attachments", "/rejections", "/groups", "/tags", "/retention", "/recorders", "/audit", "/audit?kind=talkgroup"} {
+		"/attachments", "/rejections", "/groups", "/tags", "/retention", "/recorders", "/audit", "/audit?kind=talkgroup", "/setup"} {
 		e.mustAdmin(t, "GET", p, nil, 200)
 	}
 	e.wantRefusal(t, "PATCH", fmt.Sprintf("/systems/%d/talkgroups/1001", e.sys), map[string]any{"state": "secret"}, 400, "invalid_state")

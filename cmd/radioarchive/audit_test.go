@@ -27,6 +27,9 @@ type auditProbe struct {
 	// change makes a change through the route; want is the entry it makes.
 	change func(w *auditWorld) (status int, body string)
 	want   auditWant
+	// via is how the change was made: browser unless said (the import's
+	// are import, ADR 0030).
+	via string
 	// refused is a request through the route that changes nothing (a
 	// refusal, or a change to what is already so): it adds no entry.
 	refused func(w *auditWorld) (status int, body string)
@@ -38,6 +41,25 @@ type auditWant struct {
 	// after.
 	field, before, after string
 }
+
+// importSetup previews an import of setup and applies it with the
+// preview's plan, or with plan when it isn't "": the import's two steps
+// (ADR 0030).
+func (w *auditWorld) importSetup(setup, plan string) (int, string) {
+	w.t.Helper()
+	if plan == "" {
+		code, b := w.do("POST", "/import", `{"dry_run":true,"setup":`+setup+`}`)
+		var rep server.ImportReport
+		if code != 200 || json.Unmarshal([]byte(b), &rep) != nil {
+			return code, b
+		}
+		plan = rep.Plan
+	}
+	return w.do("POST", "/import", `{"plan":"`+plan+`","setup":`+setup+`}`)
+}
+
+// importRename is an import renaming 1001.
+const importRename = `{"format":"radioarchive-setup","version":1,"systems":[{"id":1,"talkgroups":[{"id":1001,"name":"Dispatch Imported","state":"public"}]}]}`
 
 // auditWorld is the binary, its first admin signed in with a browser, a
 // listener, and the recorder Bench (the shell's, R10).
@@ -100,6 +122,13 @@ var auditProbes = []auditProbe{
 		want: auditWant{"talkgroup", "1/1001", "changed", "label", `"DISP N"`, `"DISP North"`},
 		refused: func(w *auditWorld) (int, string) {
 			return w.do("PATCH", "/systems/1/talkgroups/1001", `{"label":"Secret","state":"secret"}`)
+		}},
+	{pattern: "POST /api/v1/admin/import",
+		change: func(w *auditWorld) (int, string) { return w.importSetup(importRename, "") },
+		want:   auditWant{"talkgroup", "1/1001", "changed", "name", `"Dispatch North"`, `"Dispatch Imported"`},
+		via:    "import",
+		refused: func(w *auditWorld) (int, string) { // a plan that isn't the preview's
+			return w.importSetup(strings.Replace(importRename, "Imported", "Imported again", 1), strings.Repeat("0", 64))
 		}},
 	{pattern: "PUT /api/v1/admin/systems/{system}/units/{unit}",
 		change: func(w *auditWorld) (int, string) {
@@ -254,7 +283,11 @@ func TestIntegrationAuditHarness(t *testing.T) {
 			t.Errorf("%s: newest entry %+v; want %s %s %s with %s %s -> %s", pr.pattern, e, wt.kind, wt.thing, wt.action,
 				wt.field, wt.before, wt.after)
 		}
-		if e.Who != (server.AuditWho{ID: "1", Name: "Made Up 1", Email: initialAdmin}) || e.Via != "browser" ||
+		via := pr.via
+		if via == "" {
+			via = "browser"
+		}
+		if e.Who != (server.AuditWho{ID: "1", Name: "Made Up 1", Email: initialAdmin}) || e.Via != via ||
 			e.At.Before(start) || e.At.After(time.Now().Add(time.Second)) {
 			t.Errorf("%s: who %+v, how %q, when %s", pr.pattern, e.Who, e.Via, e.At)
 		}
