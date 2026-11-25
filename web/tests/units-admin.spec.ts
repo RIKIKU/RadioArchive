@@ -10,7 +10,7 @@
 // hand shares one database between them), never heard on any call, so unit
 // search and the other tests see nothing of them.
 import { test, expect, type Page } from '@playwright/test';
-import { axe, looks, saveLook, shot, signIn, themes, widths } from './admin.ts';
+import { axe, inLook, looks, ownLook, saveLook, shot, signIn, themes, widths } from './admin.ts';
 
 const rowsOf = (page: Page) => page.locator('main table[role="table"] tbody tr');
 const row = (page: Page, unit: string) => rowsOf(page).filter({ has: page.locator('th', { hasText: new RegExp(`^\\s*${unit}\\s*$`) }) });
@@ -174,11 +174,13 @@ for (const look of looks) {
 				test.setTimeout(90_000);
 				await saveLook(context, baseURL!, look, theme);
 				await page.setViewportSize({ width, height: 900 });
+				await ownLook(page);
 				await open(page);
 				const tag = `${look}-${theme}-${width}`;
 				await page.getByRole('textbox', { name: 'Radio ID', exact: true }).fill('5150');
 				await expect(page.locator('p.answer')).toHaveText('5150 shows as Portables, from the range 5100-5199.');
 				await axe(page, width);
+				await inLook(page, look, theme);
 				await shot(page, `units-${tag}`);
 				// An alias being edited, with a problem under it.
 				await page.getByRole('button', { name: 'Edit the alias of 5100-5199' }).click();
@@ -186,6 +188,7 @@ for (const look of looks) {
 				await page.getByRole('button', { name: 'Save the alias of 5100-5199' }).click();
 				await expect(page.locator('#edit-alias-error')).toHaveText('An alias can\'t hold ";".');
 				await axe(page, width);
+				await inLook(page, look, theme);
 				await shot(page, `units-editing-${tag}`);
 				await page.getByRole('button', { name: 'Cancel editing 5100-5199' }).click();
 				// The add form's problems, More actions open, and the dialog.

@@ -6,7 +6,7 @@
 // (refusals, and questions cancelled); the ones that do (attaching,
 // auto-create, a tag's LED colour) are systems-live.spec.ts's.
 import { test, expect, type Page } from '@playwright/test';
-import { axe, looks, saveLook, shot, signIn, themes, widths } from './admin.ts';
+import { axe, inLook, looks, ownLook, saveLook, shot, signIn, themes, widths } from './admin.ts';
 
 const table = (page: Page, name: string) => page.getByRole('table', { name });
 const row = (page: Page, name: string, header: string) =>
@@ -134,11 +134,13 @@ for (const look of looks) {
 				test.setTimeout(90_000);
 				await saveLook(context, baseURL!, look, theme);
 				await page.setViewportSize({ width, height: 900 });
+				await ownLook(page);
 				await withUnattached(page);
 				await open(page);
 				const tag = `${look}-${theme}-${width}`;
 				await expect(page.getByRole('list', { name: 'Not attached' })).toContainText('Bench / other: 2 calls rejected, not attached to a system');
 				await axe(page, width);
+				await inLook(page, look, theme);
 				await shot(page, `systems-${tag}`);
 				// A tag being edited, with a problem; the system's form with auto-create's question.
 				await page.getByRole('button', { name: 'Edit tag fireground' }).click();
@@ -147,6 +149,7 @@ for (const look of looks) {
 				await t.getByRole('button', { name: 'Save' }).click();
 				await expect(t.locator('#tag-edit-sort_order-error')).toBeVisible();
 				await axe(page, width);
+				await inLook(page, look, theme);
 				await shot(page, `systems-editing-${tag}`);
 				await t.getByRole('button', { name: 'Cancel' }).click();
 				await page.getByRole('button', { name: 'Edit system EX' }).click();
