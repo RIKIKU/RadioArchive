@@ -49,8 +49,13 @@
 
 	const nameOfThing = (t: FullSystem | Label) => ('label' in t ? t.label : t.name);
 	const title = $derived(thing ? `Edit ${kind} ${nameOfThing(thing)}` : `Add a ${kind}`);
-	const unset = $derived(
-		kind === 'system' ? 'Not set' : kind === 'tag' ? "Not set: its talkgroups go on to their groups' or system's" : "Not set: its talkgroups go on to their other groups' or system's"
+	/** What "Not set" means for its talkgroups (ADR 0006), under Alert and LED colour. */
+	const unsetHint = $derived(
+		kind === 'system'
+			? 'Its talkgroups take it when neither they, their tag nor their groups set one. Not set, they have none.'
+			: kind === 'tag'
+				? "Its talkgroups with none of their own take it. Not set, they take their groups' or system's."
+				: "Its talkgroups with none of their own or from their tag take it. Not set, they take their other groups' or system's."
 	);
 
 	async function showProblems(ps: Partial<Record<Field, string>>) {
@@ -150,18 +155,20 @@
 			</div>
 			<div class="field">
 				<label for={id('alert')}>Alert</label>
-				<select id={id('alert')} bind:value={form.alert} aria-invalid={problems.alert ? 'true' : undefined} aria-describedby={said('alert')}>
-					<option value="">{unset}</option>
+				<select id={id('alert')} bind:value={form.alert} aria-invalid={problems.alert ? 'true' : undefined} aria-describedby={said('alert', true)}>
+					<option value="">Not set</option>
 					{#each alerts as a (a)}<option value={a}>{a === 'none' ? 'None' : a}</option>{/each}
 				</select>
+				<p class="field-hint" id="{id('alert')}-hint">{unsetHint}</p>
 				{#if problems.alert}<p class="field-error" id="{id('alert')}-error">{problems.alert}</p>{/if}
 			</div>
 			<div class="field">
 				<label for={id('led_colour')}>LED colour</label>
-				<select id={id('led_colour')} bind:value={form.led_colour} aria-invalid={problems.led_colour ? 'true' : undefined} aria-describedby={said('led_colour')}>
-					<option value="">{unset}</option>
+				<select id={id('led_colour')} bind:value={form.led_colour} aria-invalid={problems.led_colour ? 'true' : undefined} aria-describedby={said('led_colour', true)}>
+					<option value="">Not set</option>
 					{#each ledColours as c (c)}<option value={c}>{c === 'none' ? 'None' : c}</option>{/each}
 				</select>
+				<p class="field-hint" id="{id('led_colour')}-hint">{unsetHint}</p>
 				{#if problems.led_colour}<p class="field-error" id="{id('led_colour')}-error">{problems.led_colour}</p>{/if}
 			</div>
 			<div class="field">

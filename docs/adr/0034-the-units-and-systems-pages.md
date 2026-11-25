@@ -27,7 +27,7 @@ The web admin's **Units** and **Systems** pages, second and third in the Admin m
 | **Not attached** (R12) | `GET /rejections`' pairs that aren't attached now, in R12's words ("Bench / other: 1 call rejected, not attached to a system"), each with a system and Attach. A pair attached since keeps its count in the API, but isn't listed |
 | **Tags and groups** (R22) | Name, Alert, LED colour (its mark and its name), Sort order; Edit. Add a group (`POST /groups`). Tags are made where a talkgroup names one (ADR 0003), so there's no Add a tag |
 | **The form** | `SettingsEditor.svelte`, for a system, a tag or a group: a panel above its table, its heading focused, the row marked; ArchiveUx section 5's problems under fields, the server's by code (`system_exists` under ID, `label_taken` under Label, `group_exists` under Name). New: every field (`POST`). Edit: only what differs (`PATCH`) |
-| **Unset** (ADR 0006) | Alert and LED colour's first choice is null: "Not set" for a system; for a tag, "Not set: its talkgroups go on to their groups' or system's", and for a group the same with "other groups'". `None` is a setting of its own |
+| **Unset** (ADR 0006) | Alert and LED colour's first choice is null, "Not set"; the hint under each says what that means for its talkgroups (a tag's: "Its talkgroups with none of their own take it. Not set, they take their groups' or system's."). `None` is a setting of its own |
 
 ## Groups and tags on the Systems page
 
