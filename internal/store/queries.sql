@@ -1016,3 +1016,44 @@ WHERE (sqlc.narg(subject)::text IS NULL OR subject = sqlc.narg(subject)::text)
        OR (at, id) < (sqlc.narg(after_at)::timestamptz, sqlc.narg(after_id)::bigint))
 ORDER BY at DESC, id DESC
 LIMIT sqlc.arg(page_size);
+
+-- name: ListAuditEntriesOldest :many
+-- The same, oldest first (the page's When, ascending).
+SELECT id, at, issuer, subject, admin_name, admin_email, via, kind, thing, label, action, changes
+FROM audit_log
+WHERE (sqlc.narg(subject)::text IS NULL OR subject = sqlc.narg(subject)::text)
+  AND (sqlc.narg(kind)::text IS NULL OR kind = sqlc.narg(kind)::text)
+  AND (sqlc.narg(thing)::text IS NULL OR thing = sqlc.narg(thing)::text)
+  AND (sqlc.narg(since)::timestamptz IS NULL OR at >= sqlc.narg(since)::timestamptz)
+  AND (sqlc.narg(until)::timestamptz IS NULL OR at < sqlc.narg(until)::timestamptz)
+  AND (sqlc.narg(after_at)::timestamptz IS NULL
+       OR (at, id) > (sqlc.narg(after_at)::timestamptz, sqlc.narg(after_id)::bigint))
+ORDER BY at, id
+LIMIT sqlc.arg(page_size);
+
+-- name: ListAuditAdmins :many
+-- Everyone with an entry, by the name and email of their latest, for the
+-- Audit log page's "who" filter (ADR 0032). The system's prune is one.
+SELECT DISTINCT ON (subject) subject, admin_name, admin_email
+FROM audit_log
+ORDER BY subject, at DESC, id DESC;
+
+-- The audit log's retention (owner, 2026-11-25; ADR 0032).
+
+-- name: AuditRetentionDays :one
+-- The period in force: audit_log_retention_days() is its one reading.
+SELECT audit_log_retention_days()::integer AS days;
+
+-- name: CountAuditEntriesPast :one
+-- How many entries a period of days would delete now, by the database's
+-- clock, as the prune goes.
+SELECT count(*) FROM audit_log WHERE at < now() - make_interval(days => sqlc.arg(days)::integer);
+
+-- name: AuditLogSize :one
+SELECT count(*) AS entries, min(at)::timestamptz AS oldest FROM audit_log;
+
+-- name: PruneAuditLog :one
+-- The nightly run's prune (migration 00026): the only DELETE the table's
+-- trigger lets through.
+SELECT p.deleted::bigint AS deleted, p.cutoff::timestamptz AS cutoff, p.days::integer AS days
+FROM audit_log_prune() p;

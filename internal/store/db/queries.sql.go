@@ -343,6 +343,36 @@ func (q *Queries) AttachedSystem(ctx context.Context, arg AttachedSystemParams) 
 	return i, err
 }
 
+const auditLogSize = `-- name: AuditLogSize :one
+SELECT count(*) AS entries, min(at)::timestamptz AS oldest FROM audit_log
+`
+
+type AuditLogSizeRow struct {
+	Entries int64
+	Oldest  pgtype.Timestamptz
+}
+
+func (q *Queries) AuditLogSize(ctx context.Context) (AuditLogSizeRow, error) {
+	row := q.db.QueryRow(ctx, auditLogSize)
+	var i AuditLogSizeRow
+	err := row.Scan(&i.Entries, &i.Oldest)
+	return i, err
+}
+
+const auditRetentionDays = `-- name: AuditRetentionDays :one
+
+SELECT audit_log_retention_days()::integer AS days
+`
+
+// The audit log's retention (owner, 2026-11-25; ADR 0032).
+// The period in force: audit_log_retention_days() is its one reading.
+func (q *Queries) AuditRetentionDays(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, auditRetentionDays)
+	var days int32
+	err := row.Scan(&days)
+	return days, err
+}
+
 const autoCreateTalkgroup = `-- name: AutoCreateTalkgroup :exec
 INSERT INTO talkgroups (system_id, talkgroup_id, unreviewed)
 VALUES ($1, $2, true)
@@ -463,6 +493,19 @@ type ClearTalkgroupGroupsParams struct {
 func (q *Queries) ClearTalkgroupGroups(ctx context.Context, arg ClearTalkgroupGroupsParams) error {
 	_, err := q.db.Exec(ctx, clearTalkgroupGroups, arg.SystemID, arg.TalkgroupID)
 	return err
+}
+
+const countAuditEntriesPast = `-- name: CountAuditEntriesPast :one
+SELECT count(*) FROM audit_log WHERE at < now() - make_interval(days => $1::integer)
+`
+
+// How many entries a period of days would delete now, by the database's
+// clock, as the prune goes.
+func (q *Queries) CountAuditEntriesPast(ctx context.Context, days int32) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditEntriesPast, days)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countRecordingsBefore = `-- name: CountRecordingsBefore :one
@@ -2228,6 +2271,40 @@ func (q *Queries) ListAttachments(ctx context.Context) ([]ListAttachmentsRow, er
 	return items, nil
 }
 
+const listAuditAdmins = `-- name: ListAuditAdmins :many
+SELECT DISTINCT ON (subject) subject, admin_name, admin_email
+FROM audit_log
+ORDER BY subject, at DESC, id DESC
+`
+
+type ListAuditAdminsRow struct {
+	Subject    string
+	AdminName  string
+	AdminEmail string
+}
+
+// Everyone with an entry, by the name and email of their latest, for the
+// Audit log page's "who" filter (ADR 0032). The system's prune is one.
+func (q *Queries) ListAuditAdmins(ctx context.Context) ([]ListAuditAdminsRow, error) {
+	rows, err := q.db.Query(ctx, listAuditAdmins)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAuditAdminsRow
+	for rows.Next() {
+		var i ListAuditAdminsRow
+		if err := rows.Scan(&i.Subject, &i.AdminName, &i.AdminEmail); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT id, at, issuer, subject, admin_name, admin_email, via, kind, thing, label, action, changes
 FROM audit_log
@@ -2257,6 +2334,74 @@ type ListAuditEntriesParams struct {
 // each filter given.
 func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]AuditLog, error) {
 	rows, err := q.db.Query(ctx, listAuditEntries,
+		arg.Subject,
+		arg.Kind,
+		arg.Thing,
+		arg.Since,
+		arg.Until,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.At,
+			&i.Issuer,
+			&i.Subject,
+			&i.AdminName,
+			&i.AdminEmail,
+			&i.Via,
+			&i.Kind,
+			&i.Thing,
+			&i.Label,
+			&i.Action,
+			&i.Changes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditEntriesOldest = `-- name: ListAuditEntriesOldest :many
+SELECT id, at, issuer, subject, admin_name, admin_email, via, kind, thing, label, action, changes
+FROM audit_log
+WHERE ($1::text IS NULL OR subject = $1::text)
+  AND ($2::text IS NULL OR kind = $2::text)
+  AND ($3::text IS NULL OR thing = $3::text)
+  AND ($4::timestamptz IS NULL OR at >= $4::timestamptz)
+  AND ($5::timestamptz IS NULL OR at < $5::timestamptz)
+  AND ($6::timestamptz IS NULL
+       OR (at, id) > ($6::timestamptz, $7::bigint))
+ORDER BY at, id
+LIMIT $8
+`
+
+type ListAuditEntriesOldestParams struct {
+	Subject  *string
+	Kind     *string
+	Thing    *string
+	Since    pgtype.Timestamptz
+	Until    pgtype.Timestamptz
+	AfterAt  pgtype.Timestamptz
+	AfterID  *int64
+	PageSize int32
+}
+
+// The same, oldest first (the page's When, ascending).
+func (q *Queries) ListAuditEntriesOldest(ctx context.Context, arg ListAuditEntriesOldestParams) ([]AuditLog, error) {
+	rows, err := q.db.Query(ctx, listAuditEntriesOldest,
 		arg.Subject,
 		arg.Kind,
 		arg.Thing,
@@ -2838,6 +2983,26 @@ func (q *Queries) Ping(ctx context.Context) (int32, error) {
 	var ok int32
 	err := row.Scan(&ok)
 	return ok, err
+}
+
+const pruneAuditLog = `-- name: PruneAuditLog :one
+SELECT p.deleted::bigint AS deleted, p.cutoff::timestamptz AS cutoff, p.days::integer AS days
+FROM audit_log_prune() p
+`
+
+type PruneAuditLogRow struct {
+	Deleted int64
+	Cutoff  pgtype.Timestamptz
+	Days    int32
+}
+
+// The nightly run's prune (migration 00026): the only DELETE the table's
+// trigger lets through.
+func (q *Queries) PruneAuditLog(ctx context.Context) (PruneAuditLogRow, error) {
+	row := q.db.QueryRow(ctx, pruneAuditLog)
+	var i PruneAuditLogRow
+	err := row.Scan(&i.Deleted, &i.Cutoff, &i.Days)
+	return i, err
 }
 
 const pruneRejectedCalls = `-- name: PruneRejectedCalls :execrows

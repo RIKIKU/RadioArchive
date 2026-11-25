@@ -45,6 +45,15 @@ const (
 	MaxDays     = 3650
 )
 
+// The audit log's retention period, in days (owner, 2026-11-25; ADR 0032):
+// the nightly run deletes entries older than it. Migration 00026's
+// audit_log_retention_days() reads the setting with the same bounds.
+const (
+	DefaultAuditDays = 730
+	MinAuditDays     = 90
+	MaxAuditDays     = 3650
+)
+
 // Free space on the recordings volume, as fractions (R88). Below MinFree
 // (RECORDINGS_MIN_FREE) the oldest recordings are deleted early; below
 // WarnFree admins are warned.
@@ -75,8 +84,9 @@ const (
 )
 
 const (
-	daysKey = "retention_days"
-	batch   = 1000
+	daysKey      = "retention_days"
+	auditDaysKey = "audit_retention_days"
+	batch        = 1000
 	// LockKey is held by whichever server runs the nightly job or
 	// the low-disk check, so only one does at a time.
 	LockKey int64 = 7_243_037
@@ -256,6 +266,41 @@ func (j *Job) SetDays(ctx context.Context, by store.Actor, days int) error {
 		return au.Record(store.Change{Kind: store.AuditRetention, Label: "Retention",
 			Before: map[string]int{"days": was}, After: map[string]int{"days": days}})
 	})
+}
+
+// AuditDays is the audit log's retention period in force.
+func (j *Job) AuditDays(ctx context.Context) (int, error) {
+	n, err := j.cfg.Store.AuditRetentionDays(ctx)
+	return int(n), err
+}
+
+// SetAuditDays saves the audit log's retention period, as the admin by
+// changes it, audited in the same transaction like any setting. The next
+// nightly run deletes the entries older than it.
+func (j *Job) SetAuditDays(ctx context.Context, by store.Actor, days int) error {
+	if days < MinAuditDays || days > MaxAuditDays {
+		return fmt.Errorf("the audit log's retention must be %d to %d days", MinAuditDays, MaxAuditDays)
+	}
+	return j.cfg.Store.Audited(ctx, by, func(q *db.Queries, au *store.Audit) error {
+		if err := au.Lock(store.AuditRetention, store.AuditRetentionThing); err != nil {
+			return err
+		}
+		was, err := q.AuditRetentionDays(ctx)
+		if err != nil {
+			return err
+		}
+		if err := q.SetSetting(ctx, db.SetSettingParams{Key: auditDaysKey, Value: strconv.Itoa(days)}); err != nil {
+			return err
+		}
+		return au.Record(store.Change{Kind: store.AuditRetention, Thing: store.AuditRetentionThing, Label: "Audit log retention",
+			Before: map[string]int{"days": int(was)}, After: map[string]int{"days": days}})
+	})
+}
+
+// AuditEntriesPast counts the audit log's entries that a period of days
+// would delete now.
+func (j *Job) AuditEntriesPast(ctx context.Context, days int) (int64, error) {
+	return j.cfg.Store.CountAuditEntriesPast(ctx, int32(days))
 }
 
 // Cutoff is when a call must have started by to be kept at now: calls that
@@ -469,6 +514,9 @@ type NightlyResult struct {
 	Orphans    int64     `json:"orphans"`    // recording files with no row removed
 	Incoming   int64     `json:"incoming"`   // abandoned upload files removed
 	FileErrors int64     `json:"file_errors"`
+	// AuditEntries is how many audit log entries were past its own
+	// period and deleted (ADR 0032), by the database's clock.
+	AuditEntries int64 `json:"audit_entries"`
 }
 
 // RunNightly does a nightly run now, by the job's clock. It's how tests
@@ -498,7 +546,7 @@ func (j *Job) nightly(ctx context.Context, ranFor time.Time) (res NightlyResult,
 		}
 		j.cfg.Log.Info("nightly retention run", "days", res.Days, "cutoff", res.Cutoff, "calls", res.Calls,
 			"recordings", res.Recordings, "rejections", res.Rejections, "orphans", res.Orphans,
-			"incoming", res.Incoming, "file_errors", res.FileErrors)
+			"incoming", res.Incoming, "file_errors", res.FileErrors, "audit_entries", res.AuditEntries)
 	}()
 	days, err := j.Days(ctx)
 	if err != nil {
@@ -539,6 +587,14 @@ func (j *Job) nightly(ctx context.Context, ranFor time.Time) (res NightlyResult,
 	if err := j.sweep(ctx, started, &res); err != nil {
 		return res, err
 	}
+	// 4. The audit log's entries past its own period, by the database's
+	// clock, which its entries' times are on: the prune writes its own
+	// entry when any go (ADR 0032).
+	p, err := j.cfg.Store.PruneAuditLog(ctx)
+	if err != nil {
+		return res, err
+	}
+	res.AuditEntries = p.Deleted
 	return res, nil
 }
 

@@ -137,6 +137,96 @@ func (a *Admin) putRetention(r *http.Request, who string) (int, any, error) {
 	return a.getRetention(r, who)
 }
 
+// The audit log's retention (owner, 2026-11-25; ADR 0032): how long its
+// entries are kept, on the Settings page with the recordings'.
+
+// AuditRetention is GET /api/v1/admin/audit/retention: the period, the log's
+// size and oldest entry, and when the nightly run next deletes what's past
+// the period.
+type AuditRetention struct {
+	Days        int        `json:"days"`
+	DefaultDays int        `json:"default_days"`
+	MinDays     int        `json:"min_days"`
+	MaxDays     int        `json:"max_days"`
+	NextRun     time.Time  `json:"next_run"`
+	Entries     int64      `json:"entries"`
+	Oldest      *time.Time `json:"oldest"`
+}
+
+func (a *Admin) getAuditRetention(r *http.Request, _ string) (int, any, error) {
+	ctx := r.Context()
+	days, err := a.ret.AuditDays(ctx)
+	if err != nil {
+		return 0, nil, dbErr("audit retention", err)
+	}
+	size, err := a.st.AuditLogSize(ctx)
+	if err != nil {
+		return 0, nil, dbErr("audit retention", err)
+	}
+	out := AuditRetention{Days: days, DefaultDays: retention.DefaultAuditDays, MinDays: retention.MinAuditDays,
+		MaxDays: retention.MaxAuditDays, NextRun: a.ret.NextRun(a.ret.Now()).UTC(), Entries: size.Entries}
+	if size.Oldest.Valid {
+		t := size.Oldest.Time.UTC()
+		out.Oldest = &t
+	}
+	return http.StatusOK, out, nil
+}
+
+// AuditRetentionConfirm is the answer to a shorter period, not yet
+// confirmed, that would delete entries (409): how many the next nightly
+// run deletes with it. A shorter period that deletes none needs no
+// confirming.
+type AuditRetentionConfirm struct {
+	Code    string `json:"error"`
+	Message string `json:"message"`
+	Days    int    `json:"days"`
+	Entries int64  `json:"entries"`
+}
+
+// CodeConfirmAuditRetention: shortening the audit log's retention deletes
+// entries, and needs confirming.
+const CodeConfirmAuditRetention = "confirm_shorter_audit_retention"
+
+func (a *Admin) putAuditRetention(r *http.Request, who string) (int, any, error) {
+	var in RetentionChange
+	if err := decode(r, &in); err != nil {
+		return 0, nil, err
+	}
+	if in.Days < retention.MinAuditDays || in.Days > retention.MaxAuditDays {
+		return 0, nil, refuseAdmin(http.StatusBadRequest, "invalid_days",
+			"The audit log's retention must be %d to %d days.", retention.MinAuditDays, retention.MaxAuditDays)
+	}
+	ctx := r.Context()
+	cur, err := a.ret.AuditDays(ctx)
+	if err != nil {
+		return 0, nil, dbErr("audit retention", err)
+	}
+	if in.Days < cur && !in.Confirm {
+		n, err := a.ret.AuditEntriesPast(ctx, in.Days)
+		if err != nil {
+			return 0, nil, dbErr("audit retention", err)
+		}
+		if n > 0 {
+			return http.StatusConflict, AuditRetentionConfirm{Code: CodeConfirmAuditRetention, Days: in.Days, Entries: n,
+				Message: fmt.Sprintf("Shortening the audit log's retention from %d to %d days deletes %s at the next nightly run. Confirm?",
+					cur, in.Days, entriesCount(n))}, nil
+		}
+	}
+	by, _ := AdminFrom(ctx)
+	if err := a.ret.SetAuditDays(ctx, by.Actor(), in.Days); err != nil {
+		return 0, nil, dbErr("audit retention", err)
+	}
+	a.log.Info("admin changed the audit log's retention", "admin", who, "from_days", cur, "days", in.Days)
+	return a.getAuditRetention(r, who)
+}
+
+func entriesCount(n int64) string {
+	if n == 1 {
+		return "1 entry"
+	}
+	return fmt.Sprintf("%d entries", n)
+}
+
 func recordingsCount(n int64) string {
 	if n == 1 {
 		return "1 recording"

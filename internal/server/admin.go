@@ -212,6 +212,7 @@ func WithAdmin(a *Admin) Option {
 			{"PATCH /tags/{tag}", a.patchTag},
 			{"GET /audit", a.auditLog},
 			{"POST /import", a.importSetup},
+			{"GET /audit/admins", a.auditAdmins},
 		} {
 			method, path, _ := strings.Cut(r.pattern, " ")
 			api.handle(AdminRoute, method+" "+AdminPath+path, a.serve(r.h))
@@ -219,6 +220,8 @@ func WithAdmin(a *Admin) Option {
 		if a.ret != nil {
 			api.handle(AdminRoute, "GET "+AdminPath+"/retention", a.serve(a.getRetention))
 			api.handle(AdminRoute, "PUT "+AdminPath+"/retention", a.serve(a.putRetention))
+			api.handle(AdminRoute, "GET "+AuditPath+"/retention", a.serve(a.getAuditRetention))
+			api.handle(AdminRoute, "PUT "+AuditPath+"/retention", a.serve(a.putAuditRetention))
 		}
 		if a.rs != nil {
 			api.handle(AdminRoute, "GET "+AdminPath+"/recorders", a.serve(a.listRecorders))

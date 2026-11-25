@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -109,6 +110,93 @@ func TestIntegrationAudited(t *testing.T) {
 	}
 	if auditCount(t, st) != 1 {
 		t.Errorf("%d entries after attempts to change them", auditCount(t, st))
+	}
+	// The prune's way in isn't anyone's: the nightly run's "how" and the
+	// audit log's own kind come only from the prune.
+	nightly := store.Actor{Subject: store.SystemSubject, Name: "System", Via: store.ViaNightly}
+	if err := st.Audited(ctx, nightly, func(*db.Queries, *store.Audit) error { return nil }); !errors.Is(err, store.ErrNoActor) {
+		t.Errorf("an audited change as the nightly run: %v", err)
+	}
+}
+
+// TestIntegrationAuditPrune (owner, 2026-11-25; ADR 0032): the nightly
+// prune deletes the entries past the audit log's period, and only those,
+// and writes one entry saying so; with none past it, it writes nothing.
+// Turning the prune's switch on by hand still deletes nothing the period
+// keeps. The period's one reading takes 90 to 3,650 days, else 730.
+func TestIntegrationAuditPrune(t *testing.T) {
+	st := accountsStore(t)
+	ctx := context.Background()
+	for _, c := range []struct {
+		value string
+		want  int32
+	}{{"", 730}, {"90", 90}, {"3650", 3650}, {"89", 730}, {"3651", 730}, {"abc", 730}, {"-5", 730}, {"99999999", 730}} {
+		if c.value != "" {
+			if err := st.SetSetting(ctx, db.SetSettingParams{Key: "audit_retention_days", Value: c.value}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got, err := st.AuditRetentionDays(ctx); err != nil || got != c.want {
+			t.Errorf("setting %q: %d days, %v; want %d", c.value, got, err, c.want)
+		}
+	}
+	if err := st.SetSetting(ctx, db.SetSettingParams{Key: "audit_retention_days", Value: "365"}); err != nil {
+		t.Fatal(err)
+	}
+	add := func(days int) {
+		t.Helper()
+		if _, err := st.Pool.Exec(ctx, `
+INSERT INTO audit_log (at, issuer, subject, admin_name, via, kind, thing, label, action, changes)
+VALUES (now() - make_interval(days => $1), 'i', 'old', 'Old Admin', 'browser', 'unit', '1/5001', 'Engine', 'changed', '[]')`, days); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add(400)
+	add(366)
+	add(300)
+	add(0)
+
+	// The switch by hand: still nothing the period keeps.
+	tx, err := st.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('radioarchive.audit_prune', 'on', true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM audit_log`); err == nil {
+		t.Error("with the switch on by hand, DELETE took entries the period keeps")
+	}
+	_ = tx.Rollback(ctx)
+	if n := auditCount(t, st); n != 4 {
+		t.Fatalf("%d entries", n)
+	}
+
+	p, err := st.PruneAuditLog(ctx)
+	if err != nil || p.Deleted != 2 || p.Days != 365 || time.Since(p.Cutoff) < 364*24*time.Hour || time.Since(p.Cutoff) > 366*24*time.Hour {
+		t.Fatalf("prune: %+v, %v", p, err)
+	}
+	es, err := st.AuditEntries(ctx, store.AuditFilter{Limit: 10})
+	if err != nil || len(es) != 3 {
+		t.Fatalf("after the prune: %+v, %v", es, err)
+	}
+	e := es[0]
+	if e.By != (store.Actor{Subject: store.SystemSubject, Name: "System", Via: store.ViaNightly}) || e.Kind != store.AuditAudit ||
+		e.Action != store.Deleted || e.Label != "Audit log" || len(e.Changes) != 3 ||
+		e.Changes[0].Field != "entries" || string(e.Changes[0].Before) != "2" || string(e.Changes[0].After) != "null" ||
+		e.Changes[1].Field != "before" || e.Changes[2].Field != "days" || string(e.Changes[2].Before) != "365" {
+		t.Errorf("the prune's entry: %+v", e)
+	}
+	var before time.Time
+	if err := json.Unmarshal(e.Changes[1].Before, &before); err != nil || before.Sub(p.Cutoff).Abs() > time.Second {
+		t.Errorf("the prune's cut-off %s, %v; want %s", e.Changes[1].Before, err, p.Cutoff)
+	}
+	// Nothing more past it: nothing deleted, no entry.
+	if p, err := st.PruneAuditLog(ctx); err != nil || p.Deleted != 0 {
+		t.Fatalf("again: %+v, %v", p, err)
+	}
+	if n := auditCount(t, st); n != 3 {
+		t.Errorf("%d entries after a prune with nothing to do", n)
 	}
 }
 

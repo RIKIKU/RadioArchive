@@ -155,6 +155,7 @@ func TestIntegrationAuditReadAPI(t *testing.T) {
 	for _, c := range []struct{ query, code string }{
 		{"kind=calls", "invalid_kind"}, {"since=yesterday", "invalid_since"}, {"until=1", "invalid_until"},
 		{"limit=0", "invalid_limit"}, {"limit=201", "invalid_limit"}, {"cursor=abc", "invalid_cursor"},
+		{"order=random", "invalid_order"},
 	} {
 		e.wantRefusal(t, "GET", "/audit?"+c.query, nil, 400, c.code)
 	}
@@ -177,7 +178,8 @@ func TestIntegrationAuditNotForReads(t *testing.T) {
 	for _, p := range []string{"/systems", fmt.Sprintf("/systems/%d", e.sys), fmt.Sprintf("/systems/%d/talkgroups", e.sys),
 		fmt.Sprintf("/systems/%d/talkgroups/1003", e.sys), fmt.Sprintf("/systems/%d/talkgroups/1003/calls", e.sys),
 		"/talkgroups", fmt.Sprintf("/systems/%d/units", e.sys), fmt.Sprintf("/systems/%d/units/5001", e.sys),
-		"/attachments", "/rejections", "/groups", "/tags", "/retention", "/recorders", "/audit", "/audit?kind=talkgroup", "/setup"} {
+		"/attachments", "/rejections", "/groups", "/tags", "/retention", "/recorders", "/audit", "/audit?kind=talkgroup", "/setup",
+		"/audit?order=oldest", "/audit/admins", "/audit/retention"} {
 		e.mustAdmin(t, "GET", p, nil, 200)
 	}
 	e.wantRefusal(t, "PATCH", fmt.Sprintf("/systems/%d/talkgroups/1001", e.sys), map[string]any{"state": "secret"}, 400, "invalid_state")
@@ -189,29 +191,151 @@ func TestIntegrationAuditNotForReads(t *testing.T) {
 	}
 }
 
-// TestIntegrationAuditKeptByRetention (R54): the nightly run, however far
-// on, leaves the audit log as it was.
-func TestIntegrationAuditKeptByRetention(t *testing.T) {
+// TestIntegrationAuditOldestFirstAndWho (ADR 0032): order=oldest pages the
+// other way with its own cursor, and /audit/admins lists everyone with an
+// entry, by their latest name.
+func TestIntegrationAuditOldestFirstAndWho(t *testing.T) {
 	e := newEnv(t)
-	_, key := e.recorder(t)
-	e.era(t)
-	e.storeAt(t, key, 1, 1001, eraNow.Add(-31*day))
-	e.mustAdmin(t, "PUT", "/retention", map[string]any{"days": 60}, 200)
-	e.mustAdmin(t, "PUT", "/retention", map[string]any{"days": 7, "confirm": true}, 200)
-	before := e.mustAdmin(t, "GET", "/audit?limit=200", nil, 200)
-	if len(decodeJSON[server.AuditPage](t, before).Entries) < 10 {
-		t.Fatalf("too few entries to check: %s", before)
+	sys := e.fixture(t)
+	tg := fmt.Sprintf("/systems/%d/talkgroups/1001", sys)
+	if code := e.asModule(t, "module-admin", "PATCH", tg, map[string]any{"state": "hidden"}); code != 200 {
+		t.Fatalf("hiding as the module: %d", code)
 	}
-	ctx := context.Background()
-	if res, err := e.job.RunNightly(ctx); err != nil || res.Calls != 1 {
-		t.Fatalf("nightly: %+v, %v", res, err)
+	newest := e.audit(t, "limit=200")
+	var paged []int64
+	q := "order=oldest&limit=3"
+	for range 5 {
+		p := e.audit(t, q)
+		for _, x := range p.Entries {
+			paged = append(paged, x.ID)
+		}
+		if p.Next == nil {
+			break
+		}
+		q = "order=oldest&limit=3&cursor=" + url.QueryEscape(*p.Next)
 	}
-	// Years later, with every entry long past the period.
-	e.clock.set(time.Now().AddDate(10, 0, 0))
-	if _, err := e.job.RunNightly(ctx); err != nil {
+	if len(paged) != len(newest.Entries) {
+		t.Fatalf("oldest first %v, newest first %d", paged, len(newest.Entries))
+	}
+	for i, id := range paged {
+		if want := newest.Entries[len(newest.Entries)-1-i].ID; id != want {
+			t.Errorf("oldest first %v: entry %d is %d, want %d", paged, i, id, want)
+			break
+		}
+	}
+	who := decodeJSON[[]server.AuditWho](t, e.mustAdmin(t, "GET", "/audit/admins", nil, 200))
+	if len(who) != 2 || who[0] != (server.AuditWho{ID: "test admin", Name: "Test Admin", Email: "test.admin@example.test"}) ||
+		who[1].ID != "module-admin" || who[1].Name != "Test Admin module-admin" {
+		t.Errorf("who: %+v", who)
+	}
+	if n := e.auditCount(t); n != len(newest.Entries) {
+		t.Errorf("reading added entries: %d, was %d", n, len(newest.Entries))
+	}
+}
+
+// backdate adds an entry of n days ago, as an admin's change long ago, for
+// the audit log's retention.
+func (e *env) backdate(t *testing.T, days int, label string) {
+	t.Helper()
+	if _, err := e.st.Pool.Exec(context.Background(), `
+INSERT INTO audit_log (at, issuer, subject, admin_name, admin_email, via, kind, thing, label, action, changes)
+VALUES (now() - make_interval(days => $1), 'https://issuer.example.test', 'old admin', 'Old Admin', 'old@example.test',
+        'browser', 'talkgroup', '1/1001', $2, 'changed', '[{"field":"label","before":"A","after":"B"}]')`, days, label); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestIntegrationAuditRetention (owner, 2026-11-25; ADR 0032): the audit
+// log's own period, 730 days by default, is a setting changed like any
+// other, audited; shortening it asks first, naming how many entries go,
+// only when some would; the nightly run deletes what's past it and says so
+// in one entry of the system's; and recordings' retention never touches
+// it (R54).
+func TestIntegrationAuditRetention(t *testing.T) {
+	e := newEnv(t)
+	_, key := e.recorder(t)
+	ctx := context.Background()
+	got := decodeJSON[server.AuditRetention](t, e.mustAdmin(t, "GET", "/audit/retention", nil, 200))
+	if got.Days != 730 || got.DefaultDays != 730 || got.MinDays != 90 || got.MaxDays != 3650 || got.NextRun.IsZero() {
+		t.Errorf("the default: %+v", got)
+	}
+	e.backdate(t, 800, "Eight hundred days ago")
+	e.backdate(t, 400, "Four hundred days ago")
+	e.backdate(t, 100, "A hundred days ago")
+
+	// Recordings' retention, however short, and the nightly run, however
+	// far on by the job's clock: the entries the audit period keeps stay.
+	e.era(t)
+	e.storeAt(t, key, 1, 1001, eraNow.Add(-31*day))
+	e.mustAdmin(t, "PUT", "/retention", map[string]any{"days": 7, "confirm": true}, 200)
+	res, err := e.job.RunNightly(ctx)
+	if err != nil || res.Calls != 1 || res.AuditEntries != 1 {
+		t.Fatalf("nightly: %+v, %v", res, err)
+	}
+	all := e.audit(t, "limit=200")
+	prune := all.Entries[0]
+	if b, _ := change(prune, "entries"); prune.Kind != "audit" || prune.Action != "deleted" || prune.Via != "nightly" ||
+		prune.Who != (server.AuditWho{ID: "system", Name: "System"}) || b != "1" || prune.Label != "Audit log" {
+		t.Errorf("the prune's entry: %+v", prune)
+	}
+	if b, _ := change(prune, "days"); b != "730" {
+		t.Errorf("the prune's period: %s", b)
+	}
+	for _, x := range all.Entries {
+		if x.Label == "Eight hundred days ago" {
+			t.Errorf("an entry past 730 days was kept: %+v", x)
+		}
+	}
+	e.clock.set(time.Now().AddDate(10, 0, 0))
+	before := e.mustAdmin(t, "GET", "/audit?limit=200", nil, 200)
+	if res, err := e.job.RunNightly(ctx); err != nil || res.AuditEntries != 0 {
+		t.Fatalf("nightly ten years on by the job's clock: %+v, %v", res, err)
+	}
 	if after := e.mustAdmin(t, "GET", "/audit?limit=200", nil, 200); !bytes.Equal(before, after) {
-		t.Errorf("the nightly run changed the audit log:\n%s\nwas\n%s", after, before)
+		t.Errorf("a nightly run with nothing past the audit period changed the log:\n%s\nwas\n%s", after, before)
+	}
+
+	// Out of range.
+	for _, d := range []int{89, 3651, 0} {
+		e.wantRefusal(t, "PUT", "/audit/retention", map[string]any{"days": d}, 400, "invalid_days")
+	}
+	// Shorter, deleting none: saved at once, audited.
+	n := e.auditCount(t)
+	if got := decodeJSON[server.AuditRetention](t, e.mustAdmin(t, "PUT", "/audit/retention", map[string]any{"days": 500}, 200)); got.Days != 500 {
+		t.Errorf("500 days: %+v", got)
+	}
+	set := e.audit(t, "limit=1").Entries[0]
+	if b, a := change(set, "days"); set.Kind != "retention" || set.Thing != "audit" || set.Label != "Audit log retention" ||
+		b != "730" || a != "500" || set.Via != "browser" || e.auditCount(t) != n+1 {
+		t.Errorf("the change's entry: %+v", set)
+	}
+	// Shorter, deleting some: asked first, with how many; nothing saved.
+	b := e.mustAdmin(t, "PUT", "/audit/retention", map[string]any{"days": 90}, 409)
+	ask := decodeJSON[server.AuditRetentionConfirm](t, b)
+	if ask.Code != "confirm_shorter_audit_retention" || ask.Entries != 2 || ask.Days != 90 ||
+		ask.Message != "Shortening the audit log's retention from 500 to 90 days deletes 2 entries at the next nightly run. Confirm?" {
+		t.Errorf("asking: %s", b)
+	}
+	if got := decodeJSON[server.AuditRetention](t, e.mustAdmin(t, "GET", "/audit/retention", nil, 200)); got.Days != 500 || e.auditCount(t) != n+1 {
+		t.Errorf("unconfirmed, it changed: %+v", got)
+	}
+	e.mustAdmin(t, "PUT", "/audit/retention", map[string]any{"days": 90, "confirm": true}, 200)
+	if res, err := e.job.RunNightly(ctx); err != nil || res.AuditEntries != 2 {
+		t.Fatalf("nightly at 90 days: %+v, %v", res, err)
+	}
+	if b, _ := change(e.audit(t, "limit=1").Entries[0], "entries"); b != "2" {
+		t.Errorf("the second prune's entry: %s", b)
+	}
+	// Longer: saved, and nothing comes back.
+	e.mustAdmin(t, "PUT", "/audit/retention", map[string]any{"days": 3650}, 200)
+	if old := e.audit(t, "who="+url.QueryEscape("old admin")); len(old.Entries) != 0 {
+		t.Errorf("pruned entries are back: %+v", old.Entries)
+	}
+	// Still no DELETE but the prune's, nor any UPDATE.
+	if _, err := e.st.Pool.Exec(ctx, `DELETE FROM audit_log`); err == nil {
+		t.Error("DELETE outside the prune went through")
+	}
+	if _, err := e.st.Pool.Exec(ctx, `UPDATE audit_log SET label = 'rewritten'`); err == nil {
+		t.Error("UPDATE went through")
 	}
 }
