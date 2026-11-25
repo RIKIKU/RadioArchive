@@ -13,7 +13,8 @@
 //   from, to    days, YYYY-MM-DD, on the deployment's clock (TZ), as
 //               ArchiveUx's DateRange gives them; none: the last 31 days
 //   from_time, to_time   HH:MM on the same clock; none: the whole day
-//   unit        a radio ID, optionally after its system's ID and a dot
+//   unit        a radio ID, or a range alias's radio IDs (5100-5199),
+//               optionally after its system's ID and a dot (ADR 0019)
 //   order       oldest; none: newest first
 //
 // The search sent to the API names the talkgroups those resolve to in the
@@ -56,8 +57,8 @@ export const noFilters = (): Filters => ({ scope: 'set', talkgroups: [], from: '
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
-/** A radio ID, optionally after its system's ID: what the API takes as unit. */
-export const UNIT = /^(\d{1,19}\.)?\d{1,19}$/;
+/** A radio ID or a range of them (5100-5199), optionally after its system's ID: what the API takes as unit. */
+export const UNIT = /^(\d{1,19}\.)?\d{1,19}(-\d{1,19})?$/;
 
 /** The filters an address holds. Anything that doesn't read is left out. */
 export function readFilters(p: { get(name: string): string | null }): Filters {

@@ -74,6 +74,22 @@ func TestIntegrationUnitAliases(t *testing.T) {
 	if got := ids(e.recent(t, around(t0, "unit", "5001")).Calls); !slices.Equal(got, []string{a}) {
 		t.Errorf("filtered to 5001: %v, want %v", got, []string{a})
 	}
+	// A range (ADR 0019): the calls with any radio in it.
+	for _, c := range []struct {
+		unit string
+		want []string
+	}{
+		{"5100-5199", []string{b}},
+		{"5000-5199", []string{a, b}},
+		{"5001-5200", []string{a, b, c}},
+		{"5151-5199", []string{}},
+		{fmt.Sprintf("%d.5000-5199", e.sys), []string{a, b}},
+		{fmt.Sprintf("%d.5000-5199", e.sys+1), []string{}},
+	} {
+		if got := ids(e.recent(t, around(t0, "unit", c.unit, "order", "oldest")).Calls); !slices.Equal(got, c.want) {
+			t.Errorf("filtered to %s: %v, want %v", c.unit, got, c.want)
+		}
+	}
 
 	// Another system's 5001 is no "Engine 1".
 	other := e.fixture(t)
@@ -89,10 +105,23 @@ func (e *env) unitSearch(t *testing.T, q string) []string {
 		t.Fatalf("unit search %q: %s", q, a)
 	}
 	var out []string
+	// A radio as 5001=Engine 1, 5200 or "5150 in Portables"; a range as
+	// 5100-5199=Portables.
 	for _, u := range decodeJSON[public.UnitSearchResponse](t, a.body).Units {
-		s := fmt.Sprint(u.ID)
+		var s string
+		switch {
+		case u.ID != nil && u.First == nil && u.Last == nil:
+			s = fmt.Sprint(*u.ID)
+		case u.ID == nil && u.First != nil && u.Last != nil && u.In == nil:
+			s = fmt.Sprintf("%d-%d", *u.First, *u.Last)
+		default:
+			t.Fatalf("unit search %q: neither a radio nor a range: %s", q, a.body)
+		}
 		if u.Alias != nil {
 			s += "=" + *u.Alias
+		}
+		if u.In != nil {
+			s += " in " + *u.In
 		}
 		if u.System != nil {
 			s = fmt.Sprintf("%d.%s", *u.System, s)
@@ -103,8 +132,11 @@ func (e *env) unitSearch(t *testing.T, q string) []string {
 }
 
 // TestIntegrationUnitSearch: unit search finds radios heard on public
-// calls by alias or ID, best first, and nothing of a radio heard only on a
-// hidden talkgroup or a call within its delay (R23, R32).
+// calls by alias or ID, best first, a radio only a range names by its ID
+// with the range beside it, and range aliases by their alias or their
+// radio IDs, never by a number alone; and nothing of a radio heard only on
+// a hidden talkgroup or a call within its delay (R23, R32), nor of a range
+// whose radios are heard only there.
 func TestIntegrationUnitSearch(t *testing.T) {
 	e := newEnv(t)
 	_, key := e.recorder(t)
@@ -112,6 +144,13 @@ func TestIntegrationUnitSearch(t *testing.T) {
 	units := fmt.Sprintf("/systems/%d/units/", e.sys)
 	e.mustAdmin(t, "PUT", units+"5002", map[string]any{"alias": "Engine 12"}, 201)
 	e.mustAdmin(t, "PUT", units+"5003", map[string]any{"alias": "Hidden engine"}, 201)
+	// Ranges: one with public 5001 and 5002 in it, one whose only radio
+	// heard (5160) is on 1001 patched with hidden 1003, one whose only
+	// radio heard (5170) is on delayed 1006, and one never heard.
+	e.mustAdmin(t, "PUT", units+"5000-5009", map[string]any{"alias": "Engines"}, 201)
+	e.mustAdmin(t, "PUT", units+"5160-5169", map[string]any{"alias": "Covert fleet"}, 201)
+	e.mustAdmin(t, "PUT", units+"5170-5179", map[string]any{"alias": "Delayed fleet"}, 201)
+	e.mustAdmin(t, "PUT", units+"5900-5999", map[string]any{"alias": "Quiet fleet"}, 201)
 	e.mustAdmin(t, "PUT", fmt.Sprintf("/systems/%d/talkgroups/1006", e.sys),
 		map[string]any{"label": "DLY 6", "name": "Delayed six", "tag": "dispatch", "delay_minutes": 5}, 201)
 	e.uploadAt(t, key, 1, 1001, nil, t0, 5001)
@@ -131,14 +170,27 @@ func TestIntegrationUnitSearch(t *testing.T) {
 		want []string
 	}{
 		{"Engine 1", []string{"5001=Engine 1", "5002=Engine 12"}},
-		{"engine", []string{"5001=Engine 1", "5002=Engine 12"}},
+		{"engine", []string{"5001=Engine 1", "5002=Engine 12", "5000-5009=Engines"}},
 		{"ENGINE 12", []string{"5002=Engine 12"}},
 		{"12", []string{"5002=Engine 12"}},
-		{"portables", []string{"5150=Portables"}},
-		{"port", []string{"5150=Portables"}},
+		{"engines", []string{"5000-5009=Engines"}},
+		// A range by its alias or its radio IDs: choosing it on purpose.
+		{"portables", []string{"5100-5199=Portables"}},
+		{"port", []string{"5100-5199=Portables"}},
+		{"5100-5199", []string{"5100-5199=Portables"}},
+		{"5100-", []string{"5100-5199=Portables"}},
+		{"5100 - 51", []string{"5100-5199=Portables"}},
+		{"5000-", []string{"5000-5009=Engines"}},
+		{"5-", nil},
+		{"5100-52", nil},
+		{"5101-5199", nil},
+		{"fleet", nil},
+		// A radio ID never offers a range; one only a range names is
+		// offered as its ID, in the range.
 		{"5001", []string{"5001=Engine 1"}},
-		{"5", []string{"5001=Engine 1", "5002=Engine 12", "5150=Portables", "5200"}},
-		{"51", []string{"5150=Portables"}},
+		{"5", []string{"5001=Engine 1", "5002=Engine 12", "5150 in Portables", "5200"}},
+		{"51", []string{"5150 in Portables"}},
+		{"5150", []string{"5150 in Portables"}},
 		{"5200", []string{"5200"}},
 		// Heard only where the public may not hear it: not found.
 		{"hidden", nil},
@@ -146,6 +198,13 @@ func TestIntegrationUnitSearch(t *testing.T) {
 		{"5160", nil},
 		{"5170", nil},
 		{"516", nil},
+		{"covert fleet", nil},
+		{"5160-5169", nil},
+		{"5160-", nil},
+		{"delayed fleet", nil},
+		{"5170-", nil},
+		{"quiet fleet", nil},
+		{"5900-", nil},
 		{"", nil},
 		{"   ", nil},
 		{"05001", nil},
@@ -155,16 +214,36 @@ func TestIntegrationUnitSearch(t *testing.T) {
 			t.Errorf("unit search %q = %q, want %q", c.q, got, c.want)
 		}
 	}
-	// Once 1006's delay has passed, 5170 is heard on a public call.
+	// Once 1006's delay has passed, 5170 is heard on a public call, and its
+	// range with it.
 	e.clock.set(t0.Add(time.Hour))
-	if got := e.unitSearch(t, "5170"); !slices.Equal(got, []string{"5170=Portables"}) {
+	if got := e.unitSearch(t, "5170"); !slices.Equal(got, []string{"5170 in Delayed fleet"}) {
 		t.Errorf("after the delay: %q", got)
 	}
+	if got := e.unitSearch(t, "fleet"); !slices.Equal(got, []string{"5170-5179=Delayed fleet"}) {
+		t.Errorf("after the delay, fleet: %q", got)
+	}
 	// Hiding 1001 takes the units heard only on it (and 1003) out at the
-	// next request: 5002 is heard on 1002, 5170 on 1006.
+	// next request: 5002 is heard on 1002, 5170 on 1006. A range stays
+	// while one of its radios is heard on a public call: Engines by 5002,
+	// Portables by 5170.
 	e.mustAdmin(t, "PATCH", fmt.Sprintf("/systems/%d/talkgroups/1001", e.sys), map[string]any{"state": "hidden"}, 200)
-	if got := e.unitSearch(t, "5"); !slices.Equal(got, []string{"5002=Engine 12", "5170=Portables"}) {
+	if got := e.unitSearch(t, "5"); !slices.Equal(got, []string{"5002=Engine 12", "5170 in Delayed fleet"}) {
 		t.Errorf("with 1001 hidden: %q", got)
+	}
+	for q, want := range map[string][]string{"portables": {"5100-5199=Portables"}, "engines": {"5000-5009=Engines"},
+		"5170-": {"5170-5179=Delayed fleet"}, "5150": nil} {
+		if got := e.unitSearch(t, q); !slices.Equal(got, want) {
+			t.Errorf("with 1001 hidden, %q = %q, want %q", q, got, want)
+		}
+	}
+	// Hiding 1006 too leaves Portables with no radio heard in public: it
+	// answers as a range never heard.
+	e.mustAdmin(t, "PATCH", fmt.Sprintf("/systems/%d/talkgroups/1006", e.sys), map[string]any{"state": "hidden"}, 200)
+	for _, q := range []string{"portables", "5100-5199", "5100-", "fleet"} {
+		if got := e.unitSearch(t, q); got != nil {
+			t.Errorf("with 1001 and 1006 hidden, %q = %q", q, got)
+		}
 	}
 
 	if a := e.pub(t, "GET", public.UnitSearchPath+"?q="+strings.Repeat("x", public.MaxQuery+1), ""); a.status != 400 ||

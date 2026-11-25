@@ -138,6 +138,13 @@ func TestIntegrationRecentCallsBounds(t *testing.T) {
 		{url.Values{"talkgroups": {"1001,DISP N"}}, "invalid_talkgroups"},
 		{url.Values{"talkgroups": {strings.Repeat("1001,", public.MaxTalkgroups) + "1001"}}, "too_many_talkgroups"},
 		{url.Values{"unit": {"Engine 1"}}, "invalid_unit"},
+		{url.Values{"unit": {"5199-5100"}}, "invalid_unit"},
+		{url.Values{"unit": {"5100-5100"}}, "invalid_unit"},
+		{url.Values{"unit": {"5100-"}}, "invalid_unit"},
+		{url.Values{"unit": {"-5100"}}, "invalid_unit"},
+		{url.Values{"unit": {"5100-+5199"}}, "invalid_unit"},
+		{url.Values{"unit": {"5100-5199-5299"}}, "invalid_unit"},
+		{url.Values{"unit": {"5100-1.5199"}}, "invalid_unit"},
 		{url.Values{"order": {"random"}}, "invalid_order"},
 		{url.Values{"cursor": {"not-a-cursor"}}, "invalid_cursor"},
 		{url.Values{"limit": {"101"}}, "invalid_limit"},
@@ -422,6 +429,29 @@ func TestIntegrationRecentCallsBusyUnit(t *testing.T) {
 	q.Set("unit", "9200")
 	if got := e.recent(t, q); len(got.Calls) != 1 || got.Next != nil {
 		t.Errorf("unit 9200: %d calls", len(got.Calls))
+	}
+	// Ranges (ADR 0019): one holding both is filtered call by call too,
+	// every page full; one holding 9200 alone has its one call.
+	q.Set("unit", "9100-9200")
+	n := 0
+	for {
+		p := e.recent(t, q)
+		n += len(p.Calls)
+		if p.Next == nil {
+			break
+		}
+		if len(p.Calls) != 100 {
+			t.Fatalf("range 9100-9200: a page of %d before the last", len(p.Calls))
+		}
+		q.Set("cursor", *p.Next)
+	}
+	if n != 2100 {
+		t.Errorf("range 9100-9200: %d calls, want 2100", n)
+	}
+	q.Del("cursor")
+	q.Set("unit", "9101-9300")
+	if got := e.recent(t, q); len(got.Calls) != 1 || got.Next != nil || got.Calls[0].Transmissions[0].Unit != 9200 {
+		t.Errorf("range 9101-9300: %d calls", len(got.Calls))
 	}
 }
 

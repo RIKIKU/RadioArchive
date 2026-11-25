@@ -93,6 +93,26 @@ func parseItem(s string, bits int) (system *int64, id int64, ok bool) {
 	return system, id, true
 }
 
+// parseUnit reads a unit filter: `[system.]id`, or a range of radio IDs,
+// `[system.]first-last` with first < last, as unit search names a range
+// alias (ADR 0019).
+func parseUnit(s string) (*gate.Unit, bool) {
+	lo, hi, span := strings.Cut(s, "-")
+	sys, first, ok := parseItem(lo, 63)
+	if !ok {
+		return nil, false
+	}
+	last := first
+	if span {
+		n, err := strconv.ParseInt(hi, 10, 63)
+		if err != nil || strings.HasPrefix(hi, "+") || n <= first {
+			return nil, false
+		}
+		last = n
+	}
+	return &gate.Unit{System: sys, First: first, Last: last}, true
+}
+
 func parseTalkgroups(vs []string) (*gate.ListeningSet, *apiError) {
 	set := gate.ListeningSet{Any: []int32{}, InSystem: map[int64][]int32{}}
 	n := 0
@@ -172,12 +192,12 @@ func readSearch(q url.Values) (gate.Search, *apiError) {
 	if v, e := one("unit"); e != nil {
 		return s, e
 	} else if v != "" {
-		sys, id, ok := parseItem(v, 63)
+		u, ok := parseUnit(v)
 		if !ok {
-			e := badSearch("invalid_unit", "unit is a radio ID, optionally after its system's ID and a dot.")
+			e := badSearch("invalid_unit", "unit is a radio ID, or a range of them such as 5100-5199, optionally after its system's ID and a dot.")
 			return s, &e
 		}
-		s.Unit = &gate.Unit{System: sys, ID: id}
+		s.Unit = u
 	}
 	if v, e := one("order"); e != nil {
 		return s, e
