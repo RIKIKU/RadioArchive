@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted (2026-11-25, by the owner)
 ---
 
 # 26. The admin talkgroup table: last heard, calls in the last 30 days, and a talkgroup's calls
