@@ -17,6 +17,7 @@
 	// The page asks again every few seconds, so a recorder that drops off or
 	// goes deaf shows within moments, and clears when it's back.
 	import { onDestroy, onMount, tick } from 'svelte';
+	import { StateBadge } from 'archiveux/components';
 	import AdminPage from '#lib/admin/AdminPage.svelte';
 	import { admin, agoOf, deploymentZone, whenOf, type Access, type AdminError } from '#lib/admin/api.ts';
 
@@ -139,7 +140,7 @@
 				<li class="recorder">
 					<div class="head">
 						<h2 id="recorder-{i}">{rec.name}</h2>
-						{#if rec.warning}<span class="badge warn">Warning</span>{:else}<span class="badge ok">OK</span>{/if}
+						<StateBadge state={rec.warning ? 'warning' : 'ok'} />
 					</div>
 					{#if rec.warnings.length}
 						<ul class="warnings" aria-label="{rec.name}: warnings">
@@ -167,7 +168,8 @@
 						<div>
 							<dt>Client version</dt>
 							<dd>
-								{rec.client_version ?? 'Not known yet'}{#if rec.client_out_of_date}<span class="flag">Out of date: upgrade the recorder host</span>{/if}
+								{rec.client_version ?? 'Not known yet'}{#if rec.client_out_of_date}
+									<StateBadge state="warning" text="Out of date: upgrade the recorder host" />{/if}
 							</dd>
 						</div>
 					</dl>
@@ -182,7 +184,8 @@
 										{#if s.system_label}<span>→ {s.system_label}</span>{:else}<span class="meta">not attached</span>{/if}
 										{#if s.system_type}<span class="meta">{s.system_type}</span>{/if}</span
 									>
-									<span class="rate">Decode rate: {rate(s)}{#if s.deaf}<span class="flag">Near 0</span>{/if}</span>
+									<span class="rate">Decode rate: {rate(s)}{#if s.deaf}
+										<StateBadge state="warning" text="Near 0" />{/if}</span>
 								</li>
 							{/each}
 						</ul>
@@ -218,7 +221,7 @@
 		<p class="meta">Two recorders on one network both storing a call. Keep their coverage apart in trunk-recorder's config; both copies are kept.</p>
 		<ul class="messages" aria-label="Overlapping calls">
 			{#each overlaps as o (`${o.system_id}.${o.talkgroup}.${o.recorders.join('|')}`)}
-				<li class="alert">{o.message}{#if new Set(overlaps.map((x) => x.system_id)).size > 1}<span class="meta"> ({o.system_label})</span>{/if}</li>
+				<li class="banner" data-tone="warning"><span>{o.message}{#if new Set(overlaps.map((x) => x.system_id)).size > 1}<span class="meta"> ({o.system_label})</span>{/if}</span></li>
 			{/each}
 		</ul>
 	{/if}
@@ -276,33 +279,15 @@
 		margin: var(--space-md) 0 var(--space-xs);
 		font-size: var(--text-md);
 	}
-	/* A badge in words (WCAG 1.4.1): the warning's fill and text, or a quiet OK. */
-	.badge {
-		padding: var(--badge-pad-y) var(--badge-pad-x);
-		border-radius: var(--radius-badge);
-		font-size: var(--text-xs);
-		font-weight: var(--weight-strong);
-		letter-spacing: var(--badge-tracking);
-		text-transform: var(--badge-case);
-	}
-	.badge.warn {
-		background: var(--warn-bg);
-		color: var(--warn-fg);
-	}
-	.badge.ok {
-		background: var(--accent-soft);
-		color: var(--accent-soft-fg);
-	}
-	.warnings li,
-	.messages .alert {
+	.warnings li {
 		margin: 0 0 var(--space-xs);
 		padding: var(--space-xs) var(--space-md);
 		background: var(--warn-bg);
 		color: var(--warn-fg);
 		border-radius: var(--radius);
 	}
-	.messages .alert .meta {
-		color: var(--warn-fg);
+	.messages .banner .meta {
+		color: inherit;
 	}
 	.facts {
 		display: grid;
@@ -316,15 +301,6 @@
 	}
 	.facts dd {
 		margin: 0;
-	}
-	.flag {
-		display: inline-block;
-		margin-left: var(--space-xs);
-		padding: 0 var(--space-xs);
-		background: var(--warn-bg);
-		color: var(--warn-fg);
-		border-radius: var(--radius-badge);
-		font-size: var(--text-sm);
 	}
 	.systems li {
 		display: flex;

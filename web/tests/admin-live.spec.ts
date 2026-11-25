@@ -34,7 +34,7 @@ test('@live A27: Bench disconnected shows on the Recorders page and the listener
 	const back = clientDisconnected();
 	try {
 		await expect(bench).toContainText(/Disconnected since /, { timeout: 20_000 });
-		await expect(bench.locator('.badge')).toHaveText('Warning');
+		await expect(bench.getByText('Warning', { exact: true })).toBeVisible();
 		await expect(bench.getByRole('list', { name: 'Bench: warnings' })).toContainText(/Disconnected for (under a minute|\d+ min)/);
 		await expect(listener.getByText(NOTICE)).toBeVisible({ timeout: 20_000 });
 	} finally {
@@ -55,7 +55,7 @@ test('@live A27: a decode rate of 0 shows on the Recorders page, and clears when
 		await expect(bench.getByRole('list', { name: 'Bench: warnings' })).toContainText('Control channel lost on ex', { timeout: 30_000 });
 		await expect(bench.locator('.systems li')).toContainText('Decode rate: 0.0 messages a second');
 		await expect(bench.locator('.systems li')).toContainText('Near 0');
-		await expect(bench.locator('.badge')).toHaveText('Warning');
+		await expect(bench.getByText('Warning', { exact: true })).toBeVisible();
 	} finally {
 		heardAgain();
 	}

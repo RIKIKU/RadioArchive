@@ -82,6 +82,8 @@ ArchiveUx 0.4.1 has no badge for a state in words (it has the priority labels an
 
 If these recur (the Talkgroups and Units pages will want a state badge and a table, R83), they belong in ArchiveUx.
 
+**2026-11-25: adopted ArchiveUx 0.5.0** (its ADR 0004), which has them. The recorders' Warning and OK badges and the "Out of date" and "Near 0" flags are its `StateBadge` (warning, or OK); the disk warning is its `Banner` (warning tone, no role, as it is there when the page opens) and "Couldn't reach the server" its error `Banner` with `role="alert"`; the overlap messages are its `.banner` class; the retention question is its `Confirm`, inline, its heading an `h3`. The local `.alert`, `.badge`, `.flag` and `.confirm` styles are gone. A recorder's systems stay page rows, and the recent calls keep their inline More actions (ADR 0023).
+
 ## Considered options
 
 | Decision | Rejected | Why |

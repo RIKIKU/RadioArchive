@@ -4,14 +4,16 @@
 	//
 	// Lengthening the period just saves. Shortening it is answered 409
 	// confirm_shorter_retention with how many recordings the next nightly
-	// run will delete; the page names that count and asks, and only
-	// confirming saves it. Cancelling changes nothing. The form follows
-	// ArchiveUx section 5: the Required tag, and problems under the field.
+	// run will delete; the page names that count and asks (ArchiveUx's
+	// Confirm, inline), and only confirming saves it. Cancelling changes
+	// nothing. The form follows ArchiveUx section 5: the Required tag, and
+	// problems under the field.
 	import { onMount, tick } from 'svelte';
+	import { Confirm } from 'archiveux/components';
 	import AdminPage from '#lib/admin/AdminPage.svelte';
 	import { admin, deploymentZone, whenOf, type Access, type AdminError, type Retention } from '#lib/admin/api.ts';
 
-	interface Confirm extends AdminError {
+	interface Shorter extends AdminError {
 		days: number;
 		recordings: number;
 	}
@@ -48,13 +50,12 @@
 
 	async function send(days: number, confirm: boolean) {
 		saving = true;
-		const a = await admin<Retention | Confirm>('PUT', '/retention', confirm ? { days, confirm } : { days });
+		const a = await admin<Retention | Shorter>('PUT', '/retention', confirm ? { days, confirm } : { days });
 		saving = false;
-		if (a.status === 409 && (a.body as Confirm | undefined)?.error === 'confirm_shorter_retention') {
-			const c = a.body as Confirm;
+		if (a.status === 409 && (a.body as Shorter | undefined)?.error === 'confirm_shorter_retention') {
+			// Confirm takes the focus to its question.
+			const c = a.body as Shorter;
 			asking = { days: c.days, recordings: c.recordings };
-			await tick();
-			document.getElementById('confirm-heading')?.focus();
 			return;
 		}
 		if (a.access === 'sign-in' || a.access === 'not-admin') {
@@ -135,16 +136,18 @@
 		</form>
 
 		{#if asking}
-			<section class="confirm" aria-labelledby="confirm-heading">
-				<h3 id="confirm-heading" tabindex="-1">Delete {plural(asking.recordings, 'recording')}?</h3>
+			<Confirm
+				title="Delete {plural(asking.recordings, 'recording')}?"
+				confirmLabel="Shorten to {plural(asking.days, 'day')}"
+				level={3}
+				busy={saving}
+				onconfirm={() => send(asking!.days, true)}
+				oncancel={cancel}
+			>
 				<p>
 					Shortening retention from {plural(ret.days, 'day')} to {plural(asking.days, 'day')} deletes {plural(asking.recordings, 'recording')}, hidden talkgroups' included, at the next nightly run ({whenOf(ret.next_run, timeZone)}). They can't be brought back.
 				</p>
-				<div class="actions">
-					<button type="button" class="danger" disabled={saving} onclick={() => send(asking!.days, true)}>Shorten to {plural(asking.days, 'day')}</button>
-					<button type="button" class="secondary" onclick={cancel}>Cancel</button>
-				</div>
-			</section>
+			</Confirm>
 		{/if}
 		<p class="status" role="status">{status}</p>
 
@@ -172,22 +175,6 @@
 	}
 	.retention input {
 		width: var(--field-narrow);
-	}
-	.confirm {
-		max-width: var(--panel-max);
-		margin: var(--space-md) 0;
-		padding: var(--space-lg);
-		background: var(--surface);
-		border: var(--border-width) solid var(--border);
-		border-radius: var(--radius);
-	}
-	.confirm h3 {
-		margin-top: 0;
-	}
-	.actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--space-sm);
 	}
 	.status {
 		margin: var(--space-sm) 0 var(--space-xl);
