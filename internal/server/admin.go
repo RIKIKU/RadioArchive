@@ -30,14 +30,18 @@ const AdminPath = "/api/v1/admin"
 
 // AdminAuthenticator says which admin made a request (R51, R55, R111).
 //
-// The binary's is account.Service (ADR 0025): the session cookie, then the
-// account's row in RadioArchive's database, role admin and status active,
-// read at every admin request, nothing cached. No Authentik group is asked.
+// The binary's is account.Service (ADR 0025, ADR 0028): the session cookie
+// or the PowerShell module's bearer token, never both, then the account's
+// row in RadioArchive's database, role admin and status active, read at
+// every admin request, nothing cached. No Authentik group is asked.
 type AdminAuthenticator interface {
 	// Admin returns the signed-in admin. account.ErrSignInRequired is no
 	// one signed in (401), account.ErrNotAdmin someone who isn't an admin
-	// (403); any other error is the check failing (503). It may renew
-	// the session's cookie on w.
+	// (403), account.ErrBadToken a bearer token that isn't the module's
+	// (401), account.ErrDisabled a disabled account's token (401) and
+	// account.ErrTwoCredentials a token and a cookie at once (400); any
+	// other error is the check failing (503). It may renew the session's
+	// cookie on w.
 	Admin(w http.ResponseWriter, r *http.Request) (account.Admin, error)
 }
 
@@ -70,6 +74,17 @@ func (a *Admin) admin(w http.ResponseWriter, r *http.Request) (*http.Request, st
 		return nil, "", false
 	case errors.Is(err, account.ErrNotAdmin):
 		writeJSON(w, http.StatusForbidden, adminError{Code: "admin_required", Message: "This account isn't an admin."})
+		return nil, "", false
+	case errors.Is(err, account.ErrBadToken):
+		// RFC 6750: the module renews its token once and tries again.
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+		writeJSON(w, http.StatusUnauthorized, adminError{Code: "invalid_token", Message: "That sign-in isn't valid now. Sign in again."})
+		return nil, "", false
+	case errors.Is(err, account.ErrDisabled):
+		writeJSON(w, http.StatusUnauthorized, adminError{Code: "account_disabled", Message: "This account is disabled."})
+		return nil, "", false
+	case errors.Is(err, account.ErrTwoCredentials):
+		writeJSON(w, http.StatusBadRequest, adminError{Code: "two_credentials", Message: "Send a session cookie or a bearer token, not both."})
 		return nil, "", false
 	case err != nil:
 		a.log.Warn("admin check failed", "error", err.Error())
@@ -166,6 +181,7 @@ func WithAdmin(a *Admin) Option {
 			pattern string
 			h       func(*http.Request, string) (int, any, error)
 		}{
+			{"GET /me", a.me},
 			{"GET /systems", a.listSystems},
 			{"POST /systems", a.createSystem},
 			{"GET /systems/{system}", a.getSystem},

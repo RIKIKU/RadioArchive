@@ -22,6 +22,9 @@ import (
 type signInConfig struct {
 	appURL, authentikURL, internalURL *url.URL
 	clientID, clientSecret            string
+	// moduleClientID is MODULE_CLIENT_ID: the PowerShell module's own
+	// public client (ADR 0028), radioarchive-powershell unless set.
+	moduleClientID string
 	// initialAdmin is INITIAL_ADMIN_EMAIL: the first admin's address
 	// (ADR 0025), "" for none.
 	initialAdmin string
@@ -70,6 +73,13 @@ func signInFromEnv(getenv func(string) string) (signInConfig, error) {
 	c.clientID = strings.TrimSpace(getenv("OIDC_CLIENT_ID"))
 	if c.clientID == "" {
 		c.clientID = "radioarchive"
+	}
+	c.moduleClientID = strings.TrimSpace(getenv("MODULE_CLIENT_ID"))
+	if c.moduleClientID == "" {
+		c.moduleClientID = "radioarchive-powershell"
+	}
+	if c.moduleClientID == c.clientID {
+		return signInConfig{}, errors.New("MODULE_CLIENT_ID must be the PowerShell module's own client, not OIDC_CLIENT_ID's")
 	}
 	if c.clientSecret, err = secret(getenv, "OIDC_CLIENT_SECRET"); err != nil {
 		return signInConfig{}, err
@@ -120,10 +130,17 @@ func (c signInConfig) service(g *gate.Gate, st *store.Store, log *slog.Logger) (
 			RedirectURL:  c.appURL.JoinPath("auth", "callback").String(),
 			HTTP:         hc,
 		},
-		Sessions:     st,
-		Profiles:     st,
-		Accounts:     st,
-		Catalogue:    g,
+		Sessions:  st,
+		Profiles:  st,
+		Accounts:  st,
+		Catalogue: g,
+		// The module's own client (ADR 0028), on the same Authentik, so
+		// its issuer is the module application's.
+		Module: &oidcclient.AccessVerifier{
+			Issuer:   c.authentikURL.JoinPath("application", "o", c.moduleClientID).String() + "/",
+			ClientID: c.moduleClientID,
+			HTTP:     hc,
+		},
 		InitialAdmin: c.initialAdmin,
 		Secret:       []byte(c.clientSecret),
 		Log:          log,

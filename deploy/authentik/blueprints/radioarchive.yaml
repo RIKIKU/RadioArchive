@@ -22,7 +22,7 @@ version: 1
 metadata:
   name: RadioArchive
   labels:
-    blueprints.goauthentik.io/description: RadioArchive's OIDC client and its sign-out
+    blueprints.goauthentik.io/description: RadioArchive's OIDC clients (the radio's and the PowerShell module's) and their sign-out
 context:
   app_url: !Env [RA_APP_URL, "http://localhost:8080"]
 entries:
@@ -130,6 +130,63 @@ entries:
   - model: authentik_policies.policybinding
     identifiers:
       target: !KeyOf app
+      policy: !KeyOf pkce
+      order: 0
+
+  # ------------------------------------------- the PowerShell module (ADR 0028)
+  # The module's own public client, with no secret: a script on someone's
+  # machine can't keep one. It signs in in the system browser with PKCE and
+  # a loopback redirect on any port (RFC 8252), or with a device code (RFC
+  # 8628) where there's no browser. offline_access gives a refresh token,
+  # replaced at every use (threshold 0) and ending after 30 days unused. The
+  # API takes its access tokens on admin routes only, by signature, issuer,
+  # audience and expiry, then decides from the radio's own database whether
+  # the account is an admin, at every request. sub_mode user_id gives the
+  # same subject as the browser's sign-in, which is how the API finds the
+  # account. The application's slug is the client ID, so the issuer is
+  # AUTHENTIK_URL/application/o/radioarchive-powershell/.
+  - model: authentik_providers_oauth2.oauth2provider
+    id: module-provider
+    identifiers:
+      name: RadioArchive PowerShell
+    attrs:
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !KeyOf sign-out
+      client_type: public
+      client_id: radioarchive-powershell
+      client_secret: ""
+      redirect_uris:
+        - matching_mode: regex
+          url: '^http://127\.0\.0\.1:[0-9]{1,5}/$'
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+      sub_mode: user_id # the browser's subject too: the account's key (ADR 0025)
+      grant_types: [authorization_code, refresh_token, "urn:ietf:params:oauth:grant-type:device_code"]
+      include_claims_in_id_token: true
+      # Also the device code's lifetime: time to type the code elsewhere.
+      access_code_validity: minutes=10
+      access_token_validity: minutes=5
+      refresh_token_validity: days=30
+      refresh_token_threshold: seconds=0
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
+        - !KeyOf scope-email
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-offline_access]]
+  - model: authentik_core.application
+    id: module-app
+    identifiers:
+      slug: radioarchive-powershell
+    attrs:
+      name: RadioArchive PowerShell
+      provider: !KeyOf module-provider
+      meta_launch_url: blank://blank # not offered in Authentik's application library
+      policy_engine_mode: all
+  # PKCE is required here too: Authentik 2026.8 lets a public client trade a
+  # code for tokens without it (ADR 0028). The same policy as the radio's;
+  # a device code never reaches the authorize endpoint, so it passes.
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf module-app
       policy: !KeyOf pkce
       order: 0
 

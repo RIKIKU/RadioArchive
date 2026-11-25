@@ -29,6 +29,27 @@ func accountInfo(a store.Account) AccountInfo {
 		FirstSignedIn: a.FirstSignedIn.UTC(), LastSignedIn: a.LastSignedIn.UTC()}
 }
 
+// Me is GET /api/v1/admin/me: the admin making the request, as the admin
+// check found them, and how they signed in (ADR 0028). The PowerShell
+// module asks it when it connects, since the account's route
+// (/api/v1/account) is the browser's.
+type Me struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Role  string `json:"role"`
+	// Via is "browser" or "module".
+	Via string `json:"via"`
+}
+
+func (a *Admin) me(r *http.Request, _ string) (int, any, error) {
+	adm, ok := AdminFrom(r.Context())
+	if !ok {
+		return 0, nil, errors.New("me: no admin in the request")
+	}
+	return http.StatusOK, Me{ID: adm.Subject, Name: adm.Name, Email: adm.Email, Role: store.RoleAdmin, Via: adm.Via}, nil
+}
+
 func (a *Admin) listAccounts(r *http.Request, _ string) (int, any, error) {
 	all, err := a.accs.Accounts(r.Context())
 	if err != nil {

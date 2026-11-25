@@ -600,6 +600,22 @@ entries:
       stage: !KeyOf user-settings-write
       order: 20
 
+  # ------------------------------------------------ device code (ADR 0028)
+  # The PowerShell module's sign-in without a browser (RFC 8628): the admin
+  # opens AUTHENTIK_URL/device on any device. Authentik sends someone signed
+  # out through the brand's sign-in above first, then asks for the code
+  # itself. The flow has no stages of its own. The combined deployment's
+  # brand is PagerArchive's, so its device flow is M7's.
+  - model: authentik_flows.flow
+    id: device
+    identifiers:
+      slug: radioarchive-device
+    attrs:
+      name: RadioArchive device code
+      title: Sign in RadioArchive PowerShell
+      designation: stage_configuration
+      authentication: require_authenticated
+
   - model: authentik_brands.brand
     identifiers:
       domain: authentik-default
@@ -610,3 +626,4 @@ entries:
       flow_recovery: !KeyOf recovery
       flow_user_settings: !KeyOf user-settings
       flow_enrollment: null
+      flow_device_code: !KeyOf device

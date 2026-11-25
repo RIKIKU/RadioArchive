@@ -174,6 +174,14 @@ func build(clientSecret, subject, email, name string, logf func(format string, a
 			"id_token_signing_alg_values_supported": []string{"RS256"},
 		})
 	})
+	// The PowerShell module's own client (ADR 0028): another application,
+	// so another issuer, with the same keys, as on one Authentik.
+	mux.HandleFunc("GET /application/o/"+ModuleClientID+"/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer": p.ModuleIssuer(), "authorization_endpoint": p.URL + "/authorize", "token_endpoint": p.URL + "/token",
+			"jwks_uri": p.URL + "/jwks", "id_token_signing_alg_values_supported": []string{"RS256"},
+		})
+	})
 	mux.HandleFunc("GET /jwks", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "k", Algorithm: "RS256", Use: "sig"}}})
 	})
@@ -229,6 +237,67 @@ func build(clientSecret, subject, email, name string, logf func(format string, a
 
 // Issuer is the provider's issuer, as Authentik names an application's.
 func (p *Provider) Issuer() string { return p.URL + "/application/o/" + ClientID + "/" }
+
+// ModuleClientID is the PowerShell module's client, as the blueprint
+// names it (ADR 0028).
+const ModuleClientID = "radioarchive-powershell"
+
+// ModuleIssuer is the module application's issuer.
+func (p *Provider) ModuleIssuer() string { return p.URL + "/application/o/" + ModuleClientID + "/" }
+
+// ModuleAccessToken is an access token of the module's client for subject,
+// as Authentik issues one, with claims changed or (nil) removed by edit,
+// signed with the provider's key, or with another key when otherKey.
+func (p *Provider) ModuleAccessToken(t testing.TB, subject string, edit map[string]any, otherKey bool) string {
+	t.Helper()
+	now := time.Now()
+	claims := map[string]any{
+		"iss": p.ModuleIssuer(), "aud": ModuleClientID, "azp": ModuleClientID, "sub": subject,
+		"scope": "openid email profile offline_access", "iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(),
+		"jti": "made-up-jti",
+	}
+	for k, v := range edit {
+		if v == nil {
+			delete(claims, k)
+		} else {
+			claims[k] = v
+		}
+	}
+	key := p.key
+	if otherKey {
+		var err error
+		if key, err = rsa.GenerateKey(rand.Reader, 2048); err != nil {
+			t.Fatal(err)
+		}
+	}
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: key}, (&jose.SignerOptions{}).WithHeader("kid", "k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := jwt.Signed(signer).Claims(claims).Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// IDToken is an ID token of the browser's client for subject, as the
+// token endpoint gives one: no scope and no azp.
+func (p *Provider) IDToken(t testing.TB, subject, audience, issuer string) string {
+	t.Helper()
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: p.key}, (&jose.SignerOptions{}).WithHeader("kid", "k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := jwt.Signed(signer).Claims(map[string]any{
+		"iss": issuer, "aud": audience, "sub": subject, "email": p.Email,
+		"iat": time.Now().Unix(), "exp": time.Now().Add(5 * time.Minute).Unix(),
+	}).Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
 
 // Grant answers an authorization request as Authentik would after the
 // person signed in: a code for its challenge and nonce, and the state to
