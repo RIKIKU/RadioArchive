@@ -134,6 +134,16 @@ func (d *accounts) SetAccountRole(_ context.Context, iss string, _ store.Actor, 
 	return a, nil
 }
 
+func (d *accounts) Account(_ context.Context, iss, sub string) (*store.Account, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	a, ok := d.rows[[2]string{iss, sub}]
+	if !ok {
+		return nil, nil
+	}
+	return &a, nil
+}
+
 // set changes an account's role and status, as an admin (or issue #105's
 // disabling) would.
 func (d *accounts) set(iss, sub, role, status string) {
@@ -351,8 +361,9 @@ func newWorld(t *testing.T) *world {
 		OIDC: &oidcclient.Client{Issuer: w.p.Issuer(), ClientID: oidctest.ClientID,
 			ClientSecret: clientSecret, RedirectURL: w.app.URL + "/auth/callback", HTTP: http.DefaultClient},
 		Sessions: w.ss, Profiles: w.db, Accounts: w.acc, Catalogue: catalogue{}, Secret: []byte(clientSecret), InitialAdmin: "Admin@Example.test",
-		Log: slog.New(slog.NewJSONHandler(w.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Now: w.clk.now,
+		Module: &oidcclient.AccessVerifier{Issuer: w.p.ModuleIssuer(), ClientID: oidctest.ModuleClientID, HTTP: http.DefaultClient},
+		Log:    slog.New(slog.NewJSONHandler(w.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Now:    w.clk.now,
 	})
 	if err != nil {
 		t.Fatal(err)

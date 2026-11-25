@@ -50,7 +50,7 @@ func TestAdmins(t *testing.T) {
 		t.Fatalf("the first admin: %+v", st.Account)
 	}
 	a, err := admin()
-	if err != nil || a.Subject != subject || a.Issuer != w.p.Issuer() || a.Email != "admin@example.TEST" {
+	if err != nil || a.Subject != subject || a.Issuer != w.p.Issuer() || a.Email != "admin@example.TEST" || a.Via != ViaBrowser {
 		t.Fatalf("Admin = %+v, %v", a, err)
 	}
 	if !strings.Contains(w.logs.String(), "the first admin signed in") {
@@ -78,5 +78,40 @@ func TestAdmins(t *testing.T) {
 	}
 	if w.ss.count() != n {
 		t.Error("a disabled account's sign-in kept a session")
+	}
+}
+
+// TestModuleAdmin (ADR 0028): a module access token signs in as the
+// account its subject names under the browser client's issuer, read at
+// every request, and says it came from the module.
+func TestModuleAdmin(t *testing.T) {
+	w := newWorld(t)
+	admin := func(token string) (Admin, error) {
+		r := httptest.NewRequest("GET", "/api/v1/admin/systems", nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		return w.svc.Admin(httptest.NewRecorder(), r)
+	}
+	tok := w.p.ModuleAccessToken(t, subject, nil, false)
+	if _, err := admin(tok); !errors.Is(err, ErrNotAdmin) {
+		t.Errorf("no account yet: %v", err)
+	}
+	w.signIn(t, "/")
+	if _, err := admin(tok); !errors.Is(err, ErrNotAdmin) {
+		t.Errorf("a listener: %v", err)
+	}
+	w.acc.set(w.p.Issuer(), subject, store.RoleAdmin, store.StatusActive)
+	a, err := admin(tok)
+	if err != nil || a.Via != ViaModule || a.Issuer != w.p.Issuer() || a.Subject != subject || a.Email != email {
+		t.Fatalf("an admin's token: %+v, %v", a, err)
+	}
+	w.acc.set(w.p.Issuer(), subject, store.RoleAdmin, store.StatusDisabled)
+	if _, err := admin(tok); !errors.Is(err, ErrDisabled) {
+		t.Errorf("disabled: %v", err)
+	}
+	if _, err := admin(w.p.ModuleAccessToken(t, subject, map[string]any{"aud": "x"}, false)); !errors.Is(err, ErrBadToken) {
+		t.Errorf("another audience: %v", err)
+	}
+	if strings.Contains(w.logs.String(), strings.Split(tok, ".")[2]) {
+		t.Error("the log holds a token")
 	}
 }

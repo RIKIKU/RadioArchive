@@ -1,0 +1,81 @@
+TOPIC
+    about_RadioArchive
+
+SHORT DESCRIPTION
+    Managing a RadioArchive radio from PowerShell, as one of its admins.
+
+LONG DESCRIPTION
+    The RadioArchive module does from PowerShell what the radio's admin
+    pages do: systems, talkgroups, units, groups and tags, attachments,
+    rejected calls, recorders' quiet thresholds, retention, accounts'
+    roles, and saving any call's recording, hidden talkgroups included.
+    It uses the same admin API as the browser, with the same rules, and
+    the radio knows each change came from the module, and from whom, for
+    its audit log.
+
+    Every command is named Verb-RadioArchiveNoun, and has a short alias
+    with Ra in its place: Get-RaTalkgroup is Get-RadioArchiveTalkgroup.
+
+SIGNING IN
+    Connect-RadioArchive -Uri https://radio.example.org
+
+    opens your browser at the radio's usual sign-in. Without a browser:
+
+    Connect-RadioArchive -Uri https://radio.example.org -UseDeviceCode
+
+    shows a code to enter at Authentik's /device page on any device.
+
+    Only the radio's admins can sign in with the module, and someone
+    made an admin must have signed in to the radio with the browser at
+    least once. There are no API keys.
+
+    The sign-in is saved, so other PowerShell windows use it without
+    signing in again: on Windows in a file under your local application
+    data, encrypted for your Windows account (DPAPI); on Linux and macOS
+    in your default SecretManagement vault, or for this session only, with
+    a warning, if you have none. -Vault names another vault. The module
+    renews its access itself; a sign-in unused for 30 days ends.
+    Disconnect-RadioArchive revokes it in Authentik and deletes the saved
+    copy.
+
+    Your tokens never appear in output, verbose or debug messages,
+    errors, $Error or a transcript, and are never written to a file
+    unencrypted.
+
+OBJECTS AND THE PIPELINE
+    Each command outputs objects (RadioArchive.Talkgroup,
+    RadioArchive.System, ...) whose properties are named as the parameters
+    that take them, so a Get- command pipes into its Set-, and into
+    commands about the same things:
+
+    Get-RadioArchiveTalkgroup -Group North | Set-RadioArchiveTalkgroup -State Hidden
+
+    hides every talkgroup in group North; it asks first, as any state
+    change or deletion does (add -Confirm:$false not to be asked).
+
+    Get-RadioArchiveTalkgroup -Id 1003 | Get-RadioArchiveCall -First 1 |
+        Save-RadioArchiveRecording -Path ~/Recordings
+
+    saves the newest recording of talkgroup 1003, byte for byte.
+
+    Get-RadioArchiveRejection -Unattached | Add-RadioArchiveAttachment -SystemId 1
+
+    attaches every recorder's system whose calls were rejected for not
+    being attached.
+
+    Every change supports -WhatIf and -Confirm. Set- and Remove- commands
+    output nothing unless -PassThru is given.
+
+ERRORS
+    A refusal from the radio is an error whose ErrorId is the radio's
+    error code (for example last_admin or talkgroup_not_found) and whose
+    message is the radio's. A failure on one item doesn't stop the rest of
+    the pipeline; not being signed in, or the radio being unreachable,
+    does.
+
+SEE ALSO
+    Connect-RadioArchive
+    Disconnect-RadioArchive
+    Get-RadioArchiveTalkgroup
+    Set-RadioArchiveTalkgroup
+    docs/powershell-guidelines.md in the RadioArchive repository

@@ -123,6 +123,9 @@ type Accounts interface {
 	// SetAccountRole sets an account's role, as the admin by changes it,
 	// under the last-admin rule (audited).
 	SetAccountRole(ctx context.Context, issuer string, by store.Actor, subject, role string) (store.Account, error)
+	// Account is the account's row, nil for none: what the module's
+	// bearer token signs in as (ADR 0028).
+	Account(ctx context.Context, issuer, subject string) (*store.Account, error)
 }
 
 // Config is the account's settings. With OIDC nil, sign-in is off: the
@@ -134,6 +137,10 @@ type Config struct {
 	Profiles  Profiles
 	Accounts  Accounts
 	Catalogue Catalogue
+	// Module checks the PowerShell module's access tokens on admin
+	// requests (ADR 0028). nil: the module can't sign in, and a bearer
+	// token opens nothing.
+	Module *oidcclient.AccessVerifier
 	// InitialAdmin is INITIAL_ADMIN_EMAIL: while no admin exists, the
 	// account signing in with this address, proven by Authentik, becomes
 	// the first admin (ADR 0025). "" for none.
@@ -196,6 +203,7 @@ func (s *Service) Routes() []Route {
 		{"GET " + AccountPath, http.HandlerFunc(s.account)},
 		{"PUT " + ProfilePath, http.HandlerFunc(s.saveProfile)},
 		{"DELETE " + ProfilePath, http.HandlerFunc(s.clearProfile)},
+		{"GET " + modulePath, http.HandlerFunc(s.moduleSettings)},
 	}
 }
 

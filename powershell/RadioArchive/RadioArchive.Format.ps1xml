@@ -1,0 +1,319 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Table views (guidelines section 5): the few columns people scan, with
+     times in local time under their own names. -->
+<Configuration>
+  <ViewDefinitions>
+    <View>
+      <Name>RadioArchive.Connection</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.Connection</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>Uri</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Name</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Email</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Role</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>SavedIn</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>RadioArchive.System</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.System</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>SystemId</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Label</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Name</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>AutoCreate</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>RadioArchive.Talkgroup</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.Talkgroup</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader><Label>LastHeardAt</Label></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>SystemId</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Id</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Label</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Name</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Tag</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>State</PropertyName></TableColumnItem>
+              <TableColumnItem><ScriptBlock>$_.LastHeardAt.LocalDateTime</ScriptBlock></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>RadioArchive.Call</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.Call</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>StartedAt</Label></TableColumnHeader>
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><ScriptBlock>$_.StartedAt.LocalDateTime</ScriptBlock></TableColumnItem>
+              <TableColumnItem><PropertyName>Talkgroup</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>State</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>RecordingSize</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>CallId</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>RadioArchive.Unit</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.Unit</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>SystemId</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Unit</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Alias</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>RadioArchive.Group</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.Group</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>GroupId</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Name</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Alert</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>LedColour</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>SortOrder</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>RadioArchive.Tag</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.Tag</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>TagId</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Name</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Alert</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>LedColour</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>SortOrder</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>RadioArchive.Attachment</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.Attachment</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader><Label>AttachedAt</Label></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>Recorder</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>ShortName</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>SystemId</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>SystemLabel</PropertyName></TableColumnItem>
+              <TableColumnItem><ScriptBlock>$_.AttachedAt.LocalDateTime</ScriptBlock></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>RadioArchive.Rejection</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.Rejection</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>Kind</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Recorder</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>ShortName</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Talkgroup</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Calls</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Message</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>RadioArchive.Recorder</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.Recorder</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader><Label>LastCallAt</Label></TableColumnHeader>
+          <TableColumnHeader />
+          <TableColumnHeader />
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>Name</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Connected</PropertyName></TableColumnItem>
+              <TableColumnItem><ScriptBlock>$_.LastCallAt.LocalDateTime</ScriptBlock></TableColumnItem>
+              <TableColumnItem><PropertyName>QuietAfterMinutes</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Warning</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>RadioArchive.Retention</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.Retention</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader />
+          <TableColumnHeader><Label>NextRunAt</Label></TableColumnHeader>
+          <TableColumnHeader />
+          <TableColumnHeader />
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>Days</PropertyName></TableColumnItem>
+              <TableColumnItem><ScriptBlock>$_.NextRunAt.LocalDateTime</ScriptBlock></TableColumnItem>
+              <TableColumnItem><PropertyName>FreePercent</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>DiskState</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>RadioArchive.Account</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.Account</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader><Label>LastSignedInAt</Label></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>Name</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Email</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Role</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Status</PropertyName></TableColumnItem>
+              <TableColumnItem><ScriptBlock>$_.LastSignedInAt.LocalDateTime</ScriptBlock></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>RadioArchive.AuditEntry</Name>
+      <ViewSelectedBy><TypeName>RadioArchive.AuditEntry</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>At</Label></TableColumnHeader>
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+          <TableColumnHeader />
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><ScriptBlock>$_.At.LocalDateTime</ScriptBlock></TableColumnItem>
+              <TableColumnItem><PropertyName>Via</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Who</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Kind</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Label</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Action</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+  </ViewDefinitions>
+</Configuration>
