@@ -73,4 +73,30 @@ func TestSignInSettings(t *testing.T) {
 	if _, err := signInFromEnv(files.get); err == nil {
 		t.Error("the secret both set and in a file was taken")
 	}
+
+	// The accounts service account's Authentik token (ADR 0033): optional,
+	// from the environment or a file, never both, never shown.
+	if c.apiToken != "" {
+		t.Errorf("a token with none set: %q", c.apiToken)
+	}
+	tok := environ{}
+	for k, v := range full {
+		tok[k] = v
+	}
+	tok["AUTHENTIK_API_TOKEN"] = "made-up-api-token-0123456789"
+	if c, err := signInFromEnv(tok.get); err != nil || c.apiToken != "made-up-api-token-0123456789" || strings.Contains(c.String(), "made-up-api-token") {
+		t.Errorf("the token: %v, shown %q", err, c.String())
+	}
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("token-from-a-file-0123456789\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tok["AUTHENTIK_API_TOKEN_FILE"] = tokenFile
+	if _, err := signInFromEnv(tok.get); err == nil || strings.Contains(err.Error(), "made-up-api-token") {
+		t.Errorf("the token both set and in a file: %v", err)
+	}
+	delete(tok, "AUTHENTIK_API_TOKEN")
+	if c, err := signInFromEnv(tok.get); err != nil || c.apiToken != "token-from-a-file-0123456789" {
+		t.Errorf("the token from a file: %v", err)
+	}
 }

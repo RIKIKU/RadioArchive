@@ -295,7 +295,7 @@ entries:
       expression: |
         plan = request.context["flow_plan"]
         user = plan.context.get("pending_user") or request.user
-        plan.context["prompt_data"] = {"is_active": True, "attributes.radioarchive_email_proven": user.email or ""}
+        plan.context["prompt_data"] = {"is_active": True, "attributes.email_proven": user.email or ""}
         return True
   - model: authentik_stages_user_write.userwritestage
     id: signup-activate

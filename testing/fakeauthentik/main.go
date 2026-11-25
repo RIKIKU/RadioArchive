@@ -10,19 +10,34 @@
 // A browser whose cookie fakeauthentik_person (oidctest.PersonCookie) is
 // "listener", on this provider's /authorize, signs in as a second made-up
 // person instead, a listener, for the admin pages' tests of who may open
-// them (ADR 0027).
+// them (ADR 0027). A cookie "person-<word>" signs in a person of the
+// test's own: subject person-<word>, email person-<word>@example.test,
+// name "Made Up <word>", for the Accounts page's tests, each with
+// accounts nobody else's test changes (ADR 0033).
 //
-//	fakeauthentik -addr 127.0.0.1:18091 -secret <OIDC client secret> -email admin@example.test
+// With -api-token it also answers Authentik's users API
+// (/api/v3/core/users/{id}/) for that bearer token, as the radio's
+// accounts service account reaches it: a switched-off or deleted user's
+// sign-in is then refused. POST /fake/users-down?down=1 makes that API
+// answer 503, as an Authentik that can't be reached; down=0 brings it
+// back.
+//
+//	fakeauthentik -addr 127.0.0.1:18091 -secret <OIDC client secret> -email admin@example.test [-api-token <token>]
 package main
 
 import (
 	"flag"
 	"log"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/RIKIKU/RadioArchive/internal/oidcclient/oidctest"
 )
+
+// person is a test's own person's cookie value.
+var person = regexp.MustCompile(`^person-([a-z0-9-]{1,40})$`)
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:18091", "address to listen on; its URL is AUTHENTIK_URL")
@@ -30,6 +45,7 @@ func main() {
 	email := flag.String("email", "admin@example.test", "the made-up person's email, proven")
 	subject := flag.String("subject", "fixture-admin", "the made-up person's user ID")
 	listener := flag.String("listener-email", "listener@example.test", "the made-up listener's email, proven")
+	token := flag.String("api-token", "", "answer Authentik's users API for this bearer token (AUTHENTIK_API_TOKEN)")
 	flag.Parse()
 	if *secret == "" {
 		log.Fatal("fakeauthentik: -secret is required")
@@ -39,6 +55,22 @@ func main() {
 		log.Fatal(err)
 	}
 	p.AddPerson("listener", oidctest.Person{Subject: "fixture-listener", Email: *listener, Name: "Fixture Listener"})
-	srv := &http.Server{Addr: *addr, Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	p.PersonFor = func(key string) (oidctest.Person, bool) {
+		m := person.FindStringSubmatch(key)
+		if m == nil {
+			return oidctest.Person{}, false
+		}
+		return oidctest.Person{Subject: key, Email: key + "@example.test", Name: "Made Up " + strings.ReplaceAll(m[1], "-", " ")}, true
+	}
+	if *token != "" {
+		p.ServeUsers(*token)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/", h)
+	mux.HandleFunc("POST /fake/users-down", func(w http.ResponseWriter, r *http.Request) {
+		p.SetUsersDown(r.URL.Query().Get("down") == "1")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	log.Fatal(srv.ListenAndServe())
 }

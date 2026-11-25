@@ -116,13 +116,17 @@ mkdir -p "$tmp/recordings" "$tmp/media" "$tmp/queue"
 # e2e-signin.sh's.
 secret=made-up-e2e-web-client-secret-0123456789
 admin_email=fixture-admin@example.test
-"$tmp/fakeauthentik" -addr "127.0.0.1:$akport" -secret "$secret" -email "$admin_email" >"$tmp/authentik.log" 2>&1 &
+# The Accounts page's tests (issue #105) disable, enable and delete people
+# of their own; the made-up Authentik answers its users API for this token,
+# as the radio's accounts service account reaches Authentik's (ADR 0033).
+api_token=made-up-e2e-web-authentik-api-token-0123456789
+"$tmp/fakeauthentik" -addr "127.0.0.1:$akport" -secret "$secret" -email "$admin_email" -api-token "$api_token" >"$tmp/authentik.log" 2>&1 &
 ak=$!
 # The deployment's time zone isn't the browsers' (UTC), so the Recent calls
 # page's tests show its times are TZ's (section 13).
 TZ=Australia/Melbourne DATABASE_URL=$DATABASE_URL LISTEN_ADDR="127.0.0.1:$port" RECORDINGS_DIR="$tmp/recordings" RECORDER_NOTICE_AFTER=3s \
 	APP_URL="http://127.0.0.1:$port" AUTHENTIK_URL="http://127.0.0.1:$akport" OIDC_CLIENT_SECRET="$secret" INITIAL_ADMIN_EMAIL="$admin_email" \
-	"$tmp/radioarchive" serve >"$tmp/api.log" 2>&1 &
+	AUTHENTIK_API_TOKEN="$api_token" "$tmp/radioarchive" serve >"$tmp/api.log" 2>&1 &
 pid=$!
 # Node, not curl: Playwright's image may have no curl.
 wait_for 120 "the API" node -e "fetch(process.argv[1]).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))" \

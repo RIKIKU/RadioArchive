@@ -144,6 +144,54 @@ func (d *accounts) Account(_ context.Context, iss, sub string) (*store.Account, 
 	return &a, nil
 }
 
+// SetAccountStatus sets the status, Authentik still to be told; its rules
+// and locking are the store's tests'. An admin's own account is refused,
+// as the store refuses it.
+func (d *accounts) SetAccountStatus(_ context.Context, iss string, by store.Actor, sub, status string) (store.Account, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if by.Subject == sub {
+		return store.Account{}, store.ErrOwnAccount
+	}
+	a, ok := d.rows[[2]string{iss, sub}]
+	if !ok {
+		return store.Account{}, store.ErrNoAccount
+	}
+	if a.Status != status {
+		a.Status, a.AuthentikPending = status, true
+	}
+	d.rows[[2]string{iss, sub}] = a
+	return a, nil
+}
+
+func (d *accounts) SetAccountAuthentikPending(_ context.Context, iss string, _ store.Actor, sub, status string, pending bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if a, ok := d.rows[[2]string{iss, sub}]; ok && a.Status == status {
+		a.AuthentikPending = pending
+		d.rows[[2]string{iss, sub}] = a
+	}
+	return nil
+}
+
+// DeleteAccount deletes the row unless before refuses, as the store's
+// transaction would roll back.
+func (d *accounts) DeleteAccount(_ context.Context, iss string, _ store.Actor, sub string, before func(store.Account) error) (store.Account, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	a, ok := d.rows[[2]string{iss, sub}]
+	if !ok {
+		return store.Account{}, store.ErrNoAccount
+	}
+	if before != nil {
+		if err := before(a); err != nil {
+			return store.Account{}, err
+		}
+	}
+	delete(d.rows, [2]string{iss, sub})
+	return a, nil
+}
+
 // set changes an account's role and status, as an admin (or issue #105's
 // disabling) would.
 func (d *accounts) set(iss, sub, role, status string) {

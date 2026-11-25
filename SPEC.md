@@ -299,6 +299,10 @@ Decided in [What form do the shared UI and the combined deployment take?](https:
   - **supported:** on the recorder host, with its own `postgres:18`.
   PagerArchive's `compose.yaml` stays untouched.
 - **R106. Shared operations.** PagerArchive's backup service also dumps and checks the `radioarchive` database (same exclusions as R89); its state shows in both apps. Each app's auto-upgrade script takes one **host-wide lock**, so they never upgrade at once; each pre-upgrade backup and rollback restores only its own app's database. RadioArchive ships its own adapted copy of the script.
+- **R107. Accounts in the combined deployment** (owner, 2026-11-25). It's one experience across the two apps:
+  - PagerArchive's users automatically have RadioArchive accounts, as listeners unless a radio admin makes them admins (R55); there is no separate sign-up.
+  - Disabling a user in either app disables them in both: the app disables them in the shared Authentik, which locks them out of both, and each app ends its own sessions. A disabling done in PagerArchive reaches RadioArchive's sessions promptly (the mechanism is M7's, recorded in an ADR; agreed with PagerArchive in [issue #128](https://github.com/RIKIKU/RadioArchive/issues/128): OIDC back-channel logout). RadioArchive's disabling is one shared path ([ADR 0033](docs/adr/0033-disabling-enabling-and-deleting-accounts.md)), which M7 reuses, so RadioArchive holds its Authentik user-admin token in the combined deployment too.
+  - A proven address is the shared, neutral user attribute `email_proven` (the proven address), set by PagerArchive's invitation enrolment after its code and by RadioArchive's standalone sign-up (issue #128).
 
 ### 6.16 Accounts
 

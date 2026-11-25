@@ -98,14 +98,15 @@ func (ns NullTalkgroupState) Value() (driver.Value, error) {
 }
 
 type Account struct {
-	Issuer          string
-	Subject         string
-	Name            string
-	Email           string
-	Role            string
-	Status          string
-	FirstSignedInAt pgtype.Timestamptz
-	LastSignedInAt  pgtype.Timestamptz
+	Issuer           string
+	Subject          string
+	Name             string
+	Email            string
+	Role             string
+	Status           string
+	FirstSignedInAt  pgtype.Timestamptz
+	LastSignedInAt   pgtype.Timestamptz
+	AuthentikPending bool
 }
 
 type Attachment struct {

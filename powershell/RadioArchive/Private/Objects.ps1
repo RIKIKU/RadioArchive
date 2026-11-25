@@ -319,15 +319,18 @@ function ConvertTo-RaAccount {
         [Parameter(Mandatory)]
         [object] $Row
     )
+    # AuthentikPending: disabled or enabled here, and not yet in Authentik
+    # (ADR 0033).
     [pscustomobject]@{
-        PSTypeName      = 'RadioArchive.Account'
-        AccountId       = [string]$Row.id
-        Name            = [string]$Row.name
-        Email           = [string]$Row.email
-        Role            = ConvertTo-RaTitle -Value $Row.role
-        Status          = ConvertTo-RaTitle -Value $Row.status
-        FirstSignedInAt = ConvertTo-RaTime -Value $Row.first_signed_in
-        LastSignedInAt  = ConvertTo-RaTime -Value $Row.last_signed_in
+        PSTypeName       = 'RadioArchive.Account'
+        AccountId        = [string]$Row.id
+        Name             = [string]$Row.name
+        Email            = [string]$Row.email
+        Role             = ConvertTo-RaTitle -Value $Row.role
+        Status           = ConvertTo-RaTitle -Value $Row.status
+        FirstSignedInAt  = ConvertTo-RaTime -Value $Row.first_signed_in
+        LastSignedInAt   = ConvertTo-RaTime -Value $Row.last_signed_in
+        AuthentikPending = [bool]$Row.authentik_pending
     }
 }
 

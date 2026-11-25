@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/RIKIKU/RadioArchive/internal/authentik"
 	"github.com/RIKIKU/RadioArchive/internal/oidcclient"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 )
@@ -161,6 +162,112 @@ func (s *Service) SetRole(ctx context.Context, by Admin, subject, role string) (
 		return store.Account{}, store.ErrNotAdmin
 	}
 	return s.cfg.Accounts.SetAccountRole(ctx, s.cfg.OIDC.Issuer, by.Actor(), subject, role)
+}
+
+// Directory is Authentik's users, as the radio switches them on and off
+// and deletes them (authentik.Users, ADR 0033). A user is named by the
+// OIDC subject, Authentik's user ID.
+type Directory interface {
+	SetActive(ctx context.Context, subject string, active bool) error
+	Delete(ctx context.Context, subject string) error
+}
+
+// Why Authentik didn't take a change. The radio's own change stands for a
+// disabling or an enabling (the account is locked out of the radio, or let
+// back in, at once); a deletion changed nothing. Repeating the request
+// tries Authentik again.
+var (
+	// ErrAuthentikUnreachable: Authentik couldn't be reached, or answered
+	// with an error.
+	ErrAuthentikUnreachable = errors.New("account: Authentik couldn't be reached")
+	// ErrAuthentikProtected: the user is an Authentik superuser or service
+	// account, which the radio never switches off or deletes.
+	ErrAuthentikProtected = errors.New("account: an Authentik superuser or service account")
+	// ErrAuthentikOff: the radio has no Authentik API token
+	// (AUTHENTIK_API_TOKEN), so it can't tell Authentik.
+	ErrAuthentikOff = errors.New("account: no Authentik API token")
+)
+
+// authentikErr is Directory's error in the words above, logged by the
+// account's ID with what Authentik said (an operation and a status, never
+// a body or a token).
+func (s *Service) authentikErr(op, subject string, err error) error {
+	if errors.Is(err, authentik.ErrProtected) {
+		s.cfg.Log.Warn("account: Authentik user left alone: a superuser or service account", "op", op, "account", subject)
+		return ErrAuthentikProtected
+	}
+	s.cfg.Log.Warn("account: Authentik didn't take the change", "op", op, "account", subject, "error", err.Error())
+	return ErrAuthentikUnreachable
+}
+
+// SetStatus disables or enables the account with this subject, as the
+// admin by asks (ADR 0033): the one path every disabling and enabling
+// takes, so the combined deployment (M7) can reuse it.
+//
+//  1. The radio, at once, in one transaction (store.SetAccountStatus):
+//     the status, every session ended when disabling, the last-admin
+//     rule, and the audit entry. A disabled account is signed out of
+//     every browser at its next request, and its next sign-in is refused.
+//  2. Authentik: the user switched off or on (Authentik ends a switched-
+//     off user's sessions itself). This is tried even when the radio had
+//     nothing to change, so repeating a request Authentik missed repairs
+//     it. If Authentik can't be reached or refuses, step 1 stands, the
+//     account says AuthentikPending, and the error is one of
+//     ErrAuthentikUnreachable, ErrAuthentikProtected and ErrAuthentikOff,
+//     returned with the account.
+func (s *Service) SetStatus(ctx context.Context, by Admin, subject, status string) (store.Account, error) {
+	if !s.On() {
+		return store.Account{}, store.ErrNotAdmin
+	}
+	acc, err := s.cfg.Accounts.SetAccountStatus(ctx, s.cfg.OIDC.Issuer, by.Actor(), subject, status)
+	if err != nil {
+		return store.Account{}, err
+	}
+	var aerr error
+	switch {
+	case s.cfg.Directory == nil:
+		aerr = ErrAuthentikOff
+	default:
+		if err := s.cfg.Directory.SetActive(ctx, subject, status == store.StatusActive); err != nil {
+			aerr = s.authentikErr("set active", subject, err)
+		}
+	}
+	if pending := aerr != nil; pending != acc.AuthentikPending {
+		if err := s.cfg.Accounts.SetAccountAuthentikPending(ctx, s.cfg.OIDC.Issuer, by.Actor(), subject, acc.Status, pending); err != nil {
+			return acc, err
+		}
+		acc.AuthentikPending = pending
+	}
+	return acc, aerr
+}
+
+// Delete deletes the account with this subject, as the admin by asks
+// (ADR 0033; owner, 2026-11-25): its row, saved profile and sessions, in
+// one audited transaction (store.DeleteAccount), under the rules of
+// disabling. When the deployment deletes Authentik's users too
+// (Config.DeleteAuthentikUsers, the standalone deployment), the user is
+// deleted in Authentik inside that transaction, last: if Authentik can't
+// be reached or refuses, nothing is deleted anywhere, the error says why
+// (ErrAuthentikUnreachable, ErrAuthentikProtected, ErrAuthentikOff), and
+// repeating the request tries again. A user Authentik no longer has is
+// deleted already. It returns the account as it was.
+func (s *Service) Delete(ctx context.Context, by Admin, subject string) (store.Account, error) {
+	if !s.On() {
+		return store.Account{}, store.ErrNotAdmin
+	}
+	var before func(store.Account) error
+	if s.cfg.DeleteAuthentikUsers {
+		before = func(store.Account) error {
+			if s.cfg.Directory == nil {
+				return ErrAuthentikOff
+			}
+			if err := s.cfg.Directory.Delete(ctx, subject); err != nil {
+				return s.authentikErr("delete", subject, err)
+			}
+			return nil
+		}
+	}
+	return s.cfg.Accounts.DeleteAccount(ctx, s.cfg.OIDC.Issuer, by.Actor(), subject, before)
 }
 
 // ModuleSettings is what the PowerShell module needs from the radio's URL

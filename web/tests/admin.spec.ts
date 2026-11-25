@@ -12,7 +12,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { axe, looks, recorderCard, saveLook, shot, signIn, themes, widths } from './admin.ts';
 
 const side = (page: Page) => page.locator('nav.side');
-const adminPaths = ['/admin/recorders', '/admin/audit', '/admin/settings'];
+const adminPaths = ['/admin/recorders', '/admin/accounts', '/admin/audit', '/admin/settings'];
 
 test('signed out: no Admin menu, the admin pages offer sign-in, and the admin API refuses', async ({ page, request }) => {
 	await page.goto('/');
@@ -24,7 +24,7 @@ test('signed out: no Admin menu, the admin pages offer sign-in, and the admin AP
 		await expect(page.locator('main').getByRole('link', { name: 'Sign in' })).toHaveAttribute('href', `/auth/signin?return=${encodeURIComponent(path)}`);
 		await expect(page.locator('main')).not.toContainText('Bench');
 	}
-	for (const path of ['/recorders', '/rejections', '/overlaps', '/retention', '/audit', '/audit/retention']) expect((await request.get(`/api/v1/admin${path}`)).status(), path).toBe(401);
+	for (const path of ['/recorders', '/rejections', '/overlaps', '/retention', '/audit', '/audit/retention', '/accounts']) expect((await request.get(`/api/v1/admin${path}`)).status(), path).toBe(401);
 });
 
 test('a listener: no Admin menu, "This page is for admins" and nothing else, and the admin API refuses', async ({ page }) => {
@@ -40,7 +40,7 @@ test('a listener: no Admin menu, "This page is for admins" and nothing else, and
 		await expect(page.getByRole('heading', { level: 1 })).toHaveText('This page is for admins');
 		await expect(page.locator('main')).toHaveText('This page is for admins');
 	}
-	for (const path of ['/recorders', '/rejections', '/overlaps', '/retention', '/audit', '/audit/retention']) expect((await page.request.get(`/api/v1/admin${path}`)).status(), path).toBe(403);
+	for (const path of ['/recorders', '/rejections', '/overlaps', '/retention', '/audit', '/audit/retention', '/accounts']) expect((await page.request.get(`/api/v1/admin${path}`)).status(), path).toBe(403);
 });
 
 test('an admin: the Admin menu on desktops, and under More on phones; its pages open from it', async ({ page }) => {

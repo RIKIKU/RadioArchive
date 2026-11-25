@@ -18,7 +18,7 @@ secret() { head -c 48 /dev/urandom | base64 | tr -d '/+=\n' | cut -c1-"$1"; }
 make_user() {
 	docker compose exec -T authentik-server ak shell -c "
 from authentik.core.models import User
-u = User.objects.create(username='$1', email='$1', name='Made Up Probe', attributes={'radioarchive_email_proven': '$1'})
+u = User.objects.create(username='$1', email='$1', name='Made Up Probe', attributes={'email_proven': '$1'})
 u.set_password('$2')
 u.save()
 " >/dev/null 2>&1

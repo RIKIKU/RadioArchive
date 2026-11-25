@@ -33,6 +33,11 @@ type Provider struct {
 	// URL is where it answers, as AUTHENTIK_URL would be.
 	URL                  string
 	Subject, Email, Name string
+	// PersonFor, if set, is who a standalone provider signs in for a
+	// PersonCookie value AddPerson wasn't told of: false for nobody. The
+	// browser tests make a new person this way for each test that changes
+	// an account (ADR 0033). Set it before the provider serves.
+	PersonFor func(key string) (Person, bool)
 
 	srv          *httptest.Server
 	key          *rsa.PrivateKey
@@ -49,6 +54,134 @@ type Provider struct {
 	// people are the others a standalone provider signs in, by the value
 	// of the browser's PersonCookie (AddPerson).
 	people map[string]Person
+	// The users API (ServeUsers): its token, the users it changed, those
+	// it deleted, whether it's down, and the requests it took.
+	usersToken string
+	users      map[string]User
+	deleted    map[string]bool
+	usersDown  bool
+	userCalls  []string
+}
+
+// User is a user as the made-up users API keeps them (ADR 0033). A user
+// it hasn't been told of is an active person's (type internal).
+type User struct {
+	Active    bool
+	Superuser bool
+	// Type is Authentik's: internal, external, service_account or
+	// internal_service_account.
+	Type string
+}
+
+// ServeUsers answers Authentik's users API (/api/v3/core/users/{id}/: get,
+// change is_active, delete) for requests with this bearer token, as the
+// radio's accounts service account reaches it (ADR 0033). A switched-off
+// or deleted user's sign-ins are refused at the token endpoint, as
+// Authentik refuses them.
+func (p *Provider) ServeUsers(token string) {
+	p.mu.Lock()
+	p.usersToken = token
+	p.mu.Unlock()
+}
+
+// SetUser sets what the users API says of a user.
+func (p *Provider) SetUser(subject string, u User) {
+	p.mu.Lock()
+	if p.users == nil {
+		p.users = map[string]User{}
+	}
+	p.users[subject] = u
+	delete(p.deleted, subject)
+	p.mu.Unlock()
+}
+
+// UserOf is the user as the users API has them; false once deleted.
+func (p *Provider) UserOf(subject string) (User, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.userOf(subject)
+}
+
+func (p *Provider) userOf(subject string) (User, bool) {
+	if p.deleted[subject] {
+		return User{}, false
+	}
+	if u, ok := p.users[subject]; ok {
+		return u, true
+	}
+	return User{Active: true, Type: "internal"}, true
+}
+
+// SetUsersDown makes the users API answer 503, as an Authentik that can't
+// be reached (or down = false, back).
+func (p *Provider) SetUsersDown(down bool) {
+	p.mu.Lock()
+	p.usersDown = down
+	p.mu.Unlock()
+}
+
+// UserCalls are the users API's requests that reached it, as "METHOD id",
+// oldest first.
+func (p *Provider) UserCalls() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.userCalls...)
+}
+
+// serveUsers is the users API's handler.
+func (p *Provider) serveUsers(w http.ResponseWriter, r *http.Request) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.usersToken == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if p.usersDown {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Header.Get("Authorization") != "Bearer "+p.usersToken {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"detail":"Authentication credentials were not provided."}`))
+		return
+	}
+	id := r.PathValue("id")
+	p.userCalls = append(p.userCalls, r.Method+" "+id)
+	u, ok := p.userOf(id)
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"No User matches the given query."}`))
+		return
+	}
+	switch r.Method {
+	case http.MethodPatch:
+		var in map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			http.Error(w, "bad body", http.StatusBadRequest)
+			return
+		}
+		active, isBool := in["is_active"].(bool)
+		if len(in) != 1 || !isBool {
+			http.Error(w, "only is_active", http.StatusBadRequest)
+			return
+		}
+		u.Active = active
+		if p.users == nil {
+			p.users = map[string]User{}
+		}
+		p.users[id] = u
+	case http.MethodDelete:
+		if p.deleted == nil {
+			p.deleted = map[string]bool{}
+		}
+		p.deleted[id] = true
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"pk": id, "is_active": u.Active, "is_superuser": u.Superuser, "type": u.Type})
 }
 
 // Person is someone a standalone provider can sign in besides its own
@@ -124,6 +257,9 @@ func Standalone(url, clientSecret, subject, email, name string, logf func(format
 		if c, err := r.Cookie(PersonCookie); err == nil {
 			p.mu.Lock()
 			who, ok := p.people[c.Value]
+			if !ok && p.PersonFor != nil {
+				who, ok = p.PersonFor(c.Value)
+			}
 			if ok {
 				g := p.codes[code]
 				g.person = &who
@@ -182,6 +318,9 @@ func build(clientSecret, subject, email, name string, logf func(format string, a
 			"jwks_uri": p.URL + "/jwks", "id_token_signing_alg_values_supported": []string{"RS256"},
 		})
 	})
+	for _, m := range []string{"GET", "PATCH", "DELETE"} {
+		mux.HandleFunc(m+" /api/v3/core/users/{id}/{$}", p.serveUsers)
+	}
 	mux.HandleFunc("GET /jwks", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "k", Algorithm: "RS256", Use: "sig"}}})
 	})
@@ -199,6 +338,10 @@ func build(clientSecret, subject, email, name string, logf func(format string, a
 		sub, email, name, verified := p.Subject, p.Email, p.Name, !p.unverified
 		if g.person != nil {
 			sub, email, name, verified = g.person.Subject, g.person.Email, g.person.Name, true
+		}
+		// Authentik signs in no switched-off or deleted user.
+		if u, there := p.userOf(sub); !there || !u.Active {
+			ok = false
 		}
 		p.mu.Unlock()
 		sum := sha256.Sum256([]byte(v))

@@ -37,6 +37,19 @@ deployment's sign-up proves it with the emailed code. Once an admin exists
 the setting does nothing; admins promote and demote others with
 `PATCH /api/v1/admin/accounts/{id}` (`{"role": "admin"}` or `{"role": "listener"}`).
 
+Admins disable, enable and delete accounts on the Accounts page (Admin,
+Accounts), with `PATCH /api/v1/admin/accounts/{id}` (`{"status": "disabled"}`
+or `{"status": "active"}`) and `DELETE /api/v1/admin/accounts/{id}`
+(`docs/adr/0033-disabling-enabling-and-deleting-accounts.md`). Disabling
+signs the account out of the radio at once, then switches its Authentik user
+off with the accounts service account's token, `AUTHENTIK_API_TOKEN` in
+`.env` (the blueprint makes the account, `radioarchive-accounts`, with that
+key). If Authentik can't be reached, the radio's change stands, the admin is
+told, and doing it again tries Authentik again. Deleting removes the
+account, its saved settings and its sessions, and its Authentik user. A
+development `.env` from before this needs the line once:
+`echo "AUTHENTIK_API_TOKEN=$(head -c 48 /dev/urandom | base64 | tr -d '/+=\n')" >> .env`.
+
 Every admin change is in the audit log, with who made it, how (browser,
 module or import), when, and each field before and after
 (`docs/adr/0029-the-audit-log.md`). Admins read it on the **Audit log**
@@ -53,8 +66,8 @@ With `LISTENER_SIGNUP=false` nobody can sign up, so the operator makes the
 first admin's user in Authentik's admin interface (http://localhost:9000/if/admin/,
 as `akadmin`): Directory, Users, Create, with the address as both username
 and email, path `users/radioarchive`, and the attribute
-`radioarchive_email_proven: <the same address>`, which says the operator
-vouches for it. Then set a password for the user (Set password) and sign in
+`email_proven: <the same address>`, which says the operator vouches for it
+(the attribute PagerArchive's invitations set too). Then set a password for the user (Set password) and sign in
 to the radio with it.
 
 ### The PowerShell module

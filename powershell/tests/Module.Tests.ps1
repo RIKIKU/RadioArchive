@@ -186,7 +186,17 @@ Describe 'Systems, units, groups, tags, attachments, recorders and accounts' {
                 'GET /api/v1/admin/attachments' { return @([pscustomobject]@{ recorder = 'Bench'; short_name = 'ex'; system_id = 1; system_label = 'EX'; attached_at = '2026-11-25T00:00:00Z' }) }
                 'PUT /api/v1/admin/recorders/*/attachments/*' { return [pscustomobject]@{ recorder = 'Bench'; short_name = 'north'; system_id = $Body.system_id; system_label = 'EX'; attached_at = '2026-11-25T00:00:00Z' } }
                 'GET /api/v1/admin/rejections' { return [pscustomobject]@{ unattached = @([pscustomobject]@{ recorder = 'Bench Two'; short_name = 'north/1'; calls = 4; last_at = '2026-11-25T00:00:00Z'; message = 'x' }); talkgroups = @() } }
-                'GET /api/v1/admin/accounts' { return @([pscustomobject]@{ id = '7'; name = 'Sam'; email = 'sam@example.test'; role = 'listener'; status = 'active'; first_signed_in = '2026-11-25T00:00:00Z'; last_signed_in = '2026-11-25T00:00:00Z' }) }
+                'GET /api/v1/admin/accounts' {
+                    return @(
+                        [pscustomobject]@{ id = '7'; name = 'Sam'; email = 'sam@example.test'; role = 'listener'; status = 'active'; first_signed_in = '2026-11-25T00:00:00Z'; last_signed_in = '2026-11-25T00:00:00Z'; authentik_pending = $false }
+                        [pscustomobject]@{ id = '8'; name = 'Kim'; email = 'kim@example.test'; role = 'listener'; status = 'disabled'; first_signed_in = '2026-11-25T00:00:00Z'; last_signed_in = '2026-11-25T00:00:00Z'; authentik_pending = $true }
+                    )
+                }
+                'PATCH /api/v1/admin/accounts/*' {
+                    $status = if ($Body.Contains('status')) { $Body.status } else { 'active' }
+                    return [pscustomobject]@{ id = '7'; name = 'Sam'; email = 'sam@example.test'; role = 'listener'; status = $status; first_signed_in = '2026-11-25T00:00:00Z'; last_signed_in = '2026-11-25T00:00:00Z'; authentik_pending = $false }
+                }
+                'DELETE /api/v1/admin/accounts/*' { return [pscustomobject]@{ id = '7'; name = 'Sam'; email = 'sam@example.test'; role = 'listener'; status = 'active'; first_signed_in = '2026-11-25T00:00:00Z'; last_signed_in = '2026-11-25T00:00:00Z'; authentik_pending = $false } }
                 default { return $null }
             }
         }
@@ -230,6 +240,57 @@ Describe 'Systems, units, groups, tags, attachments, recorders and accounts' {
         $patch = $script:calls | Where-Object -Property Method -EQ 'PATCH'
         $patch.Path | Should -Be '/api/v1/admin/accounts/7'
         $patch.Body.role | Should -Be 'admin'
+    }
+    It 'Get-RadioArchiveAccount -Status filters, and says which accounts Authentik has yet to take' {
+        $kim = @(Get-RadioArchiveAccount -Status Disabled)
+        $kim.AccountId | Should -Be @('8')
+        $kim[0].AuthentikPending | Should -BeTrue
+        @(Get-RadioArchiveAccount -Status Active).AccountId | Should -Be @('7')
+    }
+    It 'Disable-RadioArchiveAccount asks first (High), then sends status disabled; -PassThru outputs the account' {
+        Get-RadioArchiveAccount -Email 'sam@*' | Disable-RadioArchiveAccount -WhatIf
+        @($script:calls | Where-Object -Property Method -EQ 'PATCH') | Should -BeNullOrEmpty
+        $out = Get-RadioArchiveAccount -Email 'sam@*' | Disable-RadioArchiveAccount -Confirm:$false -PassThru
+        $patch = $script:calls | Where-Object -Property Method -EQ 'PATCH'
+        $patch.Path | Should -Be '/api/v1/admin/accounts/7'
+        @($patch.Body.Keys) | Should -Be @('status')
+        $patch.Body.status | Should -Be 'disabled'
+        $out.Status | Should -Be 'Disabled'
+        $out.PSObject.TypeNames[0] | Should -Be 'RadioArchive.Account'
+    }
+    It 'Enable-RadioArchiveAccount asks first (High), then sends status active' {
+        Enable-RadioArchiveAccount -AccountId 8 -WhatIf
+        @($script:calls | Where-Object -Property Method -EQ 'PATCH') | Should -BeNullOrEmpty
+        Get-RadioArchiveAccount -Status Disabled | Enable-RadioArchiveAccount -Confirm:$false
+        $patch = $script:calls | Where-Object -Property Method -EQ 'PATCH'
+        $patch.Path | Should -Be '/api/v1/admin/accounts/8'
+        $patch.Body.status | Should -Be 'active'
+    }
+    It 'Remove-RadioArchiveAccount asks first (High): -WhatIf deletes nothing; IDs are escaped in the path' {
+        Remove-RadioArchiveAccount -AccountId 7 -WhatIf
+        @($script:calls | Where-Object -Property Method -EQ 'DELETE') | Should -BeNullOrEmpty
+        Remove-RadioArchiveAccount -AccountId 'a/b' -Confirm:$false
+        ($script:calls | Where-Object -Property Method -EQ 'DELETE').Path | Should -Be '/api/v1/admin/accounts/a%2Fb'
+    }
+}
+
+Describe 'Disabling when Authentik is unreachable (ADR 0033)' {
+    BeforeEach {
+        Mock -ModuleName RadioArchive Invoke-RaApi {
+            throw (New-Refusal -Code 'authentik_unreachable' -Status 502 -Message "Disabled in the radio: they're signed out of it and can't sign in to it. Authentik couldn't be reached just now. Try again: repeating it tries Authentik again.")
+        }
+    }
+    It 'the error says the radio disabled them and Authentik was not told, with its code' {
+        $err = $null
+        try {
+            Disable-RadioArchiveAccount -AccountId 7 -Confirm:$false -ErrorAction Stop
+        } catch {
+            $err = $_
+        }
+        $err | Should -Not -BeNullOrEmpty
+        $err.Exception.Message | Should -Match 'Disabled in the radio'
+        $err.Exception.Message | Should -Match "Authentik couldn't be reached"
+        $err.FullyQualifiedErrorId | Should -Match 'authentik_unreachable'
     }
 }
 

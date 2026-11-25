@@ -948,27 +948,47 @@ ON CONFLICT (issuer, subject) DO UPDATE SET
     email = EXCLUDED.email,
     role = CASE WHEN sqlc.arg(promote)::boolean AND accounts.status = 'active' THEN 'admin' ELSE accounts.role END,
     last_signed_in_at = CASE WHEN accounts.status = 'active' THEN EXCLUDED.last_signed_in_at ELSE accounts.last_signed_in_at END
-RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at;
+RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at, authentik_pending;
 
 -- name: GetAccount :one
-SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at, authentik_pending
 FROM accounts WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject);
 
 -- name: GetAccountForUpdate :one
-SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at, authentik_pending
 FROM accounts WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject)
 FOR UPDATE;
 
 -- name: ListAccounts :many
 -- Admins first, then by email.
-SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at, authentik_pending
 FROM accounts WHERE issuer = sqlc.arg(issuer)
 ORDER BY role, lower(email), subject;
 
 -- name: UpdateAccountRole :one
 UPDATE accounts SET role = sqlc.arg(role)
 WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject)
-RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at;
+RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at, authentik_pending;
+
+-- name: UpdateAccountStatus :one
+-- Disabling or enabling (ADR 0033): the radio's status, and Authentik
+-- still to be told.
+UPDATE accounts SET status = sqlc.arg(status), authentik_pending = true
+WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject)
+RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at, authentik_pending;
+
+-- name: SetAccountAuthentikPending :execrows
+-- Whether Authentik has yet to take the status the account had when it
+-- was asked: false once it has, true while it hasn't. A status changed
+-- again since then is left as that change set it.
+UPDATE accounts SET authentik_pending = sqlc.arg(pending)
+WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject) AND status = sqlc.arg(status);
+
+-- name: DeleteAccount :execrows
+DELETE FROM accounts WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject);
+
+-- name: DeleteAccountListenerProfile :execrows
+DELETE FROM listener_profiles WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject);
 
 -- Reads for the audit log's "before" (issue #112, ADR 0029).
 

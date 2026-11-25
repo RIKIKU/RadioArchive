@@ -30,7 +30,8 @@ BeforeAll {
     # (guidelines section 4). Set-RadioArchiveTalkgroup -State and
     # Set-RadioArchiveRetention's shortening count as High at run time
     # (Module.Tests.ps1).
-    $high = @('Remove-RadioArchiveSystem', 'Remove-RadioArchiveUnit', 'Remove-RadioArchiveAttachment', 'Set-RadioArchiveAccount')
+    $high = @('Remove-RadioArchiveSystem', 'Remove-RadioArchiveUnit', 'Remove-RadioArchiveAttachment', 'Set-RadioArchiveAccount',
+        'Disable-RadioArchiveAccount', 'Enable-RadioArchiveAccount', 'Remove-RadioArchiveAccount')
     # Commands about the radio as a whole, which take nothing from the
     # pipeline (guidelines section 3).
     $noItems = @('Get-RadioArchiveRetention')
@@ -71,7 +72,8 @@ Describe 'The manifest (guidelines sections 1 and 10)' {
         $names = (Get-Command -Module RadioArchive -CommandType Function).Name
         foreach ($n in @('Get-RadioArchiveSystem', 'Set-RadioArchiveTalkgroup', 'Set-RadioArchiveUnit', 'Set-RadioArchiveGroup', 'Set-RadioArchiveTag',
                 'Add-RadioArchiveAttachment', 'Get-RadioArchiveRejection', 'Set-RadioArchiveRecorder', 'Set-RadioArchiveRetention',
-                'Get-RadioArchiveCall', 'Save-RadioArchiveRecording', 'Set-RadioArchiveAccount')) {
+                'Get-RadioArchiveCall', 'Save-RadioArchiveRecording', 'Set-RadioArchiveAccount', 'Disable-RadioArchiveAccount',
+                'Enable-RadioArchiveAccount', 'Remove-RadioArchiveAccount')) {
             $names | Should -Contain $n
         }
         foreach ($command in Get-Command -Module RadioArchive -CommandType Function) {
@@ -87,7 +89,7 @@ Describe '<Name> (guidelines sections 2 to 8)' -ForEach $commands {
         $verb, $noun = $Name -split '-', 2
         $help = Get-Help -Name $Name -Full
         $source = $command.ScriptBlock.ToString()
-        $changes = $verb -in @('New', 'Set', 'Remove', 'Rename', 'Add')
+        $changes = $verb -in @('New', 'Set', 'Remove', 'Rename', 'Add', 'Disable', 'Enable')
     }
 
     It 'uses an approved verb' {
@@ -135,8 +137,8 @@ Describe '<Name> (guidelines sections 2 to 8)' -ForEach $commands {
             $binding.SupportsShouldProcess | Should -BeFalse
         }
     }
-    It 'has -PassThru when it changes, renames or removes' {
-        if ($verb -in @('Set', 'Rename', 'Remove')) {
+    It 'has -PassThru when it changes, renames, removes, disables or enables' {
+        if ($verb -in @('Set', 'Rename', 'Remove', 'Disable', 'Enable')) {
             $command.Parameters.Keys | Should -Contain 'PassThru'
         }
     }
@@ -216,6 +218,9 @@ Describe 'Objects and parameters line up (guidelines section 3)' {
         @{ Type = 'RadioArchive.Rejection'; Command = 'Add-RadioArchiveAttachment'; Properties = @('Recorder', 'ShortName') }
         @{ Type = 'RadioArchive.Recorder'; Command = 'Set-RadioArchiveRecorder'; Properties = @('Name') }
         @{ Type = 'RadioArchive.Account'; Command = 'Set-RadioArchiveAccount'; Properties = @('AccountId') }
+        @{ Type = 'RadioArchive.Account'; Command = 'Disable-RadioArchiveAccount'; Properties = @('AccountId') }
+        @{ Type = 'RadioArchive.Account'; Command = 'Enable-RadioArchiveAccount'; Properties = @('AccountId') }
+        @{ Type = 'RadioArchive.Account'; Command = 'Remove-RadioArchiveAccount'; Properties = @('AccountId') }
         @{ Type = 'RadioArchive.Call'; Command = 'Save-RadioArchiveRecording'; Properties = @('CallId') }
     ) {
         $c = Get-Command -Name $Command
@@ -226,7 +231,7 @@ Describe 'Objects and parameters line up (guidelines section 3)' {
         }
     }
     It 'Set- commands bind only identity from the pipeline, so a piped object changes nothing by itself' {
-        foreach ($c in Get-Command -Module RadioArchive -CommandType Function | Where-Object -FilterScript { $_.Verb -in @('Set', 'Rename', 'Remove') }) {
+        foreach ($c in Get-Command -Module RadioArchive -CommandType Function | Where-Object -FilterScript { $_.Verb -in @('Set', 'Rename', 'Remove', 'Disable', 'Enable') }) {
             foreach ($p in $c.Parameters.Values | Where-Object -FilterScript { $_.ParameterSets.Values.ValueFromPipelineByPropertyName -contains $true }) {
                 $p.Name | Should -BeIn @('SystemId', 'Id', 'Unit', 'GroupId', 'TagId', 'Recorder', 'ShortName', 'Name', 'AccountId', 'Days', 'Alias') -Because "$($c.Name) -$($p.Name)"
             }
