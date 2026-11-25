@@ -87,7 +87,7 @@ func TestIntegrationBinaryRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	api, _, err := apiHandler(st, log, rs, gate.New(st, dir, log), job, sc, limits.Defaults())
+	api, _, err := apiHandler(st, log, rs, gate.New(st, dir, log), job, sc, limits.Defaults(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

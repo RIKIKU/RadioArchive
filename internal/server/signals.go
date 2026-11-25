@@ -97,6 +97,8 @@ type recState struct {
 
 	// From its client's heartbeats since it connected.
 	heartbeat bool                     // one has come
+	beatAt    time.Time                // when the last one came
+	queue     cp.QueueState            // the last one's queue (R5), for the metrics
 	systems   map[string]cp.SystemRate // the last one's, by short_name
 	downSince time.Time                // relaying no systems since
 	zeroSince map[string]time.Time     // by short_name: a trunked system's rate near 0 since
@@ -143,8 +145,8 @@ func (g *signals) disconnected(id int64) {
 }
 
 // heartbeat takes a client's heartbeat (ADR 0002), relayed from the
-// plugin's.
-func (g *signals) heartbeat(id int64, systems []cp.SystemRate) {
+// plugin's, with the client's queue.
+func (g *signals) heartbeat(id int64, systems []cp.SystemRate, queue cp.QueueState) {
 	now := g.now()
 	g.mu.Lock()
 	st := g.recs[id]
@@ -152,7 +154,7 @@ func (g *signals) heartbeat(id int64, systems []cp.SystemRate) {
 		g.mu.Unlock()
 		return
 	}
-	st.heartbeat = true
+	st.heartbeat, st.beatAt, st.queue = true, now, queue
 	st.systems = make(map[string]cp.SystemRate, len(systems))
 	for _, s := range systems {
 		st.systems[s.ShortName] = s

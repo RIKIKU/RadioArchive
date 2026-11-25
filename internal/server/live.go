@@ -49,6 +49,10 @@ type liveCall struct {
 	id      pgtype.UUID
 	idText  string
 	unflush int64 // frames not yet added to the call's live_frames
+	// firstPCM is when the recorder's plugin sent the call's first PCM,
+	// in Unix milliseconds (0 when the client didn't say), until the
+	// call's first frame is passed on: the live delay's start (R38).
+	firstPCM int64
 }
 
 // closeError ends the read loop with a close code and reason.
@@ -175,6 +179,12 @@ func (s *session) binary(b []byte) error {
 		f.Packet = bytes.Clone(f.Packet)
 		s.rs.cfg.Live.Frame(c.idText, f)
 	}
+	if c.firstPCM > 0 {
+		// The live delay (R38, ADR 0040), on the wall clocks of the
+		// recorder host and this one.
+		s.rs.Stat.LiveDelay.Observe(max(0, float64(time.Now().UnixMilli()-c.firstPCM)/1000))
+		c.firstPCM = 0
+	}
 	return nil
 }
 
@@ -268,7 +278,7 @@ func (s *session) heartbeat(b []byte) error {
 		}
 		systems = append(systems, sr)
 	}
-	s.rs.heartbeat(s, systems)
+	s.rs.heartbeat(s, systems, hb.Queue)
 	return nil
 }
 
@@ -332,6 +342,9 @@ func (s *session) callStart(ctx context.Context, id cp.CallID, e event) error {
 	}
 	s.rs.touchCall(ctx, s.rec, *e.StartTimeMS)
 	c := &liveCall{id: callID, idText: uuidString(callID)}
+	if e.FirstPCMMS != nil {
+		c.firstPCM = *e.FirstPCMMS
+	}
 	s.calls[id] = c
 	if live := s.rs.cfg.Live; live != nil {
 		var unit uint32
