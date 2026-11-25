@@ -183,15 +183,22 @@ VALUES (sqlc.arg(system_id), sqlc.arg(talkgroup_id), sqlc.arg(label), sqlc.arg(n
         sqlc.arg(type), sqlc.narg(frequency));
 
 -- name: ImportUpdateTalkgroup :exec
--- A talkgroup the import changes: only R52's fields (label, name, tag,
--- fireground channel number, and sort order when given; groups apart).
--- Never state, unreviewed, delay, alert, LED colour, type or frequency.
+-- A talkgroup the import changes: R52's fields (label, name, tag,
+-- fireground channel number, and sort order when given; groups apart),
+-- and with the import's update option its delay, alert, LED colour, type
+-- and frequency too; the caller passes what it has for those it keeps.
+-- Never state or unreviewed (owner, 2026-11-25; ADR 0035).
 UPDATE talkgroups
 SET label = sqlc.arg(label),
     name = sqlc.arg(name),
     tag_id = COALESCE(sqlc.narg(tag_id), tag_id),
     sort_order = sqlc.arg(sort_order),
     fireground_channel = sqlc.narg(fireground_channel),
+    delay_minutes = sqlc.arg(delay_minutes),
+    alert = sqlc.narg(alert),
+    led_colour = sqlc.narg(led_colour),
+    type = sqlc.arg(type),
+    frequency = sqlc.narg(frequency),
     updated_at = now()
 WHERE system_id = sqlc.arg(system_id) AND talkgroup_id = sqlc.arg(talkgroup_id);
 

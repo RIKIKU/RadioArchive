@@ -37,6 +37,11 @@ import (
 // import_changed, applying nothing, if the results are no longer the
 // plan's. Each change is in the audit log, made by the signed-in admin,
 // how: import.
+//
+// With "update": true (issue #117, ADR 0035), what exists takes every
+// other field the file gives otherwise too: a talkgroup's delay, alert,
+// LED colour, type and frequency, and a system's, group's or tag's own
+// fields. State and unreviewed still never change through an import.
 
 // The setup's format: its name and the version this server reads and
 // writes.
@@ -211,6 +216,9 @@ type importRequest struct {
 	Setup  *importSetup `json:"setup"`
 	DryRun bool         `json:"dry_run"`
 	Plan   *string      `json:"plan"`
+	// Update makes what exists take every field the file gives otherwise,
+	// but a talkgroup's state and unreviewed (ADR 0035).
+	Update bool `json:"update"`
 }
 
 // importSetup is the setup as the import takes it: the export's shape,
@@ -481,6 +489,8 @@ type ImportReport struct {
 	Message string `json:"message,omitempty"`
 	DryRun  bool   `json:"dry_run"`
 	Applied bool   `json:"applied"`
+	// Update says whether the import was asked to update what exists.
+	Update bool `json:"update"`
 	// Plan is the fingerprint of the summary and results: apply with it.
 	Plan    string         `json:"plan"`
 	Summary ImportSummary  `json:"summary"`
@@ -503,12 +513,14 @@ func (r *ImportReport) add(x ImportResult) {
 	r.Results = append(r.Results, x)
 }
 
-// plan fingerprints the summary and the results: SHA-256 of their JSON.
+// plan fingerprints the update option, the summary and the results:
+// SHA-256 of their JSON. A preview without update doesn't apply with it.
 func (r *ImportReport) plan() error {
 	b, err := json.Marshal(struct {
+		Update  bool           `json:"update"`
 		Summary ImportSummary  `json:"summary"`
 		Results []ImportResult `json:"results"`
-	}{r.Summary, r.Results})
+	}{r.Update, r.Summary, r.Results})
 	if err != nil {
 		return err
 	}
@@ -573,6 +585,12 @@ type importRun struct {
 	units   map[unitKey]db.Unit
 	// groupsMade and tagsMade are the file's groups and tags it creates.
 	groupsMade, tagsMade map[string]bool
+	// update: what exists takes every field the file gives (ADR 0035).
+	// groupsChanged, tagsChanged and systemsChanged are the changes it made
+	// to those that exist.
+	update                     bool
+	groupsChanged, tagsChanged map[string][]store.FieldChange
+	systemsChanged             map[int64][]store.FieldChange
 }
 
 func (x *importRun) load() error {
@@ -631,10 +649,11 @@ func sameSet(a, b []string) bool {
 	return slices.Equal(x, y)
 }
 
-// writes says whether a row changes the talkgroup t that exists: only
-// R52's fields (label, name, tag, groups, fireground channel number, and
-// sort order when given).
-func (r *importTalkgroup) writes(t Talkgroup) bool {
+// writes says whether a row changes the talkgroup t that exists: R52's
+// fields (label, name, tag, groups, fireground channel number, and sort
+// order when given), and with update its delay, alert, LED colour, type
+// and frequency too. Never its state or unreviewed.
+func (r *importTalkgroup) writes(t Talkgroup, update bool) bool {
 	fg := r.fireground()
 	switch {
 	case r.Label != nil && *r.Label != t.Label, r.Name != nil && *r.Name != t.Name,
@@ -643,8 +662,30 @@ func (r *importTalkgroup) writes(t Talkgroup) bool {
 		r.SortOrder != nil && *r.SortOrder != t.SortOrder,
 		r.FiregroundChannel.Set && !equalPtr(fg, t.FiregroundChannel):
 		return true
+	case !update:
+		return false
+	case r.DelayMinutes != nil && *r.DelayMinutes != t.DelayMinutes,
+		r.Alert.Set && !equalPtr(r.Alert.Value, t.Alert),
+		r.LEDColour.Set && !equalPtr(r.LEDColour.Value, t.LEDColour),
+		r.Type != nil && *r.Type != t.Type,
+		r.Frequency.Set && !equalPtr(r.Frequency.Value, t.Frequency):
+		return true
 	}
 	return false
+}
+
+// writes says whether, with update, a system's row changes the system s
+// that exists.
+func (r *importSystem) writes(s System) bool {
+	return (r.Label != nil && *r.Label != s.Label) || (r.Name != nil && *r.Name != s.Name) ||
+		(r.AutoCreate != nil && *r.AutoCreate != s.AutoCreate) || r.settingsFields.differ(s.Alert, s.LEDColour, s.SortOrder)
+}
+
+// differ says whether settings the file gives differ from what a system,
+// group or tag has.
+func (f settingsFields) differ(alert, led *string, sort int32) bool {
+	return (f.Alert.Set && !equalPtr(f.Alert.Value, alert)) || (f.LEDColour.Set && !equalPtr(f.LEDColour.Value, led)) ||
+		(f.SortOrder != nil && *f.SortOrder != sort)
 }
 
 func equalPtr[T comparable](a, b *T) bool {
@@ -753,11 +794,27 @@ func (x *importRun) firegroundCheck() error {
 func (x *importRun) lock() error {
 	type thing struct{ kind, key string }
 	var things []thing
-	for _, s := range x.in.Systems {
+	if x.update {
+		for _, l := range x.in.Groups {
+			if g, ok := x.groups[l.Name]; ok && l.differ(g.Alert, g.LedColour, g.SortOrder) {
+				things = append(things, thing{store.AuditGroup, strconv.FormatInt(g.ID, 10)})
+			}
+		}
+		for _, l := range x.in.Tags {
+			if t, ok := x.tags[l.Name]; ok && l.differ(t.Alert, t.LedColour, t.SortOrder) {
+				things = append(things, thing{store.AuditTag, strconv.FormatInt(t.ID, 10)})
+			}
+		}
+	}
+	for i := range x.in.Systems {
+		s := &x.in.Systems[i]
+		if sys, ok := x.systems[s.ID]; ok && x.update && s.writes(sys) {
+			things = append(things, thing{store.AuditSystem, systemThing(s.ID)})
+		}
 		for i := range s.Talkgroups {
 			r := &s.Talkgroups[i]
 			k := tgKey{s.ID, int32(r.ID)}
-			if t, ok := x.tgs[k]; ok && r.skip == "" && r.writes(t) {
+			if t, ok := x.tgs[k]; ok && r.skip == "" && r.writes(t, x.update) {
 				things = append(things, thing{store.AuditTalkgroup, talkgroupThing(k.sys, k.id)})
 			}
 		}
@@ -784,10 +841,127 @@ func (x *importRun) lock() error {
 	return x.load()
 }
 
+// systemLabelCheck refuses, with update, a setup that would give two
+// systems one label, before anything is written: systems' labels are
+// unique, and a unique index failing mid-import would read as
+// import_changed.
+func (x *importRun) systemLabelCheck() error {
+	final := map[int64]string{}
+	for id, s := range x.systems {
+		final[id] = s.Label
+	}
+	for _, s := range x.in.Systems {
+		_, exists := x.systems[s.ID]
+		if s.Label != nil && (!exists || x.update) {
+			final[s.ID] = *s.Label
+		}
+	}
+	by := map[string][]int64{}
+	for id, l := range final {
+		by[l] = append(by[l], id)
+	}
+	var labels []string
+	for l, ids := range by {
+		if len(ids) > 1 {
+			labels = append(labels, l)
+		}
+	}
+	if len(labels) == 0 {
+		return nil
+	}
+	slices.Sort(labels)
+	ids := by[labels[0]]
+	slices.Sort(ids)
+	return refuseAdmin(http.StatusConflict, "label_taken",
+		"Systems %d and %d would both be labelled %q, so nothing was imported.", ids[0], ids[1], labels[0])
+}
+
+// updateExisting, with update, changes the systems, groups and tags that
+// exist where the file gives their fields otherwise, recording each.
+func (x *importRun) updateExisting(systems []importSystem, made map[int64]bool) error {
+	x.groupsChanged, x.tagsChanged, x.systemsChanged =
+		map[string][]store.FieldChange{}, map[string][]store.FieldChange{}, map[int64][]store.FieldChange{}
+	if !x.update {
+		return nil
+	}
+	ctx, q := x.ctx, x.q
+	for _, l := range x.in.Tags {
+		was, ok := x.tags[l.Name]
+		if !ok || x.tagsMade[l.Name] || !l.differ(was.Alert, was.LedColour, was.SortOrder) {
+			continue
+		}
+		t, err := q.UpdateTag(ctx, db.UpdateTagParams{ID: was.ID, SortOrder: l.SortOrder, SetAlert: l.Alert.Set,
+			Alert: l.Alert.Value, SetLedColour: l.LEDColour.Set, LedColour: l.LEDColour.Value})
+		if err != nil {
+			return failed("import tag", err)
+		}
+		before, after := labelOf(was.ID, was.Name, was.Alert, was.LedColour, was.SortOrder),
+			labelOf(t.ID, t.Name, t.Alert, t.LedColour, t.SortOrder)
+		ch, err := store.Changes(before, after)
+		if err != nil {
+			return err
+		}
+		if err := x.au.Record(store.Change{Kind: store.AuditTag, Thing: strconv.FormatInt(t.ID, 10), Label: t.Name,
+			Before: before, After: after}); err != nil {
+			return failed("import audit", err)
+		}
+		x.tagsChanged[l.Name] = ch
+		x.tags[l.Name] = t
+	}
+	for _, l := range x.in.Groups {
+		was, ok := x.groups[l.Name]
+		if !ok || x.groupsMade[l.Name] || !l.differ(was.Alert, was.LedColour, was.SortOrder) {
+			continue
+		}
+		g, err := q.UpdateGroup(ctx, db.UpdateGroupParams{ID: was.ID, SortOrder: l.SortOrder, SetAlert: l.Alert.Set,
+			Alert: l.Alert.Value, SetLedColour: l.LEDColour.Set, LedColour: l.LEDColour.Value})
+		if err != nil {
+			return failed("import group", err)
+		}
+		before, after := labelOf(was.ID, was.Name, was.Alert, was.LedColour, was.SortOrder),
+			labelOf(g.ID, g.Name, g.Alert, g.LedColour, g.SortOrder)
+		ch, err := store.Changes(before, after)
+		if err != nil {
+			return err
+		}
+		if err := x.au.Record(store.Change{Kind: store.AuditGroup, Thing: strconv.FormatInt(g.ID, 10), Label: g.Name,
+			Before: before, After: after}); err != nil {
+			return failed("import audit", err)
+		}
+		x.groupsChanged[l.Name] = ch
+		x.groups[l.Name] = g
+	}
+	for i := range systems {
+		s := &systems[i]
+		was, ok := x.systems[s.ID]
+		if !ok || made[s.ID] || !s.writes(was) {
+			continue
+		}
+		row, err := q.UpdateSystem(ctx, db.UpdateSystemParams{ID: s.ID, Label: s.Label, Name: s.Name,
+			AutoCreate: s.AutoCreate, SortOrder: s.SortOrder, SetAlert: s.Alert.Set, Alert: s.Alert.Value,
+			SetLedColour: s.LEDColour.Set, LedColour: s.LEDColour.Value})
+		if err != nil {
+			return failed("import system", err)
+		}
+		sys := systemOf(db.GetSystemRow(row))
+		ch, err := store.Changes(was.audited(), sys.audited())
+		if err != nil {
+			return err
+		}
+		if err := x.au.Record(store.Change{Kind: store.AuditSystem, Thing: systemThing(s.ID), Label: sys.Label,
+			Before: was.audited(), After: sys.audited()}); err != nil {
+			return failed("import audit", err)
+		}
+		x.systemsChanged[s.ID] = ch
+		x.systems[s.ID] = sys
+	}
+	return nil
+}
+
 // run makes the import, recording each change, and answers its results.
 func (x *importRun) run() (ImportReport, error) {
 	ctx, q := x.ctx, x.q
-	rep := ImportReport{Results: []ImportResult{}}
+	rep := ImportReport{Results: []ImportResult{}, Update: x.update}
 	if err := q.LockImport(ctx); err != nil {
 		return rep, failed("import lock", err)
 	}
@@ -798,6 +972,9 @@ func (x *importRun) run() (ImportReport, error) {
 		return rep, err
 	}
 	if err := x.firegroundCheck(); err != nil {
+		return rep, err
+	}
+	if err := x.systemLabelCheck(); err != nil {
 		return rep, err
 	}
 	// A new talkgroup needs a tag, unless it's unreviewed (R22).
@@ -886,6 +1063,9 @@ func (x *importRun) run() (ImportReport, error) {
 		x.systems[s.ID] = sys
 		made[s.ID] = true
 	}
+	if err := x.updateExisting(systems, made); err != nil {
+		return rep, err
+	}
 
 	// Free the fireground channel numbers that move, so two talkgroups can
 	// swap theirs in one import.
@@ -929,6 +1109,11 @@ func (x *importRun) run() (ImportReport, error) {
 				return rep, err
 			}
 			res.Changes = ch
+		case x.update:
+			res.Result = ImportUnchanged
+			if ch, ok := x.systemsChanged[id]; ok {
+				res.Result, res.Changes = ImportChanged, ch
+			}
 		default:
 			res.Result = ImportUnchanged
 			var nc []store.FieldChange
@@ -952,11 +1137,11 @@ func (x *importRun) run() (ImportReport, error) {
 			return rep, err
 		}
 	}
-	x.labels(&rep, store.AuditGroup, x.in.Groups, x.groupsMade, func(name string) SetupLabel {
+	x.labels(&rep, store.AuditGroup, x.in.Groups, x.groupsMade, x.groupsChanged, func(name string) SetupLabel {
 		g := x.groups[name]
 		return setupLabel(g.Name, g.Alert, g.LedColour, g.SortOrder)
 	}, x.groupNames())
-	x.labels(&rep, store.AuditTag, x.in.Tags, x.tagsMade, func(name string) SetupLabel {
+	x.labels(&rep, store.AuditTag, x.in.Tags, x.tagsMade, x.tagsChanged, func(name string) SetupLabel {
 		t := x.tags[name]
 		return setupLabel(t.Name, t.Alert, t.LedColour, t.SortOrder)
 	}, x.tagNames())
@@ -1029,11 +1214,30 @@ func (x *importRun) talkgroups(rep *ImportReport, s *importSystem) error {
 			tagID = &id
 		}
 		switch {
-		case exists && !r.writes(before):
+		case exists && !r.writes(before, x.update):
 			res.Label, res.Result = x.talkgroupLabel(sysID, k.id, before.Label), ImportUnchanged
 		case exists:
 			p := db.ImportUpdateTalkgroupParams{SystemID: k.sys, TalkgroupID: k.id, Label: before.Label,
-				Name: before.Name, TagID: tagID, SortOrder: before.SortOrder, FiregroundChannel: before.FiregroundChannel}
+				Name: before.Name, TagID: tagID, SortOrder: before.SortOrder, FiregroundChannel: before.FiregroundChannel,
+				DelayMinutes: before.DelayMinutes, Alert: before.Alert, LedColour: before.LEDColour, Type: before.Type,
+				Frequency: before.Frequency}
+			if x.update {
+				if r.DelayMinutes != nil {
+					p.DelayMinutes = *r.DelayMinutes
+				}
+				if r.Alert.Set {
+					p.Alert = r.Alert.Value
+				}
+				if r.LEDColour.Set {
+					p.LedColour = r.LEDColour.Value
+				}
+				if r.Type != nil {
+					p.Type = *r.Type
+				}
+				if r.Frequency.Set {
+					p.Frequency = r.Frequency.Value
+				}
+			}
 			if r.Label != nil {
 				p.Label = *r.Label
 			}
@@ -1119,6 +1323,12 @@ func (x *importRun) talkgroups(rep *ImportReport, s *importSystem) error {
 			}
 			if r.Unreviewed != nil {
 				nc = notChanged(nc, "unreviewed", before.Unreviewed, *r.Unreviewed)
+			}
+			// With update, the rest were taken above.
+			if x.update {
+				res.NotChanged = nc
+				rep.add(res)
+				continue
 			}
 			if r.Type != nil {
 				nc = notChanged(nc, "type", before.Type, *r.Type)
@@ -1241,10 +1451,11 @@ func (x *importRun) tagNames() []string {
 	return out
 }
 
-// labels reports the file's groups or tags (new, or unchanged, since an
-// import doesn't change one that exists) and keeps the rest, by name.
+// labels reports the file's groups or tags (new; changed, with update;
+// else unchanged, since an import without update doesn't change one that
+// exists) and keeps the rest, by name.
 func (x *importRun) labels(rep *ImportReport, kind string, rows []importLabel, made map[string]bool,
-	get func(string) SetupLabel, all []string) {
+	changed map[string][]store.FieldChange, get func(string) SetupLabel, all []string) {
 	rows = slices.Clone(rows)
 	slices.SortFunc(rows, func(a, b importLabel) int { return strings.Compare(a.Name, b.Name) })
 	inFile := map[string]bool{}
@@ -1255,6 +1466,11 @@ func (x *importRun) labels(rep *ImportReport, kind string, rows []importLabel, m
 		if made[l.Name] {
 			res.Result = ImportNew
 			res.Changes, _ = store.Changes(nil, now)
+		} else if x.update {
+			res.Result = ImportUnchanged
+			if ch, ok := changed[l.Name]; ok {
+				res.Result, res.Changes = ImportChanged, ch
+			}
 		} else {
 			res.Result = ImportUnchanged
 			res.NotChanged = x.settingsNotChanged(nil, l.settingsFields, now.Alert, now.LEDColour, now.SortOrder)
@@ -1307,12 +1523,12 @@ func (a *Admin) importSetup(r *http.Request, who string) (int, any, error) {
 	if err := req.Setup.check(); err != nil {
 		return 0, nil, err
 	}
-	rep, err := a.runImport(r, req.Setup, req.DryRun, req.Plan)
+	rep, err := a.runImport(r, req.Setup, req.Update, req.DryRun, req.Plan)
 	if code, _ := pgCode(err); code == "23505" || errors.Is(err, errImportChanged) {
 		// Something changed since the plan, or while importing: nothing is
 		// applied, and the answer is the results as they are now.
 		if !errors.Is(err, errImportChanged) {
-			if rep, err = a.runImport(r, req.Setup, true, nil); !errors.Is(err, errDryRun) {
+			if rep, err = a.runImport(r, req.Setup, req.Update, true, nil); !errors.Is(err, errDryRun) {
 				return 0, nil, err
 			}
 		}
@@ -1328,7 +1544,7 @@ func (a *Admin) importSetup(r *http.Request, who string) (int, any, error) {
 		return 0, nil, err
 	}
 	s := rep.Summary
-	a.log.Info("admin imported the setup", "admin", who, "dry_run", rep.DryRun, "applied", rep.Applied,
+	a.log.Info("admin imported the setup", "admin", who, "dry_run", rep.DryRun, "applied", rep.Applied, "update", rep.Update,
 		"talkgroups_new", s.Talkgroups.New, "talkgroups_changed", s.Talkgroups.Changed,
 		"talkgroups_skipped", s.Talkgroups.Skipped, "units_new", s.Units.New, "units_changed", s.Units.Changed,
 		"systems_new", s.Systems.New)
@@ -1338,14 +1554,14 @@ func (a *Admin) importSetup(r *http.Request, who string) (int, any, error) {
 // runImport runs the import in one audited transaction, as the signed-in
 // admin, how: import. A dry run, or a plan that isn't its results, rolls
 // it back with its entries (errDryRun, errImportChanged).
-func (a *Admin) runImport(r *http.Request, setup *importSetup, dryRun bool, plan *string) (ImportReport, error) {
+func (a *Admin) runImport(r *http.Request, setup *importSetup, update, dryRun bool, plan *string) (ImportReport, error) {
 	by, _ := AdminFrom(r.Context())
 	actor := by.Actor()
 	actor.Via = store.ViaImport
 	var rep ImportReport
 	err := a.st.Audited(r.Context(), actor, func(q *db.Queries, au *store.Audit) error {
 		var err error
-		x := &importRun{ctx: r.Context(), q: q, au: au, in: setup}
+		x := &importRun{ctx: r.Context(), q: q, au: au, in: setup, update: update}
 		if rep, err = x.run(); err != nil {
 			return err
 		}
