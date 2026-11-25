@@ -243,6 +243,7 @@
 			>
 		</div>
 		{@render editor('system')}
+		<div class="table-edge">
 		<DataTable
 			caption="Systems"
 			columns={systemColumns}
@@ -279,11 +280,13 @@
 				</MoreActions>
 			{/snippet}
 		</DataTable>
+		</div>
 	</section>
 
 	<section aria-labelledby="attachments-heading">
 		<h2 id="attachments-heading" tabindex="-1">Attachments</h2>
 		<p class="intro">Each recorder's system (its shortName) is attached to one system, which its calls are filed under. A change affects only future calls: calls already kept stay under the system they were filed under, and calls already refused stay refused.</p>
+		<div class="table-edge">
 		<DataTable
 			caption="Attachments"
 			columns={attachmentColumns}
@@ -309,6 +312,7 @@
 				</MoreActions>
 			{/snippet}
 		</DataTable>
+		</div>
 	</section>
 
 	<section aria-labelledby="unattached-heading">
@@ -343,6 +347,7 @@
 		<h2 id="tags-heading">Tags</h2>
 		<p class="intro">Every talkgroup has one tag, set on the Talkgroups page, where a new tag is made when it's first used. A talkgroup with no alert or LED colour of its own takes its tag's, then its groups', then its system's.</p>
 		{@render editor('tag')}
+		<div class="table-edge">
 		<DataTable
 			caption="Tags"
 			columns={labelColumns}
@@ -367,6 +372,7 @@
 				>
 			{/snippet}
 		</DataTable>
+		</div>
 	</section>
 
 	<section aria-labelledby="groups-heading">
@@ -383,6 +389,7 @@
 		</div>
 		<p class="intro">A talkgroup is in any number of groups, set on the Talkgroups page. Of a talkgroup's groups, the first by sort order that sets an alert or LED colour gives it.</p>
 		{@render editor('group')}
+		<div class="table-edge">
 		<DataTable
 			caption="Groups"
 			columns={labelColumns}
@@ -407,6 +414,7 @@
 				>
 			{/snippet}
 		</DataTable>
+		</div>
 	</section>
 
 	{#if asking?.what === 'system'}
@@ -479,6 +487,10 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-xs) var(--space-sm);
+	}
+	/* The last column's More actions tooltips reach past the page's edge in a wide look: clipped sideways only (ADR 0031). */
+	.table-edge {
+		overflow-x: clip;
 	}
 	.attach select {
 		width: auto;
