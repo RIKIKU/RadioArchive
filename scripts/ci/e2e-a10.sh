@@ -48,7 +48,8 @@ psql "INSERT INTO settings (key, value) VALUES ('retention_days', '3650')
 	ON CONFLICT (system_id, talkgroup_id) DO UPDATE SET state = 'hidden', fireground_channel = 43;
 	INSERT INTO attachments (recorder_id, short_name, system_id) SELECT id, 'ex', 1 FROM recorders WHERE name = '$name';
 	INSERT INTO units (system_id, first_id, last_id, alias)
-	VALUES (1, 5001, 5001, 'Engine 1'), (1, 5100, 5199, 'Portables'), (1, 5101, 5101, 'Covert radio'), (1, 5102, 5102, 'Covert scanner')
+	VALUES (1, 5001, 5001, 'Engine 1'), (1, 5100, 5199, 'Portables'), (1, 5101, 5101, 'Covert radio'), (1, 5102, 5102, 'Covert scanner'),
+		(1, 5000, 5009, 'Engines'), (1, 5101, 5102, 'Covert pair'), (1, 5990, 5999, 'Quiet fleet')
 	ON CONFLICT DO NOTHING;" >/dev/null
 
 mkdir -p "$media/app/media"
@@ -325,6 +326,43 @@ for u in 5101 1.5102; do
 	test "$got" = "$never" || fail "recent calls of unit $u answer
 $got
 but a unit never heard
+$never"
+done
+
+# Range aliases (ADR 0019): "Engines" (5000-5009) holds the public call's
+# 5001, so unit search offers it by its alias and its radio IDs, and the
+# filter by it lists the public call. "Covert pair" (5101-5102) holds only
+# radios heard on 1003: by alias or radio IDs it answers as "Quiet fleet"
+# (5990-5999), never heard, and so does the filter by it.
+for q in engines 5000-5009 5000-; do
+	found=$(answer GET "/api/v1/units/search?q=$q")
+	echo "$found" | grep -q '"first":5000,"last":5009,"alias":"Engines"' || fail "unit search $q doesn't find Engines: $found"
+done
+answer GET "/api/v1/recent-calls?$window&unit=5000-5009" | grep -q "\"id\":\"$pub\"" ||
+	fail "recent calls of the range 5000-5009 don't list the public call"
+never=$(answer GET "/api/v1/units/search?q=quiet%20fleet")
+echo "$never" | grep -q '"units":\[\]' || fail "unit search for a range never heard: $never"
+for q in covert%20pair COVERT%20PAIR pair 5101-5102 5101- 5101%20-%205102; do
+	got=$(answer GET "/api/v1/units/search?q=$q")
+	test "$got" = "$never" || fail "unit search $q (a range heard only on 1003) answers
+$got
+but a range never heard answers
+$never"
+done
+never=$(answer GET "/api/v1/recent-calls?$window&unit=5990-5999")
+for u in 5101-5102 1.5101-5102; do
+	got=$(answer GET "/api/v1/recent-calls?$window&unit=$u")
+	test "$got" = "$never" || fail "recent calls of the range $u answer
+$got
+but a range never heard
+$never"
+done
+for method in QUERY POST; do
+	got=$(answer "$method" /api/v1/recent-calls -H 'Content-Type: application/json' \
+		--data "{\"from\":\"$from\",\"to\":\"$to\",\"unit\":\"5101-5102\"}")
+	test "$got" = "$never" || fail "$method recent calls of the range 5101-5102 answer
+$got
+but GET of a range never heard
 $never"
 done
 

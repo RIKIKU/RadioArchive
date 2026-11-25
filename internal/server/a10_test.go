@@ -142,6 +142,21 @@ var a10Probes = map[string][]a10Probe{
 		}},
 		{"a word every alias has", func(f *a10World, _ string) *http.Request { return f.unitReq("GET", "callsign") }},
 		{"a digit every ID starts with", func(f *a10World, _ string) *http.Request { return f.unitReq("GET", "7") }},
+		// A range alias (ADR 0019) whose radios are heard only on the call,
+		// by its alias, its radio IDs and the start of them, and the radio
+		// only it names, by its ID. A range heard only on an unavailable
+		// call must answer as one never heard.
+		{"its unit's range's alias", func(f *a10World, id string) *http.Request { return f.unitReq("GET", f.fleet[id]) }},
+		{"its unit's range's radio IDs", func(f *a10World, id string) *http.Request {
+			return f.unitReq("GET", unitSpan(f.unit[id]))
+		}},
+		{"the start of its unit's range's radio IDs", func(f *a10World, id string) *http.Request {
+			return f.unitReq("GET", fmt.Sprintf("%d-", f.unit[id]))
+		}},
+		{"a radio only its unit's range names", func(f *a10World, id string) *http.Request {
+			return f.unitReq("GET", fmt.Sprint(f.unit[id]+1))
+		}},
+		{"a word every range has", func(f *a10World, _ string) *http.Request { return f.unitReq("GET", "fleet") }},
 		{"HEAD", func(f *a10World, id string) *http.Request { return f.unitReq("HEAD", f.alias[id]) }},
 	},
 	// The fireground lookup names a talkgroup by its number: a public
@@ -161,7 +176,7 @@ var a10Probes = map[string][]a10Probe{
 // recentProbes search recent calls (R46) around one call: a range holding
 // only it, filters naming its talkgroup (for a hidden call, 1003 or 1005;
 // for a deleted one, 4711, which doesn't exist), alone, beside public 1001
-// and by system, a unit heard only on it, and cursors made from it, both
+// and by system, a unit and a range of units heard only on it, and cursors made from it, both
 // ways. Every unavailable call's answer must equal a deleted call's. GET
 // sends them in the query string; QUERY and POST in a JSON body (ADR 0016).
 func recentProbes(method string) []a10Probe {
@@ -211,6 +226,14 @@ func recentProbes(method string) []a10Probe {
 		}),
 		probe("a unit heard only on it, by system", func(f *a10World, id string) url.Values {
 			return with(window(f), "unit", fmt.Sprintf("%d.%d", f.e.sys, f.unit[id]))
+		}),
+		// A range whose radios are heard only on it (ADR 0019): for an
+		// unavailable call, an empty range's answer.
+		probe("a range of units heard only on it", func(f *a10World, id string) url.Values {
+			return with(window(f), "unit", unitSpan(f.unit[id]))
+		}),
+		probe("a range of units heard only on it, by system", func(f *a10World, id string) url.Values {
+			return with(window(f), "unit", fmt.Sprintf("%d.%s", f.e.sys, unitSpan(f.unit[id])))
 		}),
 		probe("a cursor made from it", func(f *a10World, id string) url.Values {
 			return with(window(f), "cursor", cursor(f, id))
@@ -373,9 +396,14 @@ type a10World struct {
 	names map[string]string
 	// For unit search's probes: the alias of each call's unit, which is
 	// heard on that call alone ("Callsign PP" for the call stored with
-	// seed 'p').
+	// seed 'p'), and of the range alias of its unit and the next
+	// ("Fleet PP", unitSpan), heard on that call alone too.
 	alias map[string]string
+	fleet map[string]string
 }
+
+// unitSpan is the range alias's radio IDs for a call's unit: its ten.
+func unitSpan(u int64) string { return fmt.Sprintf("%d-%d", u, u+9) }
 
 func (f *a10World) req(method, path, body string) *http.Request {
 	var rd io.Reader
@@ -399,8 +427,11 @@ func newA10World(t *testing.T) *a10World {
 	f := &a10World{e: e, unavailable: map[string]string{}}
 	n := int64(100)
 	f.at, f.unit, f.names, f.alias = map[string]time.Time{}, map[string]int64{}, map[string]string{}, map[string]string{}
-	// Each call starts a second after the one before and has a unit of its
-	// own, so a range or a unit can hold just one call.
+	f.fleet = map[string]string{}
+	// Each call starts a second after the one before and has units of its
+	// own, so a time range, a unit or a range of units can hold just one
+	// call: its unit (70000 + 10n, with an alias of its own) and the next
+	// (with none), in a range alias of the call's own of ten radio IDs.
 	store1 := func(tg int32, patched []int32, seed byte) string {
 		t.Helper()
 		n++
@@ -408,14 +439,17 @@ func newA10World(t *testing.T) *a10World {
 		m := recording(cp.CallID{CallNum: n, StartTime: 1764000100 + n}, audio)
 		m.Talkgroup, m.PatchedTalkgroups = tg, patched
 		m.StartTimeMS, m.StopTimeMS = (1764000100+n)*1000, (1764000100+n)*1000+900
-		m.Transmissions = []cp.RecordingTransmission{{Unit: uint32(7000 + n), OffsetMS: 0, DurationMS: 900}}
+		u := 70000 + 10*n
+		m.Transmissions = []cp.RecordingTransmission{{Unit: uint32(u), OffsetMS: 0, DurationMS: 400},
+			{Unit: uint32(u + 1), OffsetMS: 500, DurationMS: 400}}
 		code, resp := e.upload(t, key, m, audio)
 		if code != 201 {
 			t.Fatalf("upload on %d: %d %+v", tg, code, resp)
 		}
 		f.at[resp.CallID] = time.UnixMilli(m.StartTimeMS).UTC()
-		f.unit[resp.CallID] = 7000 + n
+		f.unit[resp.CallID] = u
 		f.alias[resp.CallID] = fmt.Sprintf("Callsign %c%c", seed-32, seed-32)
+		f.fleet[resp.CallID] = fmt.Sprintf("Fleet %c%c", seed-32, seed-32)
 		return resp.CallID
 	}
 	f.public = []string{store1(1001, []int32{1002}, 'p'), store1(1001, nil, 'q')}
@@ -480,23 +514,27 @@ func newA10World(t *testing.T) *a10World {
 			f.names[id] = "1003"
 		default:
 			f.names[id] = "4711"
-			// A time and a unit no call has, after every call: a unit
-			// with an alias, never heard.
-			f.at[id], f.unit[id], f.alias[id] = time.Unix(1764000100+200, 0).UTC(), 6999, "Callsign ZZ"
+			// A time and units no call has, after every call: a unit
+			// with an alias and a range alias, never heard.
+			f.at[id], f.unit[id] = time.Unix(1764000100+200, 0).UTC(), 69990
+			f.alias[id], f.fleet[id] = "Callsign ZZ", "Fleet ZZ"
 		}
 	}
 	f.names[f.deleted] = "4711"
 
-	// Every call's unit has an alias of its own (R26). A unit heard only
-	// on an unavailable call must be found by neither its alias nor its ID
-	// (ADR 0019), and answer as 6999, never heard, and the deleted call's,
-	// whose transmissions went with it.
-	units := map[int64]string{}
+	// Every call's unit has an alias of its own, and its range one too
+	// (R26). A unit heard only on an unavailable call must be found by
+	// neither its alias nor its ID, nor a range whose radios are heard only
+	// there by its alias or its radio IDs (ADR 0019); each must answer as
+	// 69990 and its range, never heard, and the deleted call's, whose
+	// transmissions went with it.
+	units := map[int64][2]string{}
 	for id, u := range f.unit {
-		units[u] = f.alias[id]
+		units[u] = [2]string{f.alias[id], f.fleet[id]}
 	}
 	for u, alias := range units {
-		e.mustAdmin(t, "PUT", fmt.Sprintf("/systems/%d/units/%d", e.sys, u), map[string]any{"alias": alias}, 201)
+		e.mustAdmin(t, "PUT", fmt.Sprintf("/systems/%d/units/%d", e.sys, u), map[string]any{"alias": alias[0]}, 201)
+		e.mustAdmin(t, "PUT", fmt.Sprintf("/systems/%d/units/%s", e.sys, unitSpan(u)), map[string]any{"alias": alias[1]}, 201)
 	}
 
 	f.secrets = []string{"1003", "1005", "Admin", "ADMIN", `"admin"`, "Covert ops", "SECRET 5", "Covert group"}
@@ -504,7 +542,7 @@ func newA10World(t *testing.T) *a10World {
 	for k, id := range f.unavailable {
 		f.callName[id] = k
 		if !strings.HasPrefix(k, "never") && !strings.HasPrefix(k, "not") {
-			f.secrets = append(f.secrets, id, f.alias[id])
+			f.secrets = append(f.secrets, id, f.alias[id], f.fleet[id])
 		}
 	}
 	return f

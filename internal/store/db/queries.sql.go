@@ -932,11 +932,12 @@ WHERE c.started_at >= $1 AND c.started_at < $2
        OR c.talkgroup = ANY ($5::integer[])
        OR c.patched_talkgroups && $5::integer[])
   AND ($6::bigint IS NULL
-       OR EXISTS (SELECT 1 FROM transmissions u WHERE u.call_id = c.id AND u.unit = $6::bigint))
-  AND ($7::uuid[] IS NULL OR c.id = ANY ($7::uuid[]))
-  AND ($8::bigint IS NULL OR c.system_id = $8::bigint)
+       OR EXISTS (SELECT 1 FROM transmissions u WHERE u.call_id = c.id
+                  AND u.unit >= $6::bigint AND u.unit <= $7::bigint))
+  AND ($8::uuid[] IS NULL OR c.id = ANY ($8::uuid[]))
+  AND ($9::bigint IS NULL OR c.system_id = $9::bigint)
 ORDER BY c.started_at DESC, c.id DESC
-LIMIT $9
+LIMIT $10
 `
 
 type GateRecentCallsNewestParams struct {
@@ -945,7 +946,8 @@ type GateRecentCallsNewestParams struct {
 	CursorAt    pgtype.Timestamptz
 	CursorID    pgtype.UUID
 	Talkgroups  []int32
-	Unit        *int64
+	UnitFirst   *int64
+	UnitLast    *int64
 	CallIds     []pgtype.UUID
 	UnitSystem  *int64
 	RowLimit    int32
@@ -970,7 +972,8 @@ type GateRecentCallsNewestRow struct {
 // (R16); the gate checks each row's system. A unit filter (in unit_system
 // when that's given) comes as call_ids, the calls the unit was heard on
 // (GateUnitCalls), or, for a unit heard on more calls than that list
-// takes, as unit, a radio ID heard on the call (ADR 0013). The gate runs it
+// takes, as unit_first and unit_last, the radio IDs one of which must be
+// heard on the call: one radio, or a range (ADR 0013, ADR 0019). The gate runs it
 // with custom plans, so a NULL filter costs nothing. It joins no talkgroup
 // or system: the gate names them from the catalogue, which every listed
 // call's talkgroup must be in, and the joins' estimates made the planner
@@ -983,7 +986,8 @@ func (q *Queries) GateRecentCallsNewest(ctx context.Context, arg GateRecentCalls
 		arg.CursorAt,
 		arg.CursorID,
 		arg.Talkgroups,
-		arg.Unit,
+		arg.UnitFirst,
+		arg.UnitLast,
 		arg.CallIds,
 		arg.UnitSystem,
 		arg.RowLimit,
@@ -1027,11 +1031,12 @@ WHERE c.started_at >= $1 AND c.started_at < $2
        OR c.talkgroup = ANY ($5::integer[])
        OR c.patched_talkgroups && $5::integer[])
   AND ($6::bigint IS NULL
-       OR EXISTS (SELECT 1 FROM transmissions u WHERE u.call_id = c.id AND u.unit = $6::bigint))
-  AND ($7::uuid[] IS NULL OR c.id = ANY ($7::uuid[]))
-  AND ($8::bigint IS NULL OR c.system_id = $8::bigint)
+       OR EXISTS (SELECT 1 FROM transmissions u WHERE u.call_id = c.id
+                  AND u.unit >= $6::bigint AND u.unit <= $7::bigint))
+  AND ($8::uuid[] IS NULL OR c.id = ANY ($8::uuid[]))
+  AND ($9::bigint IS NULL OR c.system_id = $9::bigint)
 ORDER BY c.started_at, c.id
-LIMIT $9
+LIMIT $10
 `
 
 type GateRecentCallsOldestParams struct {
@@ -1040,7 +1045,8 @@ type GateRecentCallsOldestParams struct {
 	CursorAt    pgtype.Timestamptz
 	CursorID    pgtype.UUID
 	Talkgroups  []int32
-	Unit        *int64
+	UnitFirst   *int64
+	UnitLast    *int64
 	CallIds     []pgtype.UUID
 	UnitSystem  *int64
 	RowLimit    int32
@@ -1066,7 +1072,8 @@ func (q *Queries) GateRecentCallsOldest(ctx context.Context, arg GateRecentCalls
 		arg.CursorAt,
 		arg.CursorID,
 		arg.Talkgroups,
-		arg.Unit,
+		arg.UnitFirst,
+		arg.UnitLast,
 		arg.CallIds,
 		arg.UnitSystem,
 		arg.RowLimit,
@@ -1099,18 +1106,25 @@ func (q *Queries) GateRecentCallsOldest(ctx context.Context, arg GateRecentCalls
 }
 
 const gateUnitCalls = `-- name: GateUnitCalls :many
-SELECT DISTINCT call_id FROM transmissions WHERE unit = $1 LIMIT $2
+SELECT call_id FROM transmissions
+WHERE unit >= $1::bigint AND unit <= $2::bigint
+LIMIT $3
 `
 
 type GateUnitCallsParams struct {
-	Unit     int64
-	RowLimit int32
+	FirstUnit int64
+	LastUnit  int64
+	RowLimit  int32
 }
 
-// The calls a radio ID was heard on, up to row_limit, for a search's unit
-// filter. It reads only the transmissions_unit index.
+// The calls the radio IDs in [first_unit, last_unit] were heard on, one row
+// a transmission, up to row_limit, for a search's unit filter: one radio
+// (first_unit = last_unit) or a range of them (ADR 0019). It reads only the
+// transmissions_unit index, in its order, and stops at row_limit, so a
+// range costs what its first row_limit transmissions do, however wide it
+// is; the gate drops the repeats.
 func (q *Queries) GateUnitCalls(ctx context.Context, arg GateUnitCallsParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, gateUnitCalls, arg.Unit, arg.RowLimit)
+	rows, err := q.db.Query(ctx, gateUnitCalls, arg.FirstUnit, arg.LastUnit, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}

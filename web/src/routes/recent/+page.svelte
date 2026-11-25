@@ -9,10 +9,10 @@
 	// - Filters: public talkgroups (ArchiveUx's Suggest, over the catalogue
 	//   the page has), a date and time range (ArchiveUx's DateRange, with
 	//   times of day, on the deployment's clock), a unit (Suggest again, over
-	//   unit search by alias or radio ID, ADR 0019; or a radio ID typed),
-	//   newest or oldest first. No free text. They live in the page's
-	//   address, as chosen, so a filtered list can be linked to; a unit is
-	//   there by its radio ID.
+	//   unit search by alias or radio ID, and range aliases, ADR 0019; or a
+	//   radio ID typed), newest or oldest first. No free text. They live in
+	//   the page's address, as chosen, so a filtered list can be linked to;
+	//   a unit is there by its radio ID, a range by its radio IDs.
 	// - The search's refusals (R73: over 31 days, too slow) show under the
 	//   form as ArchiveUx section 5 says: a field's under that field, the
 	//   rest under the form.
@@ -48,7 +48,7 @@
 		type Refusal,
 		type Scope
 	} from '#lib/recent/search.ts';
-	import { UnitSearch, unitKey, unitLabel, type FoundUnit } from '#lib/recent/units.ts';
+	import { UnitSearch, unitKey, unitLabel, unitSpan, type FoundUnit } from '#lib/recent/units.ts';
 
 	const listening = listeningState();
 	const player = usePlayer();
@@ -120,11 +120,11 @@
 	const units = new UnitSearch(() => unitBox?.refresh());
 
 	// The address's unit by its alias, as unit search finds it (by its
-	// radio ID); one it doesn't find (never heard on a public call) stays
-	// as it was typed.
+	// radio ID, or a range's radio IDs); one it doesn't find (never heard
+	// on a public call) stays as it was typed.
 	async function nameUnit(key: string) {
 		const id = key.split('.').pop() ?? key;
-		const u = (await units.get(id)).find((x) => unitKey(x) === key || (!key.includes('.') && String(x.id) === key));
+		const u = (await units.get(id)).find((x) => unitKey(x) === key || (!key.includes('.') && unitSpan(x) === key));
 		if (!u || filters.unit !== key) return;
 		const label = unitLabel(u);
 		unitShown = label;
@@ -353,7 +353,7 @@
 					describedby="unit-hint{errors.unit ? ' unit-error' : ''}"
 					invalid={!!errors.unit}
 				/>
-				<p class="field-hint" id="unit-hint">By alias or radio ID, such as Engine 1 or 2001.</p>
+				<p class="field-hint" id="unit-hint">By alias or radio ID, such as Engine 1 or 2001, or a range, such as Portables.</p>
 				{#if errors.unit}<p class="field-error" id="unit-error">{errors.unit}</p>{/if}
 			</div>
 
