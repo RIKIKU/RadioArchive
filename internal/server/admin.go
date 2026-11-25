@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/RIKIKU/RadioArchive/internal/account"
 	"github.com/RIKIKU/RadioArchive/internal/recordings"
 	"github.com/RIKIKU/RadioArchive/internal/retention"
 	"github.com/RIKIKU/RadioArchive/internal/store"
@@ -29,14 +30,53 @@ const AdminPath = "/api/v1/admin"
 
 // AdminAuthenticator says which admin made a request (R51, R55, R111).
 //
-// Admin sign-in is Authentik's (OIDC), which arrives with the web admin
-// (M4). Until then this repo has no implementation outside _test.go files,
-// which no binary contains, and cmd/radioarchive mounts no admin API: there
-// is nothing to switch on in production by accident.
+// The binary's is account.Service (ADR 0025): the session cookie, then the
+// account's row in RadioArchive's database, role admin and status active,
+// read at every admin request, nothing cached. No Authentik group is asked.
 type AdminAuthenticator interface {
-	// Admin returns the signed-in admin's name, or false if the request
-	// isn't from one.
-	Admin(r *http.Request) (name string, ok bool)
+	// Admin returns the signed-in admin. account.ErrSignInRequired is no
+	// one signed in (401), account.ErrNotAdmin someone who isn't an admin
+	// (403); any other error is the check failing (503). It may renew
+	// the session's cookie on w.
+	Admin(w http.ResponseWriter, r *http.Request) (account.Admin, error)
+}
+
+type adminKey struct{}
+
+// AdminFrom is the admin making the request, as the admin API's check
+// found them, for a handler that needs more than their ID (the audit
+// log's "who").
+func AdminFrom(ctx context.Context) (account.Admin, bool) {
+	a, ok := ctx.Value(adminKey{}).(account.Admin)
+	return a, ok
+}
+
+// admin checks the request is an admin's, answering it if not, and returns
+// it with the admin in its context. who is the admin's account ID, which
+// logs name them by. A state-changing request from another site is
+// refused first (Go's
+// CrossOriginProtection, on top of the session cookie's SameSite=Lax); a
+// request with neither Sec-Fetch-Site nor Origin isn't a browser's, and is
+// let through to the check.
+func (a *Admin) admin(w http.ResponseWriter, r *http.Request) (*http.Request, string, bool) {
+	if err := a.cop.Check(r); err != nil {
+		writeJSON(w, http.StatusForbidden, adminError{Code: "other_site", Message: "That request didn't come from this site."})
+		return nil, "", false
+	}
+	adm, err := a.auth.Admin(w, r)
+	switch {
+	case errors.Is(err, account.ErrSignInRequired):
+		writeJSON(w, http.StatusUnauthorized, adminError{Code: "admin_sign_in_required", Message: "Sign in as an admin."})
+		return nil, "", false
+	case errors.Is(err, account.ErrNotAdmin):
+		writeJSON(w, http.StatusForbidden, adminError{Code: "admin_required", Message: "This account isn't an admin."})
+		return nil, "", false
+	case err != nil:
+		a.log.Warn("admin check failed", "error", err.Error())
+		writeJSON(w, http.StatusServiceUnavailable, adminError{Code: "admin_check_unavailable", Message: "Couldn't check your account just now. Try again in a minute."})
+		return nil, "", false
+	}
+	return r.WithContext(context.WithValue(r.Context(), adminKey{}, adm)), adm.Subject, true
 }
 
 // Admin serves the admin API's systems, attachments, talkgroups, rejected
@@ -51,12 +91,28 @@ type Admin struct {
 	rs   *Recorders
 	ls   ListenerSessions
 	now  func() time.Time
+	accs AccountRoles
+	cop  *http.CrossOriginProtection
 }
 
 // WithClock gives the admin API its clock, for the talkgroup table's 30
 // days (ADR 0026). Without one it's time.Now.
 func (a *Admin) WithClock(now func() time.Time) *Admin {
 	a.now = now
+	return a
+}
+
+// AccountRoles lists accounts and sets their roles (account.Service, ADR
+// 0025).
+type AccountRoles interface {
+	Accounts(ctx context.Context) ([]store.Account, error)
+	SetRole(ctx context.Context, by account.Admin, subject, role string) (store.Account, error)
+}
+
+// WithAccounts serves the accounts and their roles: admins promote and
+// demote other accounts (R55).
+func (a *Admin) WithAccounts(acc AccountRoles) *Admin {
+	a.accs = acc
 	return a
 }
 
@@ -88,7 +144,7 @@ func NewAdmin(st *store.Store, log *slog.Logger, auth AdminAuthenticator, record
 	if auth == nil {
 		return nil, errors.New("the admin API needs an admin authenticator")
 	}
-	return &Admin{st: st, log: log, auth: auth, dir: recordingsDir, now: time.Now}, nil
+	return &Admin{st: st, log: log, auth: auth, dir: recordingsDir, now: time.Now, cop: http.NewCrossOriginProtection()}, nil
 }
 
 // WithAdmin serves the admin API.
@@ -139,6 +195,10 @@ func WithAdmin(a *Admin) Option {
 		if a.ls != nil {
 			api.handle(AdminRoute, "DELETE "+AdminPath+"/listeners/{subject}/sessions", a.serve(a.endListenerSessions))
 		}
+		if a.accs != nil {
+			api.handle(AdminRoute, "GET "+AdminPath+"/accounts", a.serve(a.listAccounts))
+			api.handle(AdminRoute, "PATCH "+AdminPath+"/accounts/{subject}", a.serve(a.patchAccount))
+		}
 	}
 }
 
@@ -168,9 +228,8 @@ func (a *Admin) endListenerSessions(r *http.Request, who string) (int, any, erro
 // signedIn lets only an admin's requests through to h.
 func (a *Admin) signedIn(h func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		who, ok := a.auth.Admin(r)
+		r, who, ok := a.admin(w, r)
 		if !ok {
-			writeJSON(w, http.StatusUnauthorized, adminError{Code: "admin_sign_in_required", Message: "Sign in as an admin."})
 			return
 		}
 		h(w, r, who)
@@ -235,9 +294,8 @@ func refuseAdmin(status int, code, format string, a ...any) error {
 
 func (a *Admin) serve(h func(*http.Request, string) (int, any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		who, ok := a.auth.Admin(r)
+		r, who, ok := a.admin(w, r)
 		if !ok {
-			writeJSON(w, http.StatusUnauthorized, adminError{Code: "admin_sign_in_required", Message: "Sign in as an admin."})
 			return
 		}
 		code, body, err := h(r, who)

@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +10,7 @@ import (
 
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/public"
+	"github.com/RIKIKU/RadioArchive/internal/retention"
 	"github.com/RIKIKU/RadioArchive/internal/server"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/storetest"
@@ -58,10 +57,11 @@ func TestRecorderNoticeAfter(t *testing.T) {
 	}
 }
 
-// TestIntegrationNoAdminAPI:the binary serves no admin API until admin
-// sign-in exists, so the tests' stub sign-in can't be reached in production.
-// Its admin recording playback isn't served either.
-func TestIntegrationNoAdminAPI(t *testing.T) {
+// TestIntegrationBinaryRoutes: what the binary serves, by kind. Its admin
+// routes are the whole admin API, every one behind the account's admin
+// check (TestIntegrationAdminRoutes, admin_test.go); its public routes,
+// pages and app routes are exactly those the harnesses probe.
+func TestIntegrationBinaryRoutes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	st, err := store.Open(ctx, storetest.URL(t))
@@ -74,8 +74,6 @@ func TestIntegrationNoAdminAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// With listeners' sign-in on, as a deployment has it: it opens no admin
-	// route (R111, ADR 0009).
 	sc, err := signInFromEnv(environ{
 		"APP_URL": "http://radio.example.test", "AUTHENTIK_URL": "http://auth.example.test",
 		"OIDC_CLIENT_SECRET": "made-up-client-secret-0123456789",
@@ -83,28 +81,28 @@ func TestIntegrationNoAdminAPI(t *testing.T) {
 	if err != nil || !sc.on() {
 		t.Fatalf("sign-in settings: %v, on %v", err, sc.on())
 	}
-	api, _, err := apiHandler(st, slog.New(slog.DiscardHandler), rs, gate.New(st, dir, slog.New(slog.DiscardHandler)), sc)
+	log := slog.New(slog.DiscardHandler)
+	job, err := retention.New(retention.Config{Store: st, Dir: dir, Log: log})
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(api)
-	defer srv.Close()
-	// Nor the retention setting; and nothing in the binary triggers a
-	// retention run but its schedule (the tests call the job directly).
-	for _, p := range []string{"/systems", "/attachments", "/rejections", "/retention",
-		"/calls/00000000-0000-4000-8000-000000000000/recording", "/listeners/42/sessions"} {
-		resp, err := http.Get(srv.URL + server.AdminPath + p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNotFound {
-			t.Errorf("GET %s = %d, want 404", server.AdminPath+p, resp.StatusCode)
-		}
+	api, _, err := apiHandler(st, log, rs, gate.New(st, dir, log), job, sc)
+	if err != nil {
+		t.Fatal(err)
 	}
+	// The whole admin API, retention, recorders, listeners' sessions and
+	// accounts included.
+	var admin []string
 	for _, r := range api.Routes() {
 		if r.Kind == server.AdminRoute {
-			t.Errorf("the binary serves admin route %s", r.Pattern)
+			admin = append(admin, r.Pattern)
+		}
+	}
+	for _, want := range []string{"GET /api/v1/admin/systems", "PUT /api/v1/admin/retention", "PATCH /api/v1/admin/recorders/{recorder}",
+		"DELETE /api/v1/admin/listeners/{subject}/sessions", "GET /api/v1/admin/accounts", "PATCH /api/v1/admin/accounts/{subject}",
+		"GET /api/v1/admin/calls/{call}/recording"} {
+		if !slices.Contains(admin, want) {
+			t.Errorf("the binary doesn't serve admin route %s; it serves %q", want, admin)
 		}
 	}
 

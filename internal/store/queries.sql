@@ -791,8 +791,11 @@ VALUES (sqlc.arg(id_hash), sqlc.arg(issuer), sqlc.arg(subject), sqlc.arg(name), 
         sqlc.narg(id_token), sqlc.arg(used_at), sqlc.arg(expires_at));
 
 -- name: GetListenerSession :one
-SELECT issuer, subject, name, email, last_used_at, expires_at
-FROM listener_sessions WHERE id_hash = sqlc.arg(id_hash) AND expires_at > sqlc.arg(at);
+-- With its account's role and status (ADR 0025): a session whose account
+-- has no row isn't one.
+SELECT s.issuer, s.subject, s.name, s.email, s.last_used_at, s.expires_at, a.role, a.status
+FROM listener_sessions s JOIN accounts a ON a.issuer = s.issuer AND a.subject = s.subject
+WHERE s.id_hash = sqlc.arg(id_hash) AND s.expires_at > sqlc.arg(at);
 
 -- name: TouchListenerSession :exec
 UPDATE listener_sessions SET last_used_at = sqlc.arg(used_at), expires_at = sqlc.arg(expires_at)
@@ -808,3 +811,57 @@ DELETE FROM listener_sessions WHERE issuer = sqlc.arg(issuer) AND subject = sqlc
 
 -- name: DeleteExpiredListenerSessions :execrows
 DELETE FROM listener_sessions WHERE expires_at <= sqlc.arg(at);
+
+-- Accounts (ADR 0025): everyone who has finished a sign-in, keyed by the
+-- issuer and subject they sign in with, with their role and status. Times
+-- come from the API's clock.
+
+-- name: LockFirstAdmin :exec
+-- Two sign-ins that could each make the first admin wait for each other
+-- here until their transactions end, so only one finds no admin. (Row
+-- locks can't do it while no admin's row exists to lock.)
+SELECT pg_advisory_xact_lock(7300073);
+
+-- name: LockActiveAdmins :many
+-- The active admins, locked until the transaction ends: the first-admin
+-- check and the last-admin rule read them this way, so two changes at once
+-- each see the other's result.
+SELECT subject FROM accounts
+WHERE issuer = sqlc.arg(issuer) AND role = 'admin' AND status = 'active'
+ORDER BY subject
+FOR UPDATE;
+
+-- name: UpsertSignedInAccount :one
+-- A finished sign-in: the account's row, made or brought up to date with
+-- the name and email it signed in with. promote makes it admin (the first
+-- admin) unless it's disabled. A disabled account's sign-in is refused, so
+-- its last sign-in stays as it was.
+INSERT INTO accounts (issuer, subject, name, email, role, first_signed_in_at, last_signed_in_at)
+VALUES (sqlc.arg(issuer), sqlc.arg(subject), sqlc.arg(name), sqlc.arg(email),
+        CASE WHEN sqlc.arg(promote)::boolean THEN 'admin' ELSE 'listener' END, sqlc.arg(at), sqlc.arg(at))
+ON CONFLICT (issuer, subject) DO UPDATE SET
+    name = EXCLUDED.name,
+    email = EXCLUDED.email,
+    role = CASE WHEN sqlc.arg(promote)::boolean AND accounts.status = 'active' THEN 'admin' ELSE accounts.role END,
+    last_signed_in_at = CASE WHEN accounts.status = 'active' THEN EXCLUDED.last_signed_in_at ELSE accounts.last_signed_in_at END
+RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at;
+
+-- name: GetAccount :one
+SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+FROM accounts WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject);
+
+-- name: GetAccountForUpdate :one
+SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+FROM accounts WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject)
+FOR UPDATE;
+
+-- name: ListAccounts :many
+-- Admins first, then by email.
+SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+FROM accounts WHERE issuer = sqlc.arg(issuer)
+ORDER BY role, lower(email), subject;
+
+-- name: UpdateAccountRole :one
+UPDATE accounts SET role = sqlc.arg(role)
+WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject)
+RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at;

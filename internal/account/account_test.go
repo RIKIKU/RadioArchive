@@ -74,13 +74,92 @@ func (d *profiles) ClearListenerProfile(_ context.Context, iss, sub string) erro
 	return nil
 }
 
+// accounts is a made-up store: accounts, in memory, by issuer and subject.
+// The first proven INITIAL_ADMIN_EMAIL becomes admin, as the database's
+// does; its locking is the store's tests'.
+type accounts struct {
+	mu   sync.Mutex
+	rows map[[2]string]store.Account
+}
+
+func (d *accounts) SignInAccount(_ context.Context, in store.SignIn) (store.Account, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	k := [2]string{in.Issuer, in.Subject}
+	a, ok := d.rows[k]
+	if !ok {
+		a = store.Account{Issuer: in.Issuer, Subject: in.Subject, Role: store.RoleListener, Status: store.StatusActive, FirstSignedIn: in.At}
+	}
+	a.Name, a.Email = in.Name, in.Email
+	promote := false
+	if in.EmailVerified && in.InitialAdmin != "" && strings.EqualFold(in.Email, in.InitialAdmin) && a.Status == store.StatusActive {
+		promote = true
+		for _, r := range d.rows {
+			if r.Admin() {
+				promote = false
+			}
+		}
+	}
+	if promote {
+		a.Role = store.RoleAdmin
+	}
+	if a.Status == store.StatusActive {
+		a.LastSignedIn = in.At
+	}
+	d.rows[k] = a
+	return a, promote, nil
+}
+
+func (d *accounts) Accounts(_ context.Context, iss string) ([]store.Account, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []store.Account
+	for _, a := range d.rows {
+		if a.Issuer == iss {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+func (d *accounts) SetAccountRole(_ context.Context, iss, by, sub, role string) (store.Account, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	a, ok := d.rows[[2]string{iss, sub}]
+	if !ok {
+		return store.Account{}, store.ErrNoAccount
+	}
+	a.Role = role
+	d.rows[[2]string{iss, sub}] = a
+	return a, nil
+}
+
+// set changes an account's role and status, as an admin (or issue #105's
+// disabling) would.
+func (d *accounts) set(iss, sub, role, status string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	a := d.rows[[2]string{iss, sub}]
+	a.Role, a.Status = role, status
+	d.rows[[2]string{iss, sub}] = a
+}
+
+func (d *accounts) get(iss, sub string) (store.Account, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	a, ok := d.rows[[2]string{iss, sub}]
+	return a, ok
+}
+
 // sessions is a made-up store: sessions, in memory, by their ID's hash,
-// living by the times the service passes, as the database's do.
+// living by the times the service passes, as the database's do, read with
+// their account's role and status.
 type sessions struct {
 	mu     sync.Mutex
 	rows   map[string]sessionRow
 	refuse error    // every call fails with this
 	tokens []string // every ID token kept, which no log may hold
+	acc    *accounts
 }
 
 type sessionRow struct {
@@ -115,6 +194,13 @@ func (d *sessions) ListenerSession(_ context.Context, h []byte, now time.Time) (
 		return nil, nil
 	}
 	se := r.se
+	if d.acc != nil {
+		a, ok := d.acc.get(se.Issuer, se.Subject)
+		if !ok {
+			return nil, nil
+		}
+		se.Role, se.Status = a.Role, a.Status
+	}
 	return &se, nil
 }
 
@@ -226,6 +312,7 @@ type world struct {
 	p    *oidctest.Provider
 	db   *profiles
 	ss   *sessions
+	acc  *accounts
 	clk  *clock
 	app  *httptest.Server
 	logs *bytes.Buffer
@@ -247,8 +334,9 @@ func mustURL(t *testing.T, s string) *url.URL {
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
+	acc := &accounts{rows: map[[2]string]store.Account{}}
 	w := &world{p: oidctest.New(t, clientSecret, subject, email, "Made Up"), db: &profiles{rows: map[[2]string][]byte{}},
-		ss: &sessions{rows: map[string]sessionRow{}}, clk: &clock{t: time.Now()}, logs: &bytes.Buffer{}}
+		ss: &sessions{rows: map[string]sessionRow{}, acc: acc}, acc: acc, clk: &clock{t: time.Now()}, logs: &bytes.Buffer{}}
 	mux := http.NewServeMux()
 	w.app = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		// Every request comes from a listener's address, through a proxy.
@@ -262,7 +350,7 @@ func newWorld(t *testing.T) *world {
 		AppURL: appURL,
 		OIDC: &oidcclient.Client{Issuer: w.p.Issuer(), ClientID: oidctest.ClientID,
 			ClientSecret: clientSecret, RedirectURL: w.app.URL + "/auth/callback", HTTP: http.DefaultClient},
-		Sessions: w.ss, Profiles: w.db, Catalogue: catalogue{}, Secret: []byte(clientSecret),
+		Sessions: w.ss, Profiles: w.db, Accounts: w.acc, Catalogue: catalogue{}, Secret: []byte(clientSecret), InitialAdmin: "Admin@Example.test",
 		Log: slog.New(slog.NewJSONHandler(w.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Now: w.clk.now,
 	})

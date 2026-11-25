@@ -8,8 +8,10 @@
 // fireground link or a group. Its units (R26) are 5001 "Engine 1" and
 // 5100-5199 "Portables", and 9003 "Covert radio", heard only on 1003, and
 // 9000-9009 "Covert fleet", whose radios are heard only on 1003, 1004 and a
-// call patched with 1003, which unit search must never find (ADR 0019). The binary serves no admin API yet (ADR 0003),
-// so this writes the rows directly. Running it again changes nothing.
+// call patched with 1003, which unit search must never find (ADR 0019). It
+// writes the rows directly: the fixture's setup is test data, put in before
+// the tests start, as the import (issue #115) will put a real setup in.
+// Running it again changes nothing.
 //
 // Given a recorder's name (one `radioarchive recorder add` made), it also
 // attaches the recorder as the fixture's `Bench`: its `ex` is system EX, for
@@ -18,15 +20,18 @@
 // show that a quiet recorder raises no notice (A27).
 //
 // The queue's browser tests (issue #60) change a talkgroup as an admin
-// would, which the binary can't do yet (M4): its state (A11) or its delay
-// (A14), its alert (R22) or its LED colour. It prints the moment the change
-// committed, in Unix milliseconds, and the live feed sees the catalogue's
-// generation move.
+// would: its state (A11) or its delay (A14), its alert (R22) or its LED
+// colour. Since the binary serves the admin API (ADR 0025), they do it
+// through it, given the API's URL in place of the database's: the fixture
+// signs in as the fixture's admin through the made-up Authentik
+// (testing/fakeauthentik) and sends the change (admin.go). It prints the
+// moment it sent it, in Unix milliseconds, and the live feed sees the
+// catalogue's generation move.
 //
 //	go run ./testing/webfixture <database URL> [recorder name]
-//	go run ./testing/webfixture <database URL> talkgroup <ID> state <public|hidden|ignored>
-//	go run ./testing/webfixture <database URL> talkgroup <ID> delay <minutes>
-//	go run ./testing/webfixture <database URL> talkgroup <ID> alert|led <name|null>
+//	go run ./testing/webfixture <API URL> talkgroup <ID> state <public|hidden|ignored>
+//	go run ./testing/webfixture <API URL> talkgroup <ID> delay <minutes>
+//	go run ./testing/webfixture <API URL> talkgroup <ID> alert|led <name|null>
 //	go run ./testing/webfixture <database URL> calls <recorder name> <recordings dir>
 //	go run ./testing/webfixture <database URL> call-start <recorder name> <talkgroup> <unit>
 //	go run ./testing/webfixture <database URL> call-end <call ID> <recordings dir>
@@ -35,19 +40,21 @@
 // A16's browser test (issue #80) follows one call's link through its life:
 // `call-start` stores a call in progress (and prints its ID), `call-end`
 // ends it with its recording, as the recorder client's upload would, and
-// `call-delete` deletes its row and file, as retention does. Like the
-// talkgroup changes, they go when the binary serves the admin API (M4).
+// `call-delete` deletes its row and file, as retention does. They stay:
+// they are the recorder's and retention's doing, which no admin route does.
 //
 //	go run ./testing/webfixture <database URL> call-dated <recorder name> <recordings dir> <talkgroup> <unit> <age>
-//	go run ./testing/webfixture <database URL> retention <days>
+//	go run ./testing/webfixture <API URL> retention <days>
 //	go run ./testing/webfixture <database URL> nightly <recordings dir> <ahead>
 //
 // A19's browser test (issue #81) dates a basket item and lets retention
 // delete it: `call-dated` stores an ended call, with its recording, that
 // started age ago (a Go duration, 696h for 29 days), and prints its ID;
-// `retention` sets the period, as an admin would; `nightly` does the
-// nightly retention run with the job's clock ahead of now by ahead (48h is
-// that call's 31st day) and prints how many calls it deleted (retention.go).
+// `retention` sets the period through the admin API, as an admin does;
+// `nightly` does the nightly retention run with the job's clock ahead of
+// now by ahead (48h is that call's 31st day) and prints how many calls it
+// deleted (retention.go). The clock and the nightly run stay the tests'
+// own: no admin route runs retention (ADR 0005).
 //
 // The Recent calls page's tests (issue #79) need an archive to search:
 // `calls` stores made-up calls as Bench's, by the hour before now, with
@@ -63,7 +70,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const fixture = `
@@ -94,46 +100,6 @@ SELECT id, 'ex', 1 FROM recorders WHERE name = $1 ON CONFLICT DO NOTHING`
 // quiet is the recorder's quiet threshold (ADR 0010).
 const quiet = `UPDATE recorders SET quiet_after_minutes = 1 WHERE name = $1`
 
-// changeTalkgroup sets one of system EX's talkgroups' state, delay, alert
-// or LED colour ("null" for an alert or colour of none of its own).
-func changeTalkgroup(ctx context.Context, conn *pgx.Conn, id, field, value string) error {
-	tg, err := strconv.Atoi(id)
-	if err != nil {
-		return fmt.Errorf("talkgroup %q isn't a number", id)
-	}
-	orNull := func(v string) any {
-		if v == "null" {
-			return nil
-		}
-		return v
-	}
-	var tag pgconn.CommandTag
-	switch field {
-	case "state":
-		tag, err = conn.Exec(ctx, `UPDATE talkgroups SET state = $1 WHERE system_id = 1 AND talkgroup_id = $2`, value, tg)
-	case "delay":
-		var m int
-		if m, err = strconv.Atoi(value); err != nil {
-			return fmt.Errorf("delay %q isn't a number of minutes", value)
-		}
-		tag, err = conn.Exec(ctx, `UPDATE talkgroups SET delay_minutes = $1 WHERE system_id = 1 AND talkgroup_id = $2`, m, tg)
-	case "alert":
-		tag, err = conn.Exec(ctx, `UPDATE talkgroups SET alert = $1 WHERE system_id = 1 AND talkgroup_id = $2`, orNull(value), tg)
-	case "led":
-		tag, err = conn.Exec(ctx, `UPDATE talkgroups SET led_colour = $1 WHERE system_id = 1 AND talkgroup_id = $2`, orNull(value), tg)
-	default:
-		return fmt.Errorf("can't change a talkgroup's %q: state, delay, alert or led", field)
-	}
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("no talkgroup %d in system EX", tg)
-	}
-	fmt.Println(time.Now().UnixMilli())
-	return nil
-}
-
 func main() {
 	talkgroup := len(os.Args) == 6 && os.Args[2] == "talkgroup"
 	calls := len(os.Args) == 5 && os.Args[2] == "calls"
@@ -143,15 +109,27 @@ func main() {
 	a19 := (len(os.Args) == 8 && os.Args[2] == "call-dated") || (len(os.Args) == 4 && os.Args[2] == "retention") ||
 		(len(os.Args) == 5 && os.Args[2] == "nightly")
 	if len(os.Args) != 2 && len(os.Args) != 3 && !talkgroup && !calls && !one && !a16 && !a19 {
-		fmt.Fprintln(os.Stderr, "usage: webfixture <database URL> [recorder name]\n       webfixture <database URL> talkgroup <ID> state|delay <value>\n"+
+		fmt.Fprintln(os.Stderr, "usage: webfixture <database URL> [recorder name]\n       webfixture <API URL> talkgroup <ID> state|delay|alert|led <value>\n"+
 			"       webfixture <database URL> calls <recorder name> <recordings dir>\n       webfixture <database URL> call <recorder name> <recordings dir> <talkgroup> <unit>\n"+
 			"       webfixture <database URL> call-start <recorder name> <talkgroup> <unit>\n       webfixture <database URL> call-end|call-delete <call ID> <recordings dir>\n"+
 			"       webfixture <database URL> call-dated <recorder name> <recordings dir> <talkgroup> <unit> <age>\n"+
-			"       webfixture <database URL> retention <days>\n       webfixture <database URL> nightly <recordings dir> <ahead>")
+			"       webfixture <API URL> retention <days>\n       webfixture <database URL> nightly <recordings dir> <ahead>")
 		os.Exit(2)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// What an admin does goes through the admin API (admin.go).
+	if len(os.Args) > 3 && (talkgroup || os.Args[2] == "retention") != apiURL(os.Args[1]) {
+		fmt.Fprintf(os.Stderr, "webfixture: %s takes the API's URL; the others take the database's\n", os.Args[2])
+		os.Exit(2)
+	}
+	if talkgroup {
+		if err := changeTalkgroup(ctx, os.Args[1], os.Args[3], os.Args[4], os.Args[5]); err != nil {
+			fmt.Fprintln(os.Stderr, "webfixture:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if a19 && os.Args[2] != "call-dated" {
 		var err error
 		if os.Args[2] == "retention" {
@@ -228,13 +206,6 @@ func main() {
 		}
 		if err := storeOne(ctx, conn, os.Args[3], os.Args[4], int32(tg), unit); err != nil {
 			fmt.Fprintln(os.Stderr, "webfixture: call:", err)
-			os.Exit(1)
-		}
-		return
-	}
-	if talkgroup {
-		if err := changeTalkgroup(ctx, conn, os.Args[3], os.Args[4], os.Args[5]); err != nil {
-			fmt.Fprintln(os.Stderr, "webfixture:", err)
 			os.Exit(1)
 		}
 		return

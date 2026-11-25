@@ -165,4 +165,14 @@ for (const look of looks)
 				await page.getByLabel('Search talkgroups').fill('fire');
 				await expect(page.getByRole('list', { name: 'Search results' }).getByRole('listitem')).toHaveCount(1);
 				await axe(page, width);
+
+				// A disabled account's sign-in comes back here (ADR 0025): a
+				// plain notice, once, and listening as before.
+				await page.goto('/?signin=disabled');
+				await expect(page.getByRole('alert')).toHaveText(
+					"This account has been turned off here, so you weren't signed in. Listening works as before."
+				);
+				await expect(page).toHaveURL((u) => !u.searchParams.has('signin'));
+				await axe(page, width);
+				await shot(page, `signin-disabled-${look}-${theme}-${width}`);
 			});

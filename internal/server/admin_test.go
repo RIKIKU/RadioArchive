@@ -14,17 +14,22 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/RIKIKU/RadioArchive/internal/account"
 	"github.com/RIKIKU/RadioArchive/internal/server"
 )
 
-// testAdmin stands in for admin sign-in, which is Authentik's and doesn't
-// exist yet: a request with an X-Test-Admin header is from that admin. It's
-// in a _test.go file, so no binary contains it.
+// testAdmin stands in for admin sign-in (account.Service, ADR 0025, which
+// cmd/radioarchive's tests drive through a real sign-in): a request with
+// an X-Test-Admin header is from the admin with that ID. It's in a
+// _test.go file, so no binary contains it.
 type testAdmin struct{}
 
-func (testAdmin) Admin(r *http.Request) (string, bool) {
+func (testAdmin) Admin(_ http.ResponseWriter, r *http.Request) (account.Admin, error) {
 	v := r.Header.Get("X-Test-Admin")
-	return v, v != ""
+	if v == "" {
+		return account.Admin{}, account.ErrSignInRequired
+	}
+	return account.Admin{Subject: v}, nil
 }
 
 // adminReq calls the admin API as an admin (or as nobody, with as "").

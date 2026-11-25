@@ -14,9 +14,11 @@ import { zipEntry, zipNames } from './zip.ts';
 
 const KEY = 'radioarchive.basket';
 
+/** The fixture's command: on the database, or, for what an admin does (the retention period), on the API (ADR 0025). */
 function fixture(...args: string[]): Promise<string> {
+	const target = args[0] === 'retention' ? env('RA_URL') : env('RA_DATABASE_URL');
 	return new Promise((resolve, reject) =>
-		execFile(env('RA_WEBFIXTURE'), [env('RA_DATABASE_URL'), ...args], { timeout: 30_000 }, (err, out, stderr) =>
+		execFile(env('RA_WEBFIXTURE'), [target, ...args], { timeout: 30_000 }, (err, out, stderr) =>
 			err ? reject(new Error(`${err.message}\n${stderr}`)) : resolve(out.trim())
 		)
 	);

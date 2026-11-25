@@ -43,6 +43,14 @@ const p4ClientSecret = "made-up-client-secret-0123456789"
 // the log and the server, which is also APP_URL.
 func p4Server(t *testing.T, ctx context.Context, authentikURL string) (*store.Store, *bytes.Buffer, *httptest.Server) {
 	t.Helper()
+	st, logs, srv, _ := binaryServer(t, ctx, authentikURL, nil)
+	return st, logs, srv
+}
+
+// binaryServer is p4Server with more settings (INITIAL_ADMIN_EMAIL), also
+// returning the handler, for its table of routes.
+func binaryServer(t *testing.T, ctx context.Context, authentikURL string, more environ) (*store.Store, *bytes.Buffer, *httptest.Server, *server.API) {
+	t.Helper()
 	st, err := store.Open(ctx, storetest.FreshURL(t))
 	if err != nil {
 		t.Fatal(err)
@@ -64,23 +72,24 @@ func p4Server(t *testing.T, ctx context.Context, authentikURL string) (*store.St
 	if err != nil {
 		t.Fatal(err)
 	}
-	var api http.Handler
+	var api *server.API
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.RemoteAddr = listenerIP + ":40001"
 		r.Header.Set("X-Forwarded-For", forwardedIP)
 		api.ServeHTTP(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	sc, err := signInFromEnv(environ{
-		"APP_URL": srv.URL, "AUTHENTIK_URL": authentikURL, "OIDC_CLIENT_SECRET": p4ClientSecret,
-	}.get)
+	env := environ{"APP_URL": srv.URL, "AUTHENTIK_URL": authentikURL, "OIDC_CLIENT_SECRET": p4ClientSecret}
+	maps.Copy(env, more)
+	sc, err := signInFromEnv(env.get)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if api, _, err = apiHandler(st, log, rs, g, sc); err != nil {
+	t.Setenv("RECORDINGS_DIR", dir)
+	if api, _, err = apiHandler(st, log, rs, g, job, sc); err != nil {
 		t.Fatal(err)
 	}
-	return st, logs, srv
+	return st, logs, srv, api
 }
 
 // TestIntegrationP4NothingKept is SPEC.md P4 for the binary's handler, with
@@ -148,8 +157,17 @@ func TestIntegrationP4NothingKept(t *testing.T) {
 		{"DELETE", "/api/v1/account/profile", ""},
 		{"POST", "/auth/signout", ""},
 		{"GET", "/auth/end-session", ""},
+		// The admin API (ADR 0025): signed out, it answers 401 and keeps
+		// nothing.
+		{"GET", "/api/v1/admin/systems", ""},
+		{"GET", "/api/v1/admin/accounts", ""},
+		{"PATCH", "/api/v1/admin/accounts/42", `{"role":"admin"}`},
+		{"POST", "/api/v1/admin/systems", `{"label":"EX","name":"Example network"}`},
 	} {
 		resp := p4Do(t, noRedirects, srv.URL, c.method, c.path, c.body)
+		if strings.HasPrefix(c.path, "/api/v1/admin/") && resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s %s = %d, want 401", c.method, c.path, resp.StatusCode)
+		}
 		// (The app's pages answer 503 in a Go-only build, with no app built.)
 		if resp.StatusCode >= 500 && (strings.HasPrefix(c.path, "/api/") || strings.HasPrefix(c.path, "/auth/")) {
 			t.Errorf("%s %s = %d", c.method, c.path, resp.StatusCode)
@@ -162,13 +180,14 @@ func TestIntegrationP4NothingKept(t *testing.T) {
 }
 
 // TestIntegrationP4SignedInProfile is the other side of P4 (R110, ADR
-// 0021, ADR 0022): signing in adds exactly one row, the session's in
-// listener_sessions, holding nothing of the listener's address; a
-// signed-in listener's saved settings are exactly one row of
-// listener_profiles, keyed by the account and holding nothing of the
-// address either; saving again changes that row and adds none; Clear saved
-// settings deletes it; signing out deletes the session's row, leaving the
-// database as it was. Anonymous saves alongside keep nothing.
+// 0021, ADR 0022, ADR 0025): signing in adds exactly two rows, the
+// session's in listener_sessions and the account's in accounts, holding
+// nothing of the listener's address; a signed-in listener's saved settings
+// are exactly one row of listener_profiles, keyed by the account and
+// holding nothing of the address either; saving again changes that row
+// and adds none; Clear saved settings deletes it; signing out deletes the
+// session's row, leaving the database as it was but for the account's row.
+// Anonymous saves alongside keep nothing.
 func TestIntegrationP4SignedInProfile(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -196,25 +215,37 @@ func TestIntegrationP4SignedInProfile(t *testing.T) {
 	}
 	signedIn := rows(t, st)
 	for tb, v := range signedIn {
-		if tb != "listener_sessions" && v != before[tb] {
+		if tb != "listener_sessions" && tb != "accounts" && v != before[tb] {
 			t.Errorf("signing in changed %s: %s to %s", tb, before[tb], v)
 		}
 	}
-	if !strings.HasPrefix(signedIn["listener_sessions"], "1:") {
-		t.Fatalf("signed in: listener_sessions %s, want one row", signedIn["listener_sessions"])
+	for _, tb := range []string{"listener_sessions", "accounts"} {
+		if !strings.HasPrefix(before[tb], "0:") || !strings.HasPrefix(signedIn[tb], "1:") {
+			t.Fatalf("signed in: %s %s, was %s; want one row", tb, signedIn[tb], before[tb])
+		}
 	}
-	var sessionRow string
+	var sessionRow, accountRow string
 	if err := st.Pool.QueryRow(ctx, `SELECT s::text FROM listener_sessions s`).Scan(&sessionRow); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.Pool.QueryRow(ctx, `SELECT a::text FROM accounts a`).Scan(&accountRow); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(accountRow, p.Issuer()) || !strings.Contains(accountRow, "listener@example.test") || !strings.Contains(accountRow, "listener") {
+		t.Errorf("the account's row is %s", accountRow)
+	}
 	for _, c := range jar.Cookies(mustParse(t, srv.URL)) {
-		if strings.Contains(sessionRow, c.Value) {
-			t.Errorf("the session's row holds the cookie %s's value, not only its hash", c.Name)
+		for name, row := range map[string]string{"session's": sessionRow, "account's": accountRow} {
+			if strings.Contains(row, c.Value) {
+				t.Errorf("the %s row holds the cookie %s's value", name, c.Name)
+			}
 		}
 	}
 	for _, s := range []string{listenerIP, forwardedIP} {
-		if strings.Contains(sessionRow, s) {
-			t.Errorf("the session's row holds the listener's address %s", s)
+		for name, row := range map[string]string{"session's": sessionRow, "account's": accountRow} {
+			if strings.Contains(row, s) {
+				t.Errorf("the %s row holds the listener's address %s", name, s)
+			}
 		}
 	}
 
@@ -258,7 +289,13 @@ func TestIntegrationP4SignedInProfile(t *testing.T) {
 	if resp := p4Do(t, browser, srv.URL, "POST", "/auth/signout", ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("sign-out = %d", resp.StatusCode)
 	}
-	if after := rows(t, st); after.String() != before.String() {
+	// The account's row stays: admins find accounts by it (issue #105).
+	after := rows(t, st)
+	if after["accounts"] != signedIn["accounts"] {
+		t.Errorf("signing out changed the account's row: %s to %s", signedIn["accounts"], after["accounts"])
+	}
+	after["accounts"] = before["accounts"]
+	if after.String() != before.String() {
 		t.Errorf("after signing out the database isn't as it was:\nbefore %s\nafter  %s", before, after)
 	}
 	p4NoAddresses(t, logs)

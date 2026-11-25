@@ -33,8 +33,13 @@
 //	OIDC_CLIENT_ID          the radio's OIDC client and application slug (default radioarchive)
 //	OIDC_CLIENT_SECRET      its secret, or OIDC_CLIENT_SECRET_FILE naming a file holding it
 //
+//	INITIAL_ADMIN_EMAIL     the first admin's email (ADR 0025): while no admin exists,
+//	                        the account signing in with it, proven by Authentik,
+//	                        becomes admin. Once any admin exists it does nothing
+//
 // The secret is never logged. The API holds no Authentik API token: a
-// signed-in listener's saved settings live in its own database (ADR 0021).
+// signed-in listener's saved settings live in its own database (ADR 0021),
+// and so do accounts' roles (ADR 0025).
 package main
 
 import (
@@ -173,7 +178,7 @@ func serve(log *slog.Logger) error {
 	if !sc.on() {
 		log.Warn("listener sign-in is off: AUTHENTIK_URL isn't set. Listening works as ever; nobody can save to an account")
 	}
-	handler, acc, err := apiHandler(st, log, rs, g, sc)
+	handler, acc, err := apiHandler(st, log, rs, g, job, sc)
 	if err != nil {
 		return err
 	}
@@ -201,24 +206,30 @@ func serve(log *slog.Logger) error {
 
 // apiHandler is everything the API serves: the recorder client's endpoints,
 // the public API, which reads only through the hidden-talkgroup gate (ADR
-// 0004), and the browser app built into the binary (web), which serves no
-// data. The admin API (server.WithAdmin) joins it once admin sign-in
-// (Authentik, M4) exists. Until then only tests serve it, with an
-// authenticator that lives in their _test.go files, so no build of this
-// binary can serve it.
+// 0004), listeners' sign-in and account, the admin API, and the browser app
+// built into the binary (web), which serves no data.
 //
-// Listeners' sign-in (internal/account, ADR 0009) only saves their
-// preferences, in RadioArchive's database (ADR 0021), where its sessions
-// are kept too (ADR 0022): it serves no admin route and authenticates no
-// admin. The account is returned for serve to run its hourly sweep of
-// expired sessions.
-func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate, sc signInConfig) (*server.API, *account.Service, error) {
+// Sign-in (internal/account, ADR 0009) saves listeners' preferences, in
+// RadioArchive's database (ADR 0021), where its sessions are kept too (ADR
+// 0022). The admin API (server.WithAdmin) is behind the account's admin
+// check (ADR 0025): a live session whose account's row says admin and
+// active, read at every request. Public routes still see no cookie, so an
+// admin hears and sees exactly what anyone does (P3). With sign-in off,
+// nobody is an admin, and every admin route answers 401. The account is
+// returned for serve to run its hourly sweep of expired sessions.
+func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate, job *retention.Job, sc signInConfig) (*server.API, *account.Service, error) {
 	acc, err := sc.service(g, st, log)
 	if err != nil {
 		return nil, nil, err
 	}
+	admin, err := server.NewAdmin(st, log, acc, recordingsDir())
+	if err != nil {
+		return nil, nil, err
+	}
+	// The deployment's clock: the talkgroup table's 30 days (ADR 0026).
+	admin.WithClock(time.Now).WithRetention(job).WithRecorders(rs).WithListenerSessions(acc).WithAccounts(acc)
 	return server.New(st, log, server.WithRecorders(rs), server.WithPublic(public.New(g, log, public.WithLocation(deploymentZone()))),
-		server.WithAccount(acc), server.WithApp(web.New())), acc, nil
+		server.WithAccount(acc), server.WithAdmin(admin), server.WithApp(web.New())), acc, nil
 }
 
 // deploymentZone is TZ's zone, loaded by its name so the public API can tell

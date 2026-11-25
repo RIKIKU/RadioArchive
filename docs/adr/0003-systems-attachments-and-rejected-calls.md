@@ -72,6 +72,8 @@ Ingest uses it to refuse ignored calls, and the gate (issue #35) is meant to use
 
 Errors are `{"error": "<stable code>", "message": "…"}` (R78).
 
+> **[ADR 0025](0025-admin-accounts-roles-and-admin-sign-in.md) (proposed, 2026-11-25)** supersedes the rest of this paragraph: admins are accounts in RadioArchive's database, `account.Service` is the admin authenticator, and the binary serves the admin API behind it. The text below is as it was decided.
+
 Admin sign-in is Authentik's (R51, R55) and doesn't exist yet. The handler takes an `AdminAuthenticator`, and `NewAdmin` refuses to build without one. The only implementations are test stand-ins in `_test.go` files, which Go never compiles into a binary, and `cmd/radioarchive` doesn't mount the admin API at all; a test checks that it answers 404. So there's no setting or header that turns the stand-in on in production. The admin API joins the binary with Authentik, in M4. Until then the compose-based end-to-end check puts its fixture into the database with `psql`.
 
 Changes are logged with the admin's name and the IDs involved, never talkgroup or system names (R90). The audit log (R54) comes in M4.

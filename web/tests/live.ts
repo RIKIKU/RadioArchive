@@ -1,13 +1,14 @@
 /// <reference types="node" />
 // What the playback tests (@live: playback.spec.ts, queue.spec.ts) share:
-// the fake recorder's calls, the player's announcements, and the admin's
-// changes the binary can't make yet. scripts/ci/e2e-web.sh starts the
+// the fake recorder's calls, the player's announcements, and an admin's
+// changes, through the admin API. scripts/ci/e2e-web.sh starts the
 // recorder client and runs them on their own, one at a time (they share the
 // one recorder), naming in the environment the fake recorder
 // (RA_FAKERECORDER), its fixtures (RA_FIXTURES), the client's UDP address
 // (RA_UDP_ADDR), the folder for the recordings' WAVs (RA_MEDIA), the file
 // that holds back trunk-recorder's heartbeats (RA_HEARTBEATS_HELD), and the
-// fixture's command (RA_WEBFIXTURE) with its database (RA_DATABASE_URL).
+// fixture's command (RA_WEBFIXTURE) with its database (RA_DATABASE_URL),
+// or the API (RA_URL) for what an admin does.
 import { expect, type Page } from '@playwright/test';
 import { execFile } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -102,9 +103,12 @@ export function recorderDeaf(): () => void {
 	};
 }
 
-/** Changes one of the fixture's talkgroups as an admin would; resolves with when it committed (Unix ms). */
+/**
+ * Changes one of the fixture's talkgroups as an admin does, through the admin API (signed in as the
+ * fixture's admin, ADR 0025); resolves with when the change was sent (Unix ms).
+ */
 export async function setTalkgroup(id: number, field: 'state' | 'delay' | 'alert' | 'led', value: string | number): Promise<number> {
-	const out = await run(env('RA_WEBFIXTURE'), [env('RA_DATABASE_URL'), 'talkgroup', String(id), field, String(value)], 30_000);
+	const out = await run(env('RA_WEBFIXTURE'), [env('RA_URL'), 'talkgroup', String(id), field, String(value)], 30_000);
 	return Number(out.trim());
 }
 

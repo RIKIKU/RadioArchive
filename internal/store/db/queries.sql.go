@@ -1464,6 +1464,59 @@ func (q *Queries) GateUnitsIn(ctx context.Context, arg GateUnitsInParams) ([]int
 	return items, nil
 }
 
+const getAccount = `-- name: GetAccount :one
+SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+FROM accounts WHERE issuer = $1 AND subject = $2
+`
+
+type GetAccountParams struct {
+	Issuer  string
+	Subject string
+}
+
+func (q *Queries) GetAccount(ctx context.Context, arg GetAccountParams) (Account, error) {
+	row := q.db.QueryRow(ctx, getAccount, arg.Issuer, arg.Subject)
+	var i Account
+	err := row.Scan(
+		&i.Issuer,
+		&i.Subject,
+		&i.Name,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.FirstSignedInAt,
+		&i.LastSignedInAt,
+	)
+	return i, err
+}
+
+const getAccountForUpdate = `-- name: GetAccountForUpdate :one
+SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+FROM accounts WHERE issuer = $1 AND subject = $2
+FOR UPDATE
+`
+
+type GetAccountForUpdateParams struct {
+	Issuer  string
+	Subject string
+}
+
+func (q *Queries) GetAccountForUpdate(ctx context.Context, arg GetAccountForUpdateParams) (Account, error) {
+	row := q.db.QueryRow(ctx, getAccountForUpdate, arg.Issuer, arg.Subject)
+	var i Account
+	err := row.Scan(
+		&i.Issuer,
+		&i.Subject,
+		&i.Name,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.FirstSignedInAt,
+		&i.LastSignedInAt,
+	)
+	return i, err
+}
+
 const getJob = `-- name: GetJob :one
 
 SELECT name, ran_for, started_at, finished_at, ok, error, result FROM jobs WHERE name = $1
@@ -1505,8 +1558,9 @@ func (q *Queries) GetListenerProfile(ctx context.Context, arg GetListenerProfile
 }
 
 const getListenerSession = `-- name: GetListenerSession :one
-SELECT issuer, subject, name, email, last_used_at, expires_at
-FROM listener_sessions WHERE id_hash = $1 AND expires_at > $2
+SELECT s.issuer, s.subject, s.name, s.email, s.last_used_at, s.expires_at, a.role, a.status
+FROM listener_sessions s JOIN accounts a ON a.issuer = s.issuer AND a.subject = s.subject
+WHERE s.id_hash = $1 AND s.expires_at > $2
 `
 
 type GetListenerSessionParams struct {
@@ -1521,8 +1575,12 @@ type GetListenerSessionRow struct {
 	Email      string
 	LastUsedAt pgtype.Timestamptz
 	ExpiresAt  pgtype.Timestamptz
+	Role       string
+	Status     string
 }
 
+// With its account's role and status (ADR 0025): a session whose account
+// has no row isn't one.
 func (q *Queries) GetListenerSession(ctx context.Context, arg GetListenerSessionParams) (GetListenerSessionRow, error) {
 	row := q.db.QueryRow(ctx, getListenerSession, arg.IDHash, arg.At)
 	var i GetListenerSessionRow
@@ -1533,6 +1591,8 @@ func (q *Queries) GetListenerSession(ctx context.Context, arg GetListenerSession
 		&i.Email,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
+		&i.Role,
+		&i.Status,
 	)
 	return i, err
 }
@@ -1722,6 +1782,42 @@ func (q *Queries) InsertListenerSession(ctx context.Context, arg InsertListenerS
 		arg.ExpiresAt,
 	)
 	return err
+}
+
+const listAccounts = `-- name: ListAccounts :many
+SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+FROM accounts WHERE issuer = $1
+ORDER BY role, lower(email), subject
+`
+
+// Admins first, then by email.
+func (q *Queries) ListAccounts(ctx context.Context, issuer string) ([]Account, error) {
+	rows, err := q.db.Query(ctx, listAccounts, issuer)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Account
+	for rows.Next() {
+		var i Account
+		if err := rows.Scan(
+			&i.Issuer,
+			&i.Subject,
+			&i.Name,
+			&i.Email,
+			&i.Role,
+			&i.Status,
+			&i.FirstSignedInAt,
+			&i.LastSignedInAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAttachments = `-- name: ListAttachments :many
@@ -2074,6 +2170,36 @@ func (q *Queries) ListUnits(ctx context.Context, systemID int64) ([]Unit, error)
 	return items, nil
 }
 
+const lockActiveAdmins = `-- name: LockActiveAdmins :many
+SELECT subject FROM accounts
+WHERE issuer = $1 AND role = 'admin' AND status = 'active'
+ORDER BY subject
+FOR UPDATE
+`
+
+// The active admins, locked until the transaction ends: the first-admin
+// check and the last-admin rule read them this way, so two changes at once
+// each see the other's result.
+func (q *Queries) LockActiveAdmins(ctx context.Context, issuer string) ([]string, error) {
+	rows, err := q.db.Query(ctx, lockActiveAdmins, issuer)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var subject string
+		if err := rows.Scan(&subject); err != nil {
+			return nil, err
+		}
+		items = append(items, subject)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockCallForRecording = `-- name: LockCallForRecording :one
 
 INSERT INTO calls (recorder_id, sys_num, call_num, start_time, system_id, short_name,
@@ -2124,6 +2250,22 @@ func (q *Queries) LockCallForRecording(ctx context.Context, arg LockCallForRecor
 	var i LockCallForRecordingRow
 	err := row.Scan(&i.ID, &i.RecordingSha256)
 	return i, err
+}
+
+const lockFirstAdmin = `-- name: LockFirstAdmin :exec
+
+SELECT pg_advisory_xact_lock(7300073)
+`
+
+// Accounts (ADR 0025): everyone who has finished a sign-in, keyed by the
+// issuer and subject they sign in with, with their role and status. Times
+// come from the API's clock.
+// Two sign-ins that could each make the first admin wait for each other
+// here until their transactions end, so only one finds no admin. (Row
+// locks can't do it while no admin's row exists to lock.)
+func (q *Queries) LockFirstAdmin(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockFirstAdmin)
+	return err
 }
 
 const notifyRecorderKeyChanged = `-- name: NotifyRecorderKeyChanged :exec
@@ -2805,6 +2947,34 @@ func (q *Queries) UnattachedRejections(ctx context.Context) ([]UnattachedRejecti
 	return items, nil
 }
 
+const updateAccountRole = `-- name: UpdateAccountRole :one
+UPDATE accounts SET role = $1
+WHERE issuer = $2 AND subject = $3
+RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+`
+
+type UpdateAccountRoleParams struct {
+	Role    string
+	Issuer  string
+	Subject string
+}
+
+func (q *Queries) UpdateAccountRole(ctx context.Context, arg UpdateAccountRoleParams) (Account, error) {
+	row := q.db.QueryRow(ctx, updateAccountRole, arg.Role, arg.Issuer, arg.Subject)
+	var i Account
+	err := row.Scan(
+		&i.Issuer,
+		&i.Subject,
+		&i.Name,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.FirstSignedInAt,
+		&i.LastSignedInAt,
+	)
+	return i, err
+}
+
 const updateGroup = `-- name: UpdateGroup :one
 UPDATE groups
 SET name = COALESCE($1, name),
@@ -3013,4 +3183,52 @@ func (q *Queries) UpsertLiveCall(ctx context.Context, arg UpsertLiveCallParams) 
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const upsertSignedInAccount = `-- name: UpsertSignedInAccount :one
+INSERT INTO accounts (issuer, subject, name, email, role, first_signed_in_at, last_signed_in_at)
+VALUES ($1, $2, $3, $4,
+        CASE WHEN $5::boolean THEN 'admin' ELSE 'listener' END, $6, $6)
+ON CONFLICT (issuer, subject) DO UPDATE SET
+    name = EXCLUDED.name,
+    email = EXCLUDED.email,
+    role = CASE WHEN $5::boolean AND accounts.status = 'active' THEN 'admin' ELSE accounts.role END,
+    last_signed_in_at = CASE WHEN accounts.status = 'active' THEN EXCLUDED.last_signed_in_at ELSE accounts.last_signed_in_at END
+RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+`
+
+type UpsertSignedInAccountParams struct {
+	Issuer  string
+	Subject string
+	Name    string
+	Email   string
+	Promote bool
+	At      pgtype.Timestamptz
+}
+
+// A finished sign-in: the account's row, made or brought up to date with
+// the name and email it signed in with. promote makes it admin (the first
+// admin) unless it's disabled. A disabled account's sign-in is refused, so
+// its last sign-in stays as it was.
+func (q *Queries) UpsertSignedInAccount(ctx context.Context, arg UpsertSignedInAccountParams) (Account, error) {
+	row := q.db.QueryRow(ctx, upsertSignedInAccount,
+		arg.Issuer,
+		arg.Subject,
+		arg.Name,
+		arg.Email,
+		arg.Promote,
+		arg.At,
+	)
+	var i Account
+	err := row.Scan(
+		&i.Issuer,
+		&i.Subject,
+		&i.Name,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.FirstSignedInAt,
+		&i.LastSignedInAt,
+	)
+	return i, err
 }

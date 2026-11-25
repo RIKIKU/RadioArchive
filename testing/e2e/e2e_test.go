@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RIKIKU/RadioArchive/internal/account"
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/opus"
@@ -125,14 +126,17 @@ type rig struct {
 	stopCli func()
 }
 
-// testAdmin stands in for admin sign-in (Authentik, not built yet): a
-// request with an X-Test-Admin header is from that admin. It's in a _test.go
-// file, so no binary contains it.
+// testAdmin stands in for admin sign-in (account.Service, ADR 0025): a
+// request with an X-Test-Admin header is from the admin with that ID. It's
+// in a _test.go file, so no binary contains it.
 type testAdmin struct{}
 
-func (testAdmin) Admin(r *http.Request) (string, bool) {
+func (testAdmin) Admin(_ http.ResponseWriter, r *http.Request) (account.Admin, error) {
 	v := r.Header.Get("X-Test-Admin")
-	return v, v != ""
+	if v == "" {
+		return account.Admin{}, account.ErrSignInRequired
+	}
+	return account.Admin{Subject: v}, nil
 }
 
 // admin calls the admin API and wants code.

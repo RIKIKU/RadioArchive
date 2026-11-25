@@ -26,8 +26,9 @@
 # heartbeat every 2 s, as trunk-recorder would, unless the file named in
 # RA_HEARTBEATS_HELD exists. The recorder notice comes 3 s after the
 # recorder goes deaf (RECORDER_NOTICE_AFTER), not 2 min. They change
-# talkgroups as an admin would with the fixture's command (RA_WEBFIXTURE,
-# on RA_DATABASE_URL).
+# talkgroups as an admin does with the fixture's command (RA_WEBFIXTURE),
+# through the binary's admin API, signed in as the fixture's admin through
+# a made-up Authentik (testing/fakeauthentik, ADR 0025).
 #
 # The Recent calls page's tests (issue #79) search made-up calls the
 # fixture's command stores before the tests start; those that change a
@@ -47,10 +48,12 @@ set -eu
 cd "$(dirname "$0")/../.."
 
 port=${RA_E2E_PORT:-18090}
+akport=${RA_E2E_AUTHENTIK_PORT:-18091}
 udp=${RA_E2E_UDP_PORT:-19890}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/radioarchive-web.XXXXXX")
 db=""
 pid=""
+ak=""
 client=""
 pulse=""
 beats=""
@@ -61,6 +64,7 @@ cleanup() {
 	[ -z "$client" ] || kill "$client" 2>/dev/null || true
 	[ -z "$pulse" ] || pulseaudio --kill 2>/dev/null || true
 	[ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+	[ -z "$ak" ] || kill "$ak" 2>/dev/null || true
 	[ -z "$db" ] || docker rm -f -v "$db" >/dev/null 2>&1 || true
 	if [ "$rc" -ne 0 ] && [ -f "$tmp/api.log" ]; then tail -n 50 "$tmp/api.log" >&2; fi
 	if [ "$rc" -ne 0 ] && [ -f "$tmp/client.log" ]; then tail -n 50 "$tmp/client.log" >&2; fi
@@ -103,10 +107,21 @@ CGO_ENABLED=0 go build -trimpath -o "$tmp/radioarchive" ./cmd/radioarchive
 CGO_ENABLED=0 go build -trimpath -o "$tmp/fakerecorder" ./testing/fakerecorder/cmd/fakerecorder
 CGO_ENABLED=1 go build -trimpath -o "$tmp/radioarchive-client" ./cmd/radioarchive-client
 CGO_ENABLED=0 go build -trimpath -o "$tmp/webfixture" ./testing/webfixture
+CGO_ENABLED=0 go build -trimpath -o "$tmp/fakeauthentik" ./testing/fakeauthentik
 mkdir -p "$tmp/recordings" "$tmp/media" "$tmp/queue"
+# Sign-in is on, against a made-up Authentik that signs everyone in as the
+# fixture's admin, INITIAL_ADMIN_EMAIL (ADR 0025): the fixture's command
+# makes an admin's changes through the admin API with it. The browser tests
+# themselves never sign in here; the real Authentik's sign-in is
+# e2e-signin.sh's.
+secret=made-up-e2e-web-client-secret-0123456789
+admin_email=fixture-admin@example.test
+"$tmp/fakeauthentik" -addr "127.0.0.1:$akport" -secret "$secret" -email "$admin_email" >"$tmp/authentik.log" 2>&1 &
+ak=$!
 # The deployment's time zone isn't the browsers' (UTC), so the Recent calls
 # page's tests show its times are TZ's (section 13).
 TZ=Australia/Melbourne DATABASE_URL=$DATABASE_URL LISTEN_ADDR="127.0.0.1:$port" RECORDINGS_DIR="$tmp/recordings" RECORDER_NOTICE_AFTER=3s \
+	APP_URL="http://127.0.0.1:$port" AUTHENTIK_URL="http://127.0.0.1:$akport" OIDC_CLIENT_SECRET="$secret" INITIAL_ADMIN_EMAIL="$admin_email" \
 	"$tmp/radioarchive" serve >"$tmp/api.log" 2>&1 &
 pid=$!
 # Node, not curl: Playwright's image may have no curl.

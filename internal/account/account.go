@@ -4,8 +4,10 @@
 // Signing in only saves preferences. Nothing here is asked by the public
 // API, the live feed or the gate, and the server hands public routes no
 // cookie at all (internal/server), so being signed in can't change what a
-// listener hears. Nothing here unlocks the admin API either: the session is
-// not an admin authenticator, and the binary serves no admin API (ADR 0003).
+// listener hears. The admin API is opened only by an account whose row in
+// RadioArchive's database says admin and active, read at every admin
+// request (Service.Admin, ADR 0025): signing in as a listener opens
+// nothing, and no Authentik group is asked.
 //
 // The server stores nothing about a listener who hasn't signed in (P4). A
 // signed-in listener's session is a row of RadioArchive's database, found
@@ -108,6 +110,20 @@ type Catalogue interface {
 	Catalogue(ctx context.Context) (*gate.Catalogue, error)
 }
 
+// Accounts is where accounts live: RadioArchive's database (store.Store,
+// ADR 0025), one row an account that has signed in, with its role and
+// status.
+type Accounts interface {
+	// SignInAccount records a finished sign-in, making the first admin
+	// while there is none (promoted says it did).
+	SignInAccount(ctx context.Context, in store.SignIn) (a store.Account, promoted bool, err error)
+	// Accounts are the issuer's accounts.
+	Accounts(ctx context.Context, issuer string) ([]store.Account, error)
+	// SetAccountRole sets an account's role, as the admin by changes it,
+	// under the last-admin rule.
+	SetAccountRole(ctx context.Context, issuer, by, subject, role string) (store.Account, error)
+}
+
 // Config is the account's settings. With OIDC nil, sign-in is off: the
 // account menu still works signed out, and Sign in says it isn't available.
 type Config struct {
@@ -115,7 +131,12 @@ type Config struct {
 	OIDC      *oidcclient.Client
 	Sessions  Sessions
 	Profiles  Profiles
+	Accounts  Accounts
 	Catalogue Catalogue
+	// InitialAdmin is INITIAL_ADMIN_EMAIL: while no admin exists, the
+	// account signing in with this address, proven by Authentik, becomes
+	// the first admin (ADR 0025). "" for none.
+	InitialAdmin string
 	// Secret is what the sign-in cookie's key is derived from: the OIDC
 	// client secret.
 	Secret []byte
@@ -144,8 +165,8 @@ func New(cfg Config) (*Service, error) {
 	if cfg.OIDC == nil {
 		return s, nil
 	}
-	if cfg.AppURL == nil || cfg.OIDC.Issuer == "" || cfg.Sessions == nil || cfg.Profiles == nil || cfg.Catalogue == nil {
-		return nil, errors.New("account: sign-in needs the app's URL, the issuer, the sessions, the profiles and the catalogue")
+	if cfg.AppURL == nil || cfg.OIDC.Issuer == "" || cfg.Sessions == nil || cfg.Profiles == nil || cfg.Accounts == nil || cfg.Catalogue == nil {
+		return nil, errors.New("account: sign-in needs the app's URL, the issuer, the sessions, the profiles, the accounts and the catalogue")
 	}
 	var err error
 	if s.seal, err = newSealer(cfg.Secret); err != nil {
@@ -185,6 +206,9 @@ type session struct {
 	// else's account there.
 	Issuer, Subject string
 	Name, Email     string
+	// Admin is whether the account is an admin now: its row's role is
+	// admin and its status active, read with the session (ADR 0025).
+	Admin bool
 }
 
 type attempt struct {
@@ -250,7 +274,8 @@ func (s *Service) current(w http.ResponseWriter, r *http.Request) (session, bool
 	if err != nil {
 		return session{}, false, err
 	}
-	if row == nil || row.Subject == "" || row.Issuer != s.cfg.OIDC.Issuer {
+	// A disabled account's sessions aren't live (ADR 0025).
+	if row == nil || row.Subject == "" || row.Issuer != s.cfg.OIDC.Issuer || row.Status == store.StatusDisabled {
 		return session{}, false, nil
 	}
 	if now.Sub(row.LastUsed) > renewAfter {
@@ -260,7 +285,8 @@ func (s *Service) current(w http.ResponseWriter, r *http.Request) (session, bool
 			s.setCookie(w, sessionCookie, c.Value, "/", sessionFor)
 		}
 	}
-	return session{Issuer: row.Issuer, Subject: row.Subject, Name: row.Name, Email: row.Email}, true, nil
+	return session{Issuer: row.Issuer, Subject: row.Subject, Name: row.Name, Email: row.Email,
+		Admin: row.Role == store.RoleAdmin && row.Status == store.StatusActive}, true, nil
 }
 
 // startSession keeps a new session for the listener, with the ID token
@@ -409,6 +435,7 @@ var (
 const (
 	signInUnavailable = "/?signin=unavailable"
 	signInFailed      = "/?signin=failed"
+	signInDisabled    = "/?signin=disabled"
 	signedOut         = "/?signed_out=1"
 )
 
@@ -459,6 +486,24 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		s.cfg.Log.Warn("sign-in failed", "error", err.Error())
 		http.Redirect(w, r, signInFailed, http.StatusSeeOther)
 		return
+	}
+	// Every finished sign-in has its account's row (ADR 0025), which may
+	// make it the first admin. A disabled account goes no further.
+	acc, promoted, err := s.cfg.Accounts.SignInAccount(r.Context(), store.SignIn{Issuer: s.cfg.OIDC.Issuer, Subject: id.Subject,
+		Name: id.Name, Email: id.Email, EmailVerified: id.EmailVerified, InitialAdmin: s.cfg.InitialAdmin, At: s.cfg.Now()})
+	if err != nil {
+		s.cfg.Log.Warn("sign-in: couldn't record the account", "error", err.Error())
+		http.Redirect(w, r, signInFailed, http.StatusSeeOther)
+		return
+	}
+	if acc.Status != store.StatusActive {
+		// The log names the account by its ID, never its name or email.
+		s.cfg.Log.Info("sign-in refused: the account is disabled", "account", acc.Subject)
+		http.Redirect(w, r, signInDisabled, http.StatusSeeOther)
+		return
+	}
+	if promoted {
+		s.cfg.Log.Info("the first admin signed in (INITIAL_ADMIN_EMAIL)", "account", acc.Subject)
 	}
 	if err := s.startSession(r.Context(), w, session{Issuer: s.cfg.OIDC.Issuer, Subject: id.Subject, Name: id.Name, Email: id.Email}, id.IDToken); err != nil {
 		s.cfg.Log.Warn("sign-in: couldn't keep the session", "error", err.Error())
@@ -536,6 +581,10 @@ type Who struct {
 	ID    string `json:"id"`
 	Name  string `json:"name,omitempty"`
 	Email string `json:"email,omitempty"`
+	// Admin says whether the account is an admin, so the frame can show
+	// the Admin menu to admins only (ADR 0025). It opens nothing by
+	// itself: every admin request checks again.
+	Admin bool `json:"admin"`
 }
 
 // State is GET /api/v1/account.
@@ -566,7 +615,7 @@ func (s *Service) account(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, st)
 		return
 	}
-	who := &Who{ID: se.Subject, Name: se.Name, Email: se.Email}
+	who := &Who{ID: se.Subject, Name: se.Name, Email: se.Email, Admin: se.Admin}
 	p, err := s.profile(r.Context(), se)
 	if err != nil {
 		s.cfg.Log.Warn("account: couldn't read the profile", "error", err.Error())

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -30,16 +29,6 @@ func storeDated(ctx context.Context, conn *pgx.Conn, recorder, dir string, talkg
 	}
 	fmt.Println(id)
 	return nil
-}
-
-// setRetention sets the retention period in days, as an admin would in
-// Settings (R88).
-func setRetention(ctx context.Context, url, days string) error {
-	n, err := strconv.Atoi(days)
-	if err != nil {
-		return fmt.Errorf("%q isn't a number of days", days)
-	}
-	return withJob(ctx, url, "", time.Now, func(j *retention.Job) error { return j.SetDays(ctx, n) })
 }
 
 // runNightly does the nightly run as if the clock were ahead of now, and

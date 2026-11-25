@@ -48,10 +48,12 @@ done
 # The test fixture's setup, once the API has migrated the database.
 go run ./testing/webfixture "postgres://radioarchive:$POSTGRES_PASSWORD@127.0.0.1:$DB_PORT/radioarchive?sslmode=disable"
 
-export RA_URL="$APP_URL" RA_AUTHENTIK_URL="$AUTHENTIK_URL" RA_MAILPIT_URL="http://localhost:$MAILPIT_PORT"
+# The first admin's address (ADR 0025), which one test signs up with.
+export RA_URL="$APP_URL" RA_AUTHENTIK_URL="$AUTHENTIK_URL" RA_MAILPIT_URL="http://localhost:$MAILPIT_PORT" \
+	RA_INITIAL_ADMIN_EMAIL="${INITIAL_ADMIN_EMAIL:-}"
 cd web
 if [ -n "${RA_PLAYWRIGHT_IMAGE:-}" ]; then
-	docker run --rm --network host --ipc=host -e RA_URL -e RA_AUTHENTIK_URL -e RA_MAILPIT_URL -e RA_SHOTS -e CI -e HOME=/root \
+	docker run --rm --network host --ipc=host -e RA_URL -e RA_AUTHENTIK_URL -e RA_MAILPIT_URL -e RA_INITIAL_ADMIN_EMAIL -e RA_SHOTS -e CI -e HOME=/root \
 		-v "$PWD/..:/w" -w /w/web "$RA_PLAYWRIGHT_IMAGE" \
 		sh -c 'npm ci --no-fund --no-audit && npx playwright test -c playwright.signin.config.ts "$@"' sh "$@"
 else

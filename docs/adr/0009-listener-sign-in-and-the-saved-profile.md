@@ -91,7 +91,7 @@ PagerArchive also locks an account after 5 wrong passwords or codes. This bluepr
 ## Leaving room for the combined deployment and admins
 
 - **Combined (R103, R105, M7).** `radioarchive.yaml` names nothing from the standalone file, and its variables start `RA_` beside PagerArchive's `PA_`. PagerArchive's Authentik can load it as one more blueprint (SPEC 11.1, item 4) while keeping its own sign-in, brand and invitation-only enrolment. The radio's API then takes PagerArchive's `AUTHENTIK_URL` in its override. Each app keeps its own host-only cookie. Silent sign-in (`prompt=none`) is one more `oauth2.AuthCodeOption` on `oidcclient.AuthURL`. Shared sign-out uses the same end-session endpoint.
-- **Admins (R51, R55, M4).** `internal/oidcclient` knows nothing of listeners. Admin sign-in can use the same client and provider, with its own session check for `radioarchive-admins` behind the existing `AdminAuthenticator` fence. The profile-access policy already keeps the token away from that group's members.
+- **Admins (R51, R55, M4).** Superseded by [ADR 0025](0025-admin-accounts-roles-and-admin-sign-in.md) (proposed, 2026-11-25): admins are accounts with the admin role in RadioArchive's database, and no Authentik group is checked. As it was decided: `internal/oidcclient` knows nothing of listeners. Admin sign-in can use the same client and provider, with its own session check for `radioarchive-admins` behind the existing `AdminAuthenticator` fence. The profile-access policy already keeps the token away from that group's members.
 
 ## Considered options
 
