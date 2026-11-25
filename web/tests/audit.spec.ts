@@ -168,25 +168,25 @@ test("Settings: the audit log's period, a problem under its field, and asking be
 	const days = page.getByRole('textbox', { name: 'Keep audit log entries (days) required' });
 	await expect(days).toHaveValue('730');
 	await expect(days).toHaveAttribute('required', '');
-	await expect(page.locator('#audit-days-hint')).toContainText(/From 90 to 3,650 days; 730 by default\..*The log holds [\d,]+ entr(y|ies), the oldest from /);
+	await expect(page.locator('#audit-days-hint')).toContainText(/From 30 to 3,650 days; 730 by default\..*The log holds [\d,]+ entr(y|ies), the oldest from /);
 	const save = page.getByRole('button', { name: "Save the audit log's retention" });
-	await days.fill('30');
+	await days.fill('29');
 	await save.click();
 	await expect(days).toHaveAttribute('aria-invalid', 'true');
 	await expect(days).toBeFocused();
-	await expect(page.locator('#audit-days-error')).toHaveText('Enter whole days from 90 to 3,650.');
+	await expect(page.locator('#audit-days-error')).toHaveText('Enter whole days from 30 to 3,650.');
 	await days.fill('730');
 	await save.click();
 	await expect(page.locator('p.audit-status')).toHaveText('Nothing to change: audit log entries are kept for 730 days.');
 	await expect(days).not.toHaveAttribute('aria-invalid', /./);
 
-	await days.fill('90');
+	await days.fill('30');
 	await save.click();
 	const confirm = page.getByRole('region', { name: 'Delete 3 audit log entries?' });
 	await expect(confirm).toBeVisible();
 	await expect(confirm.getByRole('heading')).toBeFocused();
-	await expect(confirm).toContainText('Keeping audit log entries for 90 days instead of 730 days deletes 3 entries at the next nightly run');
-	await expect(confirm.getByRole('button', { name: 'Shorten to 90 days' })).toBeVisible();
+	await expect(confirm).toContainText('Keeping audit log entries for 30 days instead of 730 days deletes 3 entries at the next nightly run');
+	await expect(confirm.getByRole('button', { name: 'Shorten to 30 days' })).toBeVisible();
 	await confirm.getByRole('button', { name: 'Cancel' }).click();
 	await expect(confirm).toHaveCount(0);
 	await expect(page.locator('p.audit-status')).toHaveText('Nothing changed: audit log entries are still kept for 730 days.');
@@ -232,7 +232,7 @@ for (const look of looks)
 				// Settings, asking before a shorter audit period deletes entries; cancelled.
 				await threeEntriesOld(page);
 				await page.goto('/admin/settings');
-				await page.getByRole('textbox', { name: /Keep audit log entries/ }).fill('90');
+				await page.getByRole('textbox', { name: /Keep audit log entries/ }).fill('30');
 				await page.getByRole('button', { name: "Save the audit log's retention" }).click();
 				const confirm = page.getByRole('region', { name: 'Delete 3 audit log entries?' });
 				await expect(confirm).toBeVisible();

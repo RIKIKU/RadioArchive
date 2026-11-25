@@ -256,7 +256,7 @@ func TestIntegrationAuditRetention(t *testing.T) {
 	_, key := e.recorder(t)
 	ctx := context.Background()
 	got := decodeJSON[server.AuditRetention](t, e.mustAdmin(t, "GET", "/audit/retention", nil, 200))
-	if got.Days != 730 || got.DefaultDays != 730 || got.MinDays != 90 || got.MaxDays != 3650 || got.NextRun.IsZero() {
+	if got.Days != 730 || got.DefaultDays != 730 || got.MinDays != 30 || got.MaxDays != 3650 || got.NextRun.IsZero() {
 		t.Errorf("the default: %+v", got)
 	}
 	e.backdate(t, 800, "Eight hundred days ago")
@@ -296,7 +296,7 @@ func TestIntegrationAuditRetention(t *testing.T) {
 	}
 
 	// Out of range.
-	for _, d := range []int{89, 3651, 0} {
+	for _, d := range []int{29, 3651, 0} {
 		e.wantRefusal(t, "PUT", "/audit/retention", map[string]any{"days": d}, 400, "invalid_days")
 	}
 	// Shorter, deleting none: saved at once, audited.
@@ -310,18 +310,18 @@ func TestIntegrationAuditRetention(t *testing.T) {
 		t.Errorf("the change's entry: %+v", set)
 	}
 	// Shorter, deleting some: asked first, with how many; nothing saved.
-	b := e.mustAdmin(t, "PUT", "/audit/retention", map[string]any{"days": 90}, 409)
+	b := e.mustAdmin(t, "PUT", "/audit/retention", map[string]any{"days": 30}, 409)
 	ask := decodeJSON[server.AuditRetentionConfirm](t, b)
-	if ask.Code != "confirm_shorter_audit_retention" || ask.Entries != 2 || ask.Days != 90 ||
-		ask.Message != "Shortening the audit log's retention from 500 to 90 days deletes 2 entries at the next nightly run. Confirm?" {
+	if ask.Code != "confirm_shorter_audit_retention" || ask.Entries != 2 || ask.Days != 30 ||
+		ask.Message != "Shortening the audit log's retention from 500 to 30 days deletes 2 entries at the next nightly run. Confirm?" {
 		t.Errorf("asking: %s", b)
 	}
 	if got := decodeJSON[server.AuditRetention](t, e.mustAdmin(t, "GET", "/audit/retention", nil, 200)); got.Days != 500 || e.auditCount(t) != n+1 {
 		t.Errorf("unconfirmed, it changed: %+v", got)
 	}
-	e.mustAdmin(t, "PUT", "/audit/retention", map[string]any{"days": 90, "confirm": true}, 200)
+	e.mustAdmin(t, "PUT", "/audit/retention", map[string]any{"days": 30, "confirm": true}, 200)
 	if res, err := e.job.RunNightly(ctx); err != nil || res.AuditEntries != 2 {
-		t.Fatalf("nightly at 90 days: %+v, %v", res, err)
+		t.Fatalf("nightly at 30 days: %+v, %v", res, err)
 	}
 	if b, _ := change(e.audit(t, "limit=1").Entries[0], "entries"); b != "2" {
 		t.Errorf("the second prune's entry: %s", b)

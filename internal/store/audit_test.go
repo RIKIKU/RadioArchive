@@ -123,14 +123,15 @@ func TestIntegrationAudited(t *testing.T) {
 // prune deletes the entries past the audit log's period, and only those,
 // and writes one entry saying so; with none past it, it writes nothing.
 // Turning the prune's switch on by hand still deletes nothing the period
-// keeps. The period's one reading takes 90 to 3,650 days, else 730.
+// keeps. The period's one reading takes 30 to 3,650 days, else 730 (30:
+// owner, 2026-11-25).
 func TestIntegrationAuditPrune(t *testing.T) {
 	st := accountsStore(t)
 	ctx := context.Background()
 	for _, c := range []struct {
 		value string
 		want  int32
-	}{{"", 730}, {"90", 90}, {"3650", 3650}, {"89", 730}, {"3651", 730}, {"abc", 730}, {"-5", 730}, {"99999999", 730}} {
+	}{{"", 730}, {"30", 30}, {"90", 90}, {"3650", 3650}, {"29", 730}, {"89", 89}, {"3651", 730}, {"abc", 730}, {"-5", 730}, {"99999999", 730}} {
 		if c.value != "" {
 			if err := st.SetSetting(ctx, db.SetSettingParams{Key: "audit_retention_days", Value: c.value}); err != nil {
 				t.Fatal(err)

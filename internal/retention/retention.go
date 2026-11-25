@@ -46,11 +46,12 @@ const (
 )
 
 // The audit log's retention period, in days (owner, 2026-11-25; ADR 0032):
-// the nightly run deletes entries older than it. Migration 00026's
+// the nightly run deletes entries older than it; the minimum is 30 (owner,
+// 2026-11-25; it was 90). Migration 00029's
 // audit_log_retention_days() reads the setting with the same bounds.
 const (
 	DefaultAuditDays = 730
-	MinAuditDays     = 90
+	MinAuditDays     = 30
 	MaxAuditDays     = 3650
 )
 
