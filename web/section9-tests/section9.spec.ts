@@ -14,7 +14,7 @@ import { firstOf, listen, playedFrom, seconds, sendCalls, dock, env } from '../t
 const MAILPIT = env('RA_MAILPIT_URL');
 const ADMIN = env('RA_ADMIN_EMAIL');
 const RECORDER = env('RA_RECORDER');
-const password = 'correct horse first admin staple';
+const password = process.env.RA_ADMIN_PASSWORD || 'correct horse first admin staple';
 
 async function mail(request: APIRequestContext, to: string, since: Date): Promise<string> {
 	const deadline = Date.now() + 90_000;
