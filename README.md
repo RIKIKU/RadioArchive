@@ -57,8 +57,8 @@ page, filtered by who, kind, thing and days, or with
 `GET /api/v1/admin/audit` (newest first, or `order=oldest`; `who`, `kind`,
 `thing`, `since`, `until`, `limit`, and `cursor` from the answer's `next`).
 Recordings' retention doesn't touch it; it has a period of its own,
-`AUDIT_RETENTION_DAYS`, 730 days unless an admin changes it on the Settings
-page (`PUT /api/v1/admin/audit/retention`), after which the nightly run
+`AUDIT_RETENTION_DAYS`, 730 days unless an admin changes it (30 to 3,650) on
+the Settings page (`PUT /api/v1/admin/audit/retention`), after which the nightly run
 deletes older entries and records how many went
 (`docs/adr/0032-the-audit-log-page-and-its-retention.md`).
 
