@@ -80,6 +80,23 @@ func (a *API) limited(k limits.Kind, h http.Handler) http.Handler {
 				f.Write(w)
 				return
 			}
+		case limits.Zip:
+			// Every request is a zip of its own, a resumed one (a range)
+			// included (R72). The page checks before starting a download
+			// by asking for its first byte, a zip that ends at once (ADR
+			// 0038).
+			c := l.Client(r)
+			d, f, ok := l.Zip(c)
+			if !ok {
+				if !a.byAdmin(w, r) {
+					f.Write(w)
+					return
+				}
+				// An admin over a cap isn't counted, but is paced.
+				d = l.ZipAnyway(c)
+			}
+			defer d.Done()
+			w = d.Writer(r.Context(), w)
 		}
 		h.ServeHTTP(w, r)
 	})
