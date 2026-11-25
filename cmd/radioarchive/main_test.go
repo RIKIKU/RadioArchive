@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/RIKIKU/RadioArchive/internal/gate"
+	"github.com/RIKIKU/RadioArchive/internal/limits"
 	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/internal/retention"
 	"github.com/RIKIKU/RadioArchive/internal/server"
@@ -86,7 +87,7 @@ func TestIntegrationBinaryRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	api, _, err := apiHandler(st, log, rs, gate.New(st, dir, log), job, sc)
+	api, _, err := apiHandler(st, log, rs, gate.New(st, dir, log), job, sc, limits.Defaults())
 	if err != nil {
 		t.Fatal(err)
 	}

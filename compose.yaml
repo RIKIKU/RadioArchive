@@ -98,6 +98,12 @@ services:
       # account signing in with it, proven by its emailed code, is made
       # admin. Admins' roles live in the radio's database, not Authentik.
       INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      # Heavy-use limits (SPEC.md section 6.11, ADR 0036). Empty is the SPEC's
+      # default. Every request here comes from Docker's bridge, one
+      # address, so scripts/dev-env.sh raises them for the test stack.
+      TRUSTED_PROXY: ${TRUSTED_PROXY:-}
+      LIMIT_REQUESTS: ${LIMIT_REQUESTS:-}
+      LIMIT_PLAYBACK: ${LIMIT_PLAYBACK:-}
     ports:
       - "127.0.0.1:${API_PORT:-8080}:8080"
     volumes:

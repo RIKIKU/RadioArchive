@@ -31,4 +31,8 @@ OIDC_CLIENT_SECRET=$(secret 60)
 AUTHENTIK_API_TOKEN=$(secret 60)
 LISTENER_SIGNUP=${LISTENER_SIGNUP:-true}
 INITIAL_ADMIN_EMAIL=${INITIAL_ADMIN_EMAIL:-owner-$(secret 8 | tr 'A-Z' 'a-z')@example.test}
+# The test stack raises the heavy-use limits (SPEC.md section 6.11): its
+# tests all come from one address. Remove these to try the defaults.
+LIMIT_REQUESTS=${LIMIT_REQUESTS:-100000}
+LIMIT_PLAYBACK=${LIMIT_PLAYBACK:-100000}
 EOF

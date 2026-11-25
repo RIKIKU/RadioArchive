@@ -24,6 +24,18 @@
 //	                listeners see "Some talkgroups aren't being received
 //	                right now", as a Go duration (default 2m)
 //
+// Heavy-use limits (SPEC.md section 6.11, ADR 0036), on the public API only:
+//
+//	TRUSTED_PROXY   the one reverse proxy's exact address, never a range: a request
+//	                from it counts as the last address in its X-Forwarded-For.
+//	                Unset, every request counts as its connecting address
+//	LIMIT_REQUESTS  public API requests a minute per client (default 120)
+//	LIMIT_PLAYBACK  recording playback requests a minute per client (default 600)
+//
+// A client is one IPv4 address or one IPv6 /64. Signed-in admins and the
+// recorder client are never limited; signed-in listeners are, as everyone
+// is (P3). No address is logged.
+//
 // Listeners' sign-in (ADR 0009), on when AUTHENTIK_URL is set:
 //
 //	APP_URL                 the radio's public URL, e.g. https://radio.example.org
@@ -64,6 +76,7 @@ import (
 
 	"github.com/RIKIKU/RadioArchive/internal/account"
 	"github.com/RIKIKU/RadioArchive/internal/gate"
+	"github.com/RIKIKU/RadioArchive/internal/limits"
 	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/internal/retention"
 	"github.com/RIKIKU/RadioArchive/internal/server"
@@ -180,10 +193,14 @@ func serve(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	lc, err := limits.FromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
 	if !sc.on() {
 		log.Warn("listener sign-in is off: AUTHENTIK_URL isn't set. Listening works as ever; nobody can save to an account")
 	}
-	handler, acc, err := apiHandler(st, log, rs, g, job, sc)
+	handler, acc, err := apiHandler(st, log, rs, g, job, sc, lc)
 	if err != nil {
 		return err
 	}
@@ -222,8 +239,12 @@ func serve(log *slog.Logger) error {
 // admin hears and sees exactly what anyone does (P3). With sign-in off,
 // nobody is an admin, and every admin route answers 401. The account is
 // returned for serve to run its hourly sweep of expired sessions.
-func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate, job *retention.Job, sc signInConfig) (*server.API, *account.Service, error) {
+func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate, job *retention.Job, sc signInConfig, lc limits.Config) (*server.API, *account.Service, error) {
 	acc, err := sc.service(g, st, log)
+	if err != nil {
+		return nil, nil, err
+	}
+	lim, err := limits.New(lc)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -234,7 +255,9 @@ func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate
 	// The deployment's clock: the talkgroup table's 30 days (ADR 0026).
 	admin.WithClock(time.Now).WithRetention(job).WithRecorders(rs).WithListenerSessions(acc).WithAccounts(acc)
 	return server.New(st, log, server.WithRecorders(rs), server.WithPublic(public.New(g, log, public.WithLocation(deploymentZone()))),
-		server.WithAccount(acc), server.WithAdmin(admin), server.WithApp(web.New())), acc, nil
+		server.WithAccount(acc), server.WithAdmin(admin), server.WithApp(web.New()),
+		// Admins are exempt, by the same check as the admin API's (R70).
+		server.WithLimits(lim, acc)), acc, nil
 }
 
 // deploymentZone is TZ's zone, loaded by its name so the public API can tell

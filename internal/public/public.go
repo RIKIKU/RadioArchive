@@ -40,7 +40,30 @@ const (
 type Route struct {
 	Pattern string
 	Handler http.Handler
+	// Limit is the heavy-use limit the server puts in front of it.
+	Limit Limit
 }
+
+// Limit is which heavy-use limit a public route is under (SPEC.md R71-R73;
+// ADR 0036). The server counts and refuses; the route only says which.
+// Every route has one: the zero Limit is none, which the server won't mount.
+type Limit int
+
+// The limits.
+const (
+	_ Limit = iota
+	// LimitRequests is the public API's requests a minute per client (R73):
+	// recent calls and search, call details, single-call downloads, the
+	// catalogue, fireground and unit search, and the call link's page.
+	LimitRequests
+	// LimitPlayback is recording playback's own requests a minute (R73),
+	// since seeking makes many.
+	LimitPlayback
+	// LimitLive is the listener's WebSockets per client and in total (R71).
+	LimitLive
+	// LimitZip is zips at once per client and in total, and their speed (R72).
+	LimitZip
+)
 
 // API is the public API.
 type API struct {
@@ -67,27 +90,27 @@ func New(g *gate.Gate, log *slog.Logger, opts ...Option) *API {
 	for _, o := range opts {
 		o(a)
 	}
-	a.handle("QUERY "+CallsPath, a.calls)
-	a.handle("POST "+CallsPath, a.calls)
-	a.handle("GET "+RecordingPath, a.recording)
-	a.handle("GET "+DownloadPath, a.download)
-	a.handle("GET "+ZipPath, a.zipGet)
-	a.handle("QUERY "+ZipListPath, a.zipList)
-	a.handle("POST "+ZipListPath, a.zipList)
-	a.handle("GET "+CataloguePath, a.catalogue)
-	a.handle("GET "+SearchPath, a.search)
-	a.handle("GET "+FiregroundPath, a.fireground)
-	a.handle("GET "+UnitSearchPath, a.unitSearch)
-	a.handle("GET "+LivePath, a.live)
-	a.handle("GET "+RecentCallsPath, a.recentCalls)
-	a.handle("QUERY "+RecentCallsPath, a.recentCallsBody)
-	a.handle("POST "+RecentCallsPath, a.recentCallsBody)
+	a.handle("QUERY "+CallsPath, LimitRequests, a.calls)
+	a.handle("POST "+CallsPath, LimitRequests, a.calls)
+	a.handle("GET "+RecordingPath, LimitPlayback, a.recording)
+	a.handle("GET "+DownloadPath, LimitRequests, a.download)
+	a.handle("GET "+ZipPath, LimitZip, a.zipGet)
+	a.handle("QUERY "+ZipListPath, LimitZip, a.zipList)
+	a.handle("POST "+ZipListPath, LimitZip, a.zipList)
+	a.handle("GET "+CataloguePath, LimitRequests, a.catalogue)
+	a.handle("GET "+SearchPath, LimitRequests, a.search)
+	a.handle("GET "+FiregroundPath, LimitRequests, a.fireground)
+	a.handle("GET "+UnitSearchPath, LimitRequests, a.unitSearch)
+	a.handle("GET "+LivePath, LimitLive, a.live)
+	a.handle("GET "+RecentCallsPath, LimitRequests, a.recentCalls)
+	a.handle("QUERY "+RecentCallsPath, LimitRequests, a.recentCallsBody)
+	a.handle("POST "+RecentCallsPath, LimitRequests, a.recentCallsBody)
 	a.pages = append(a.pages, Page{Pattern: "GET " + CallLinkPath, Preview: a.callPreview})
 	return a
 }
 
-func (a *API) handle(pattern string, h http.HandlerFunc) {
-	a.routes = append(a.routes, Route{Pattern: pattern, Handler: h})
+func (a *API) handle(pattern string, l Limit, h http.HandlerFunc) {
+	a.routes = append(a.routes, Route{Pattern: pattern, Handler: h, Limit: l})
 }
 
 // Routes are the public API's endpoints, for the server to mount.
