@@ -174,7 +174,7 @@ export function fieldOf(field: string): string {
 export type Part = { text: string } | { code: string };
 
 /** Fields whose values are a choice from a few words, not text an admin typed. */
-const chosen = new Set(['state', 'role', 'action']);
+const chosen = new Set(['state', 'role', 'status', 'action']);
 
 /** A value in words. */
 export function valueOf(field: string, v: unknown): Part {
