@@ -34,6 +34,10 @@
 //	LIMIT_LIVE_PER_CLIENT  listener WebSockets open at once per client (default 4)
 //	LIMIT_LIVE_TOTAL       listener WebSockets open at once in all (default 50). At
 //	                either, a new one is refused; open ones are never dropped
+//	LIMIT_ZIPS_PER_CLIENT  zips sent at once per client (default 2)
+//	LIMIT_ZIPS_TOTAL       zips sent at once in all (default 6)
+//	LIMIT_ZIP_SPEED        each zip's speed, in MB/s (default 2)
+//	LIMIT_ZIP_SPEED_TOTAL  all zips' speed together, in MB/s (default 8)
 //
 // A client is one IPv4 address or one IPv6 /64. Signed-in admins and the
 // recorder client are never limited; signed-in listeners are, as everyone
