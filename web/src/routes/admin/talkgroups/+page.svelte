@@ -291,6 +291,8 @@
 		{/key}
 	{/if}
 
+	<!-- The last column's More actions tooltips reach past the page's edge in a wide look: clipped, never a sideways scroll, and never clipping the lists below. -->
+	<div class="table-edge">
 	<DataTable
 		caption="Talkgroups"
 		{columns}
@@ -326,6 +328,7 @@
 			</MoreActions>
 		{/snippet}
 	</DataTable>
+	</div>
 	{#if left > 0}
 		<div class="more-rows">
 			<p>The first {n(drawn.length)} of {n(ordered.length)} are drawn; the search, filters and sorting cover them all.</p>
@@ -391,6 +394,9 @@
 	.status:empty,
 	.count:empty {
 		display: none;
+	}
+	.table-edge {
+		overflow-x: clip;
 	}
 	.more-rows {
 		display: flex;
