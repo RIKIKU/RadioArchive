@@ -22,6 +22,7 @@ export interface AdminEntry {
 
 /** The admin pages, in R84's order. */
 export const adminPages: AdminEntry[] = [
+	{ href: '/admin/talkgroups', label: 'Talkgroups', icon: 'list', text: 'Every talkgroup: search, edit, hide and play' },
 	{ href: '/admin/recorders', label: 'Recorders', svg: adminIcons.recorders, text: 'Recorders, their signals and overlapping calls' },
 	{ href: '/admin/accounts', label: 'Accounts', svg: adminIcons.accounts, text: 'Who has signed in: roles, disabling and deleting' },
 	{ href: '/admin/audit', label: 'Audit log', svg: adminIcons.audit, text: 'Every admin change: who, how, when and what' },
