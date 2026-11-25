@@ -19,10 +19,14 @@ function Get-RadioArchiveAccount {
 
     .OUTPUTS
     RadioArchive.Account. AccountId (Authentik's user ID), Name, Email,
-    Role, Status, FirstSignedInAt and LastSignedInAt.
+    Role, Status, FirstSignedInAt, LastSignedInAt and AuthentikPending
+    (disabled or enabled here, and not yet in Authentik).
 
     .LINK
     Set-RadioArchiveAccount
+
+    .LINK
+    Disable-RadioArchiveAccount
     #>
     [CmdletBinding()]
     [OutputType('RadioArchive.Account')]
@@ -41,7 +45,11 @@ function Get-RadioArchiveAccount {
 
         # Their role. Default: any.
         [ValidateSet('Admin', 'Listener')]
-        [string] $Role
+        [string] $Role,
+
+        # Their status. Default: any.
+        [ValidateSet('Active', 'Disabled')]
+        [string] $Status
     )
     begin {
         $all = $null
@@ -58,6 +66,7 @@ function Get-RadioArchiveAccount {
                 if (-not (Test-RaWildcard -Value $row.email -Pattern $Email)) { continue }
                 if (-not (Test-RaWildcard -Value $row.name -Pattern $Name)) { continue }
                 if ($Role -and $row.role -ne $Role) { continue }
+                if ($Status -and $row.status -ne $Status) { continue }
                 if ($seen.ContainsKey([string]$row.id)) { continue }
                 $seen[[string]$row.id] = $true
                 ConvertTo-RaAccount -Row $row

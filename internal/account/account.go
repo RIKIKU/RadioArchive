@@ -126,6 +126,17 @@ type Accounts interface {
 	// Account is the account's row, nil for none: what the module's
 	// bearer token signs in as (ADR 0028).
 	Account(ctx context.Context, issuer, subject string) (*store.Account, error)
+	// SetAccountStatus disables or enables an account, ending its
+	// sessions when disabling, as the admin by asks, under the last-admin
+	// rule (audited, ADR 0033).
+	SetAccountStatus(ctx context.Context, issuer string, by store.Actor, subject, status string) (store.Account, error)
+	// SetAccountAuthentikPending records whether Authentik has yet to take
+	// the account's status.
+	SetAccountAuthentikPending(ctx context.Context, issuer string, by store.Actor, subject, status string, pending bool) error
+	// DeleteAccount deletes an account, its profile and its sessions, as
+	// the admin by asks (audited), running before last in its
+	// transaction.
+	DeleteAccount(ctx context.Context, issuer string, by store.Actor, subject string, before func(store.Account) error) (store.Account, error)
 }
 
 // Config is the account's settings. With OIDC nil, sign-in is off: the
@@ -145,6 +156,16 @@ type Config struct {
 	// account signing in with this address, proven by Authentik, becomes
 	// the first admin (ADR 0025). "" for none.
 	InitialAdmin string
+	// Directory switches Authentik's users on and off, and deletes them,
+	// as the radio's accounts service account (ADR 0033). nil: no
+	// AUTHENTIK_API_TOKEN, so disabling and enabling change the radio
+	// alone and say Authentik wasn't told.
+	Directory Directory
+	// DeleteAuthentikUsers: deleting an account deletes its Authentik user
+	// too. The standalone deployment's Authentik is the radio's own; the
+	// combined deployment's (M7) is PagerArchive's, whose users the radio
+	// doesn't delete.
+	DeleteAuthentikUsers bool
 	// Secret is what the sign-in cookie's key is derived from: the OIDC
 	// client secret.
 	Secret []byte

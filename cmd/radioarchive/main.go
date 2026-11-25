@@ -36,10 +36,15 @@
 //	INITIAL_ADMIN_EMAIL     the first admin's email (ADR 0025): while no admin exists,
 //	                        the account signing in with it, proven by Authentik,
 //	                        becomes admin. Once any admin exists it does nothing
+//	AUTHENTIK_API_TOKEN     the radio's accounts service account's Authentik token, or
+//	                        AUTHENTIK_API_TOKEN_FILE naming a file holding it (ADR 0033):
+//	                        disabling, enabling and deleting an account reach Authentik
+//	                        with it. Without it they change the radio only, and say so
 //
-// The secret is never logged. The API holds no Authentik API token: a
-// signed-in listener's saved settings live in its own database (ADR 0021),
-// and so do accounts' roles (ADR 0025).
+// The secret and the token are never logged. A signed-in listener's saved
+// settings live in the radio's own database (ADR 0021), and so do
+// accounts' roles (ADR 0025): nothing the token can change makes anyone a
+// radio admin.
 package main
 
 import (

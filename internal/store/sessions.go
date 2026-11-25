@@ -98,7 +98,7 @@ func (s *Store) EndAccountListenerSessions(ctx context.Context, by Actor, issuer
 			return err
 		}
 		var err error
-		if n, err = q.DeleteAccountListenerSessions(ctx, db.DeleteAccountListenerSessionsParams{Issuer: issuer, Subject: subject}); err != nil || n == 0 {
+		if n, err = endSessions(ctx, q, issuer, subject); err != nil || n == 0 {
 			return err
 		}
 		label := ""
@@ -117,6 +117,13 @@ func (s *Store) EndAccountListenerSessions(ctx context.Context, by Actor, issuer
 		return 0, fmt.Errorf("end the account's sessions: %s", SafeError(err))
 	}
 	return n, nil
+}
+
+// endSessions deletes every session of the account in q's transaction,
+// returning how many there were: EndAccountListenerSessions's change, and
+// part of disabling and deleting an account (ADR 0033).
+func endSessions(ctx context.Context, q *db.Queries, issuer, subject string) (int64, error) {
+	return q.DeleteAccountListenerSessions(ctx, db.DeleteAccountListenerSessionsParams{Issuer: issuer, Subject: subject})
 }
 
 // EndExpiredListenerSessions deletes the sessions that ended by now,

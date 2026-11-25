@@ -35,6 +35,41 @@ export async function signIn(page: Page, as: 'admin' | 'listener') {
 	await expect.poll(async () => ((await (await page.request.get('/api/v1/account')).json()) as { account?: { admin?: boolean } }).account?.admin).toBe(as === 'admin');
 }
 
+/**
+ * A person of the test's own (made-up Authentik's "person-<word>", ADR
+ * 0033): subject `person-<word>`, email `person-<word>@example.test`, name
+ * "Made Up <words>". Each test that changes an account makes its own, so
+ * tests running side by side never change each other's.
+ */
+export function newPerson(word: string) {
+	const key = `person-${word}-${test.info().project.name}-${Math.random().toString(36).slice(2, 7)}`;
+	return { key, email: `${key}@example.test`, name: `Made Up ${key.slice('person-'.length).replaceAll('-', ' ')}` };
+}
+
+/**
+ * Tries to sign in from the root URL's account menu as the test's own
+ * person (newPerson), returning whether the radio signed them in.
+ */
+export async function signInAsPerson(page: Page, key: string): Promise<boolean> {
+	const ak = authentik();
+	await page.context().addCookies([{ name: 'fakeauthentik_person', value: key, domain: ak.hostname, path: '/authorize' }]);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Account menu, signed out' }).click();
+	// The callback's answer sends the browser on: home signed in, or to a notice.
+	const back = page.waitForResponse((r) => new URL(r.url()).pathname === '/auth/callback', { timeout: 15_000 });
+	await page.getByRole('link', { name: 'Sign in' }).click();
+	await back;
+	await page.waitForLoadState('load');
+	await expect(page.getByRole('button', { name: /^Account menu, / })).toBeVisible();
+	return ((await (await page.request.get('/api/v1/account')).json()) as { account?: { id?: string } | null }).account?.id === key;
+}
+
+/** Makes the made-up Authentik's users API unreachable (true) or back (false). */
+export async function authentikUsersDown(page: Page, down: boolean) {
+	const r = await page.request.post(new URL(`/fake/users-down?down=${down ? 1 : 0}`, authentik()).toString());
+	expect(r.status()).toBe(204);
+}
+
 /** The look and theme a browser saved (R82), sent with the page. */
 export async function saveLook(context: BrowserContext, baseURL: string, look: string, theme: string) {
 	const url = new URL(baseURL).origin;

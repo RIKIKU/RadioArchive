@@ -7,8 +7,9 @@ SHORT DESCRIPTION
 LONG DESCRIPTION
     The RadioArchive module does from PowerShell what the radio's admin
     pages do: systems, talkgroups, units, groups and tags, attachments,
-    rejected calls, recorders' quiet thresholds, retention, accounts'
-    roles, and saving any call's recording, hidden talkgroups included.
+    rejected calls, recorders' quiet thresholds, retention, accounts (roles,
+    disabling, enabling and deleting), and saving any call's recording,
+    hidden talkgroups included.
     It uses the same admin API as the browser, with the same rules, and
     the radio knows each change came from the module, and from whom, for
     its audit log.

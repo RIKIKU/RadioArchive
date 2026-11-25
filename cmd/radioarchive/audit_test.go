@@ -202,6 +202,19 @@ var auditProbes = []auditProbe{
 		change:  func(w *auditWorld) (int, string) { return w.do("DELETE", "/listeners/2/sessions", "") },
 		want:    auditWant{"account", "2", "changed", "sessions", `1`, `0`},
 		refused: func(w *auditWorld) (int, string) { return w.do("DELETE", "/listeners/2/sessions", "") }}, // none left
+	// Disabling and enabling (ADR 0033): the same route as the role's.
+	{pattern: "PATCH /api/v1/admin/accounts/{subject}",
+		change:  func(w *auditWorld) (int, string) { return w.do("PATCH", "/accounts/3", `{"status":"disabled"}`) },
+		want:    auditWant{"account", "3", "changed", "status", `"active"`, `"disabled"`},
+		refused: func(w *auditWorld) (int, string) { return w.do("PATCH", "/accounts/1", `{"status":"disabled"}`) }}, // own account
+	{pattern: "PATCH /api/v1/admin/accounts/{subject}",
+		change:  func(w *auditWorld) (int, string) { return w.do("PATCH", "/accounts/3", `{"status":"active"}`) },
+		want:    auditWant{"account", "3", "changed", "status", `"disabled"`, `"active"`},
+		refused: func(w *auditWorld) (int, string) { return w.do("PATCH", "/accounts/3", `{"status":"active"}`) }}, // already so
+	{pattern: "DELETE /api/v1/admin/accounts/{subject}",
+		change:  func(w *auditWorld) (int, string) { return w.do("DELETE", "/accounts/3", "") },
+		want:    auditWant{"account", "3", "deleted", "email", `"third@example.test"`, `null`},
+		refused: func(w *auditWorld) (int, string) { return w.do("DELETE", "/accounts/1", "") }}, // own account
 	{pattern: "DELETE /api/v1/admin/systems/{system}",
 		change: func(w *auditWorld) (int, string) {
 			if code, b := w.do("POST", "/systems", `{"id":2,"label":"EX-2","name":"Short-lived network"}`); code != 201 {
@@ -222,12 +235,14 @@ func TestIntegrationAuditHarness(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	p := oidctest.New(t, p4ClientSecret, "1", initialAdmin, "Made Up")
-	st, logs, srv, api := binaryServer(t, ctx, p.URL, environ{"INITIAL_ADMIN_EMAIL": initialAdmin})
+	p.ServeUsers(accountsToken)
+	st, logs, srv, api := binaryServer(t, ctx, p.URL, environ{"INITIAL_ADMIN_EMAIL": initialAdmin, "AUTHENTIK_API_TOKEN": accountsToken})
 	if _, err := st.AddRecorder(ctx, "Bench"); err != nil {
 		t.Fatal(err)
 	}
 	admin, _ := signInAs(t, p, srv.URL, "1", initialAdmin, true)
 	listener, _ := signInAs(t, p, srv.URL, "2", "listener@example.test", true)
+	signInAs(t, p, srv.URL, "3", "third@example.test", true) // disabled, enabled and deleted
 	if !isAdmin(t, admin, srv.URL) {
 		t.Fatal("not an admin")
 	}

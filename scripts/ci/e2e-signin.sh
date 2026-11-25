@@ -48,14 +48,42 @@ done
 # The test fixture's setup, once the API has migrated the database.
 go run ./testing/webfixture "postgres://radioarchive:$POSTGRES_PASSWORD@127.0.0.1:$DB_PORT/radioarchive?sslmode=disable"
 
-# The first admin's address (ADR 0025), which one test signs up with.
+# The accounts service account (ADR 0033): the blueprint made it, with the
+# stack's AUTHENTIK_API_TOKEN as its key, a service account in no superuser
+# group; the API's old account, group, role and token stay removed.
+wait_for 120 "the accounts service account's token" \
+	curl -fsS -H "Authorization: Bearer $AUTHENTIK_API_TOKEN" "$AUTHENTIK_URL/api/v3/core/users/?username=radioarchive-accounts"
+docker compose exec -T authentik-server ak shell -c "
+from authentik.core.models import Group, Token, User
+from authentik.rbac.models import Role
+u = User.objects.get(username='radioarchive-accounts')
+assert u.type == 'service_account' and not u.is_superuser, 'the accounts service account'
+assert sorted(p.permission.codename for p in Role.objects.get(name='RadioArchive accounts').rolemodelpermission_set.all()) == ['change_user', 'delete_user', 'view_user'], 'the role'
+assert not User.objects.filter(username='radioarchive-api').exists(), 'the old user'
+assert not Group.objects.filter(name='RadioArchive API').exists(), 'the old group'
+assert not Role.objects.filter(name='RadioArchive API').exists(), 'the old role'
+assert not Token.objects.filter(identifier='radioarchive-api').exists(), 'the old token'
+print('e2e-signin.sh: the accounts service account is as the blueprint says; the old one is gone')
+" 2>/dev/null | grep -F 'e2e-signin.sh:' || { echo "e2e-signin.sh: the accounts service account isn't as the blueprint says" >&2; exit 1; }
+
+# The first admin's address (ADR 0025), which one test signs up with, and
+# the accounts token, with which a test reads Authentik's own answer about
+# a user it disabled.
 export RA_URL="$APP_URL" RA_AUTHENTIK_URL="$AUTHENTIK_URL" RA_MAILPIT_URL="http://localhost:$MAILPIT_PORT" \
-	RA_INITIAL_ADMIN_EMAIL="${INITIAL_ADMIN_EMAIL:-}"
+	RA_INITIAL_ADMIN_EMAIL="${INITIAL_ADMIN_EMAIL:-}" RA_AUTHENTIK_API_TOKEN="$AUTHENTIK_API_TOKEN"
 cd web
+rc=0
 if [ -n "${RA_PLAYWRIGHT_IMAGE:-}" ]; then
-	docker run --rm --network host --ipc=host -e RA_URL -e RA_AUTHENTIK_URL -e RA_MAILPIT_URL -e RA_INITIAL_ADMIN_EMAIL -e RA_SHOTS -e CI -e HOME=/root \
-		-v "$PWD/..:/w" -w /w/web "$RA_PLAYWRIGHT_IMAGE" \
-		sh -c 'npm ci --no-fund --no-audit && npx playwright test -c playwright.signin.config.ts "$@"' sh "$@"
+	docker run --rm --network host --ipc=host -e RA_URL -e RA_AUTHENTIK_URL -e RA_MAILPIT_URL -e RA_INITIAL_ADMIN_EMAIL -e RA_AUTHENTIK_API_TOKEN \
+		-e RA_SHOTS -e CI -e HOME=/root -v "$PWD/..:/w" -w /w/web "$RA_PLAYWRIGHT_IMAGE" \
+		sh -c 'npm ci --no-fund --no-audit && npx playwright test -c playwright.signin.config.ts "$@"' sh "$@" || rc=$?
 else
-	npx playwright test -c playwright.signin.config.ts "$@"
+	npx playwright test -c playwright.signin.config.ts "$@" || rc=$?
 fi
+cd ..
+# The token is in no line the API logged (ADR 0033).
+if docker compose logs api 2>&1 | grep -qF "$AUTHENTIK_API_TOKEN"; then
+	echo "e2e-signin.sh: the API's log holds the Authentik API token" >&2
+	exit 1
+fi
+exit "$rc"

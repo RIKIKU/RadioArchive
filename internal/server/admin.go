@@ -128,15 +128,23 @@ func (a *Admin) WithClock(now func() time.Time) *Admin {
 	return a
 }
 
-// AccountRoles lists accounts and sets their roles (account.Service, ADR
-// 0025).
+// AccountRoles lists accounts, sets their roles (account.Service, ADR
+// 0025), disables, enables and deletes them (ADR 0033).
 type AccountRoles interface {
 	Accounts(ctx context.Context) ([]store.Account, error)
 	SetRole(ctx context.Context, by account.Admin, subject, role string) (store.Account, error)
+	// SetStatus disables or enables an account: the radio's change, then
+	// Authentik's, whose failure (account.ErrAuthentik…) comes back with
+	// the account as the radio changed it.
+	SetStatus(ctx context.Context, by account.Admin, subject, status string) (store.Account, error)
+	// Delete deletes an account, its profile and sessions, and in the
+	// standalone deployment its Authentik user; if Authentik fails,
+	// nothing is deleted.
+	Delete(ctx context.Context, by account.Admin, subject string) (store.Account, error)
 }
 
-// WithAccounts serves the accounts and their roles: admins promote and
-// demote other accounts (R55).
+// WithAccounts serves the accounts: admins promote and demote other
+// accounts (R55), disable, enable and delete them (ADR 0033).
 func (a *Admin) WithAccounts(acc AccountRoles) *Admin {
 	a.accs = acc
 	return a
@@ -234,6 +242,7 @@ func WithAdmin(a *Admin) Option {
 		if a.accs != nil {
 			api.handle(AdminRoute, "GET "+AdminPath+"/accounts", a.serve(a.listAccounts))
 			api.handle(AdminRoute, "PATCH "+AdminPath+"/accounts/{subject}", a.serve(a.patchAccount))
+			api.handle(AdminRoute, "DELETE "+AdminPath+"/accounts/{subject}", a.serve(a.deleteAccount))
 		}
 	}
 }

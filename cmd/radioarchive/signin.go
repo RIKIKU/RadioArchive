@@ -28,6 +28,11 @@ type signInConfig struct {
 	// initialAdmin is INITIAL_ADMIN_EMAIL: the first admin's address
 	// (ADR 0025), "" for none.
 	initialAdmin string
+	// apiToken is AUTHENTIK_API_TOKEN, or the file AUTHENTIK_API_TOKEN_FILE
+	// names: the radio's accounts service account's token (ADR 0033), for
+	// switching users off and on and deleting them. "" for none. Sent only
+	// to Authentik, never logged.
+	apiToken string
 }
 
 func (c signInConfig) on() bool { return c.authentikURL != nil }
@@ -88,6 +93,11 @@ func signInFromEnv(getenv func(string) string) (signInConfig, error) {
 	if c.initialAdmin != "" && (!strings.Contains(c.initialAdmin, "@") || strings.ContainsAny(c.initialAdmin, " \t\r\n")) {
 		return signInConfig{}, errors.New("INITIAL_ADMIN_EMAIL must be one email address, like owner@example.org")
 	}
+	if getenv("AUTHENTIK_API_TOKEN") != "" || getenv("AUTHENTIK_API_TOKEN_FILE") != "" {
+		if c.apiToken, err = secret(getenv, "AUTHENTIK_API_TOKEN"); err != nil {
+			return signInConfig{}, err
+		}
+	}
 	return c, nil
 }
 
@@ -121,6 +131,15 @@ func (c signInConfig) service(g *gate.Gate, st *store.Store, log *slog.Logger) (
 		return account.New(account.Config{Log: log})
 	}
 	hc := &http.Client{Transport: authentik.Transport(c.authentikURL, c.internalURL, nil), Timeout: 30 * time.Second}
+	// Disabling, enabling and deleting reach Authentik with the accounts
+	// service account's token (ADR 0033). Without one they change the
+	// radio alone, and say so.
+	var dir account.Directory
+	if c.apiToken != "" {
+		dir = &authentik.Users{URL: c.authentikURL, Token: c.apiToken, HTTP: hc}
+	} else {
+		log.Warn("AUTHENTIK_API_TOKEN isn't set: disabling, enabling and deleting an account change the radio only, and the admin is told Authentik wasn't")
+	}
 	return account.New(account.Config{
 		AppURL: c.appURL,
 		OIDC: &oidcclient.Client{
@@ -144,5 +163,10 @@ func (c signInConfig) service(g *gate.Gate, st *store.Store, log *slog.Logger) (
 		InitialAdmin: c.initialAdmin,
 		Secret:       []byte(c.clientSecret),
 		Log:          log,
+		Directory:    dir,
+		// The standalone deployment's Authentik is the radio's own, so
+		// deleting an account deletes its user there too. (The combined
+		// deployment, M7, leaves PagerArchive's users.)
+		DeleteAuthentikUsers: true,
 	})
 }

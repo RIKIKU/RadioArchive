@@ -214,6 +214,7 @@ test('signed in or not, the catalogue and the public API answer the same (P3, R1
 test('the first admin: INITIAL_ADMIN_EMAIL, proven by its code, is an admin who hears and sees what anyone does', async ({ browser, request, baseURL }) => {
 	const initial = process.env.RA_INITIAL_ADMIN_EMAIL;
 	test.skip(!initial, 'RA_INITIAL_ADMIN_EMAIL is not set');
+	test.setTimeout(240_000);
 	const page = await browserWith(browser, [{ id: 1001 }]);
 	await signUp(page, request, baseURL!, initial!.toUpperCase());
 	await expect.poll(async () => (await account(page)).account?.admin, { timeout: 15_000 }).toBe(true);
@@ -232,11 +233,47 @@ test('the first admin: INITIAL_ADMIN_EMAIL, proven by its code, is an admin who 
 	}
 	// Signed out, the admin API wants a sign-in; another account is a listener.
 	expect((await request.get('/api/v1/admin/systems')).status()).toBe(401);
-	const other = await browserWith(browser, []);
-	await signUp(other, request, baseURL!, address('not-admin'));
+	const other = await browserWith(browser, [{ id: 1002 }]);
+	const otherEmail = address('not-admin');
+	await signUp(other, request, baseURL!, otherEmail);
 	expect((await account(other)).account?.admin).toBe(false);
 	expect((await other.request.get('/api/v1/admin/systems')).status()).toBe(403);
+	await expect.poll(async () => (await account(other)).profile?.talkgroups, { timeout: 15_000 }).toEqual([{ id: 1002 }]);
+
+	// Disabling them (ADR 0033, issue #105) on the Accounts page: their
+	// browser is signed out at its next request, and their user is switched
+	// off in Authentik itself, which ends its sessions there too.
+	await page.goto('/admin/accounts');
+	const row = page.getByRole('row').filter({ hasText: otherEmail });
+	await row.getByRole('button', { name: /^Disable / }).click();
+	await page.getByRole('region', { name: /^Disable .*\?$/ }).getByRole('button', { name: /^Disable / }).click();
+	await expect(row).toContainText('Disabled');
+	await expect(row).not.toContainText('not yet in Authentik');
+	expect((await account(other)).account).toBeNull();
+	expect(await authentikUser(request, otherEmail)).toMatchObject({ is_active: false });
+	// Enabling: they sign in again, through Authentik's own sign-in (its
+	// session ended), with their saved profile as they left it.
+	await row.getByRole('button', { name: /^Enable / }).click();
+	await expect(row).toContainText('Active');
+	expect(await authentikUser(request, otherEmail)).toMatchObject({ is_active: true });
+	await signIn(other, baseURL!, otherEmail);
+	expect((await account(other)).profile?.talkgroups).toEqual([{ id: 1002 }]);
+	// The admin can't disable themselves: no button on their own row.
+	await expect(page.getByRole('row').filter({ hasText: 'You' }).getByRole('button')).toHaveCount(0);
 });
+
+/**
+ * The Authentik user with this email, as Authentik's own API says, read
+ * with the radio's accounts token (RA_AUTHENTIK_API_TOKEN, the stack's
+ * made-up AUTHENTIK_API_TOKEN).
+ */
+async function authentikUser(request: APIRequestContext, email: string): Promise<{ is_active: boolean } | undefined> {
+	const token = process.env.RA_AUTHENTIK_API_TOKEN;
+	expect(token, 'RA_AUTHENTIK_API_TOKEN').toBeTruthy();
+	const r = await request.get(`${process.env.RA_AUTHENTIK_URL}/api/v3/core/users/`, { params: { email }, headers: { Authorization: `Bearer ${token}` } });
+	expect(r.status()).toBe(200);
+	return ((await r.json()) as { results: { is_active: boolean }[] }).results[0];
+}
 
 test('clearing empties the account and leaves the browser its set; signing out ends both sessions', async ({ browser, request, baseURL }) => {
 	const page = await browserWith(browser, [{ id: 1001 }, { id: 1002, priority: true }]);

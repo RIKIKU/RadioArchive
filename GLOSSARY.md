@@ -136,6 +136,14 @@ _Avoid_: Superuser, operator, moderator
 The account that signs in with the deployment's configured initial admin address, proven by Authentik, while no admin exists.
 _Avoid_: Owner, root, bootstrap admin
 
+**Disabled account**:
+An account an admin has switched off: signed out of the radio at once, refused at sign-in, and switched off in Authentik too, keeping everything it had until an admin enables it again. Listening without signing in is the same for it as for anyone.
+_Avoid_: Banned, blocked, suspended (PagerArchive's word for the same is deactivated)
+
+**Deleting an account**:
+An admin removing an account for good: its record, its saved settings, its sessions and its Authentik user. The audit log keeps who it was.
+_Avoid_: Purging, erasing
+
 **Audit log**:
 The radio's record of every change an admin makes: who made it, how (browser, module or import), when, and each changed field before and after. Kept for its own period (two years unless an admin changes it), never rewritten, and read only by admins; the nightly run deletes older entries and records how many went.
 _Avoid_: History, activity log, changelog

@@ -27,7 +27,7 @@ x-authentik: &authentik
   # so changed blueprints take effect, as PagerArchive's. A test
   # (deploy/compose_test.go) checks it and prints the right value.
   labels:
-    radioarchive.config: "ef893f14d01d770b"
+    radioarchive.config: "d26aa32981176569"
   environment:
     AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?set AUTHENTIK_SECRET_KEY in .env}
     AUTHENTIK_POSTGRESQL__HOST: db
@@ -55,6 +55,8 @@ x-authentik: &authentik
     # Read by the blueprints in deploy/authentik/blueprints.
     RA_APP_URL: ${APP_URL:?set APP_URL in .env}
     RA_OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?set OIDC_CLIENT_SECRET in .env}
+    # The key of the radio's accounts service account's token (ADR 0033).
+    RA_AUTHENTIK_API_TOKEN: ${AUTHENTIK_API_TOKEN:?set AUTHENTIK_API_TOKEN in .env}
     # Listeners may enrol themselves by emailed code (R103): true or false.
     RA_LISTENER_SIGNUP: ${LISTENER_SIGNUP:-true}
   # File by file: a file that's dropped can't stay in use because it's
@@ -81,13 +83,17 @@ services:
       # The deployment's time zone: the nightly retention run's, and the one
       # downloads are named in (R63).
       TZ: ${TZ:-UTC}
-      # Listeners' sign-in (ADR 0009). The secret is read here and never
-      # logged. The API holds no Authentik API token: saved settings are in
-      # its own database (ADR 0021).
+      # Listeners' sign-in (ADR 0009). The secret and the token are read
+      # here and never logged. Saved settings and roles are in the radio's
+      # own database (ADR 0021, ADR 0025); the token is the accounts
+      # service account's, which switches users off and on and deletes
+      # them when an admin disables, enables or deletes an account (ADR
+      # 0033).
       APP_URL: ${APP_URL}
       AUTHENTIK_URL: ${AUTHENTIK_URL}
       AUTHENTIK_INTERNAL_URL: http://authentik-server:9000
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      AUTHENTIK_API_TOKEN: ${AUTHENTIK_API_TOKEN:?set AUTHENTIK_API_TOKEN in .env}
       # The first admin's address (ADR 0025): while no admin exists, the
       # account signing in with it, proven by its emailed code, is made
       # admin. Admins' roles live in the radio's database, not Authentik.

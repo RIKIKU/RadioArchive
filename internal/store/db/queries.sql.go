@@ -662,6 +662,40 @@ func (q *Queries) CreateTag(ctx context.Context, arg CreateTagParams) (Tag, erro
 	return i, err
 }
 
+const deleteAccount = `-- name: DeleteAccount :execrows
+DELETE FROM accounts WHERE issuer = $1 AND subject = $2
+`
+
+type DeleteAccountParams struct {
+	Issuer  string
+	Subject string
+}
+
+func (q *Queries) DeleteAccount(ctx context.Context, arg DeleteAccountParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAccount, arg.Issuer, arg.Subject)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteAccountListenerProfile = `-- name: DeleteAccountListenerProfile :execrows
+DELETE FROM listener_profiles WHERE issuer = $1 AND subject = $2
+`
+
+type DeleteAccountListenerProfileParams struct {
+	Issuer  string
+	Subject string
+}
+
+func (q *Queries) DeleteAccountListenerProfile(ctx context.Context, arg DeleteAccountListenerProfileParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAccountListenerProfile, arg.Issuer, arg.Subject)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteAccountListenerSessions = `-- name: DeleteAccountListenerSessions :execrows
 DELETE FROM listener_sessions WHERE issuer = $1 AND subject = $2
 `
@@ -1663,7 +1697,7 @@ func (q *Queries) GateUnitsIn(ctx context.Context, arg GateUnitsInParams) ([]int
 }
 
 const getAccount = `-- name: GetAccount :one
-SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at, authentik_pending
 FROM accounts WHERE issuer = $1 AND subject = $2
 `
 
@@ -1684,12 +1718,13 @@ func (q *Queries) GetAccount(ctx context.Context, arg GetAccountParams) (Account
 		&i.Status,
 		&i.FirstSignedInAt,
 		&i.LastSignedInAt,
+		&i.AuthentikPending,
 	)
 	return i, err
 }
 
 const getAccountForUpdate = `-- name: GetAccountForUpdate :one
-SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at, authentik_pending
 FROM accounts WHERE issuer = $1 AND subject = $2
 FOR UPDATE
 `
@@ -1711,6 +1746,7 @@ func (q *Queries) GetAccountForUpdate(ctx context.Context, arg GetAccountForUpda
 		&i.Status,
 		&i.FirstSignedInAt,
 		&i.LastSignedInAt,
+		&i.AuthentikPending,
 	)
 	return i, err
 }
@@ -2192,7 +2228,7 @@ func (q *Queries) InsertListenerSession(ctx context.Context, arg InsertListenerS
 }
 
 const listAccounts = `-- name: ListAccounts :many
-SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+SELECT issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at, authentik_pending
 FROM accounts WHERE issuer = $1
 ORDER BY role, lower(email), subject
 `
@@ -2216,6 +2252,7 @@ func (q *Queries) ListAccounts(ctx context.Context, issuer string) ([]Account, e
 			&i.Status,
 			&i.FirstSignedInAt,
 			&i.LastSignedInAt,
+			&i.AuthentikPending,
 		); err != nil {
 			return nil, err
 		}
@@ -3354,6 +3391,34 @@ func (q *Queries) SaveJob(ctx context.Context, arg SaveJobParams) error {
 	return err
 }
 
+const setAccountAuthentikPending = `-- name: SetAccountAuthentikPending :execrows
+UPDATE accounts SET authentik_pending = $1
+WHERE issuer = $2 AND subject = $3 AND status = $4
+`
+
+type SetAccountAuthentikPendingParams struct {
+	Pending bool
+	Issuer  string
+	Subject string
+	Status  string
+}
+
+// Whether Authentik has yet to take the status the account had when it
+// was asked: false once it has, true while it hasn't. A status changed
+// again since then is left as that change set it.
+func (q *Queries) SetAccountAuthentikPending(ctx context.Context, arg SetAccountAuthentikPendingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setAccountAuthentikPending,
+		arg.Pending,
+		arg.Issuer,
+		arg.Subject,
+		arg.Status,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setCallRecording = `-- name: SetCallRecording :exec
 UPDATE calls
 SET short_name = $1,
@@ -3689,7 +3754,7 @@ func (q *Queries) UnattachedRejections(ctx context.Context) ([]UnattachedRejecti
 const updateAccountRole = `-- name: UpdateAccountRole :one
 UPDATE accounts SET role = $1
 WHERE issuer = $2 AND subject = $3
-RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at, authentik_pending
 `
 
 type UpdateAccountRoleParams struct {
@@ -3710,6 +3775,38 @@ func (q *Queries) UpdateAccountRole(ctx context.Context, arg UpdateAccountRolePa
 		&i.Status,
 		&i.FirstSignedInAt,
 		&i.LastSignedInAt,
+		&i.AuthentikPending,
+	)
+	return i, err
+}
+
+const updateAccountStatus = `-- name: UpdateAccountStatus :one
+UPDATE accounts SET status = $1, authentik_pending = true
+WHERE issuer = $2 AND subject = $3
+RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at, authentik_pending
+`
+
+type UpdateAccountStatusParams struct {
+	Status  string
+	Issuer  string
+	Subject string
+}
+
+// Disabling or enabling (ADR 0033): the radio's status, and Authentik
+// still to be told.
+func (q *Queries) UpdateAccountStatus(ctx context.Context, arg UpdateAccountStatusParams) (Account, error) {
+	row := q.db.QueryRow(ctx, updateAccountStatus, arg.Status, arg.Issuer, arg.Subject)
+	var i Account
+	err := row.Scan(
+		&i.Issuer,
+		&i.Subject,
+		&i.Name,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.FirstSignedInAt,
+		&i.LastSignedInAt,
+		&i.AuthentikPending,
 	)
 	return i, err
 }
@@ -3933,7 +4030,7 @@ ON CONFLICT (issuer, subject) DO UPDATE SET
     email = EXCLUDED.email,
     role = CASE WHEN $5::boolean AND accounts.status = 'active' THEN 'admin' ELSE accounts.role END,
     last_signed_in_at = CASE WHEN accounts.status = 'active' THEN EXCLUDED.last_signed_in_at ELSE accounts.last_signed_in_at END
-RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at
+RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at, authentik_pending
 `
 
 type UpsertSignedInAccountParams struct {
@@ -3968,6 +4065,7 @@ func (q *Queries) UpsertSignedInAccount(ctx context.Context, arg UpsertSignedInA
 		&i.Status,
 		&i.FirstSignedInAt,
 		&i.LastSignedInAt,
+		&i.AuthentikPending,
 	)
 	return i, err
 }

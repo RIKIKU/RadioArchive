@@ -14,7 +14,7 @@ Each rule says how it's checked: **[analyzer]** is PSScriptAnalyzer in CI, **[pe
 
 ## 2. Names
 
-- **Approved verbs only** (`Get-Verb`), each for what it means: `New` creates, `Set` changes (and, for a unit, adds one that isn't there, as its API's `PUT` does), `Add` puts into a container (an attachment), `Remove` deletes, `Rename` renames, `Save` writes something to a file. **[analyzer]** `PSUseApprovedVerbs`, **[review]**
+- **Approved verbs only** (`Get-Verb`), each for what it means: `New` creates, `Set` changes (and, for a unit, adds one that isn't there, as its API's `PUT` does), `Add` puts into a container (an attachment), `Remove` deletes, `Rename` renames, `Disable` and `Enable` switch an account off and on, `Save` writes something to a file. **[analyzer]** `PSUseApprovedVerbs`, **[review]**
 - **Nouns are singular and start with `RadioArchive`**: `Get-RadioArchiveTalkgroup`. Signing in uses the product as the noun: `Connect-RadioArchive`, `Disconnect-RadioArchive`. **[analyzer]** `PSUseSingularNouns`, **[pester]**
 - **Every command has a short alias**, `RadioArchive` replaced by `Ra`: `Get-RaTalkgroup`, `Connect-Ra`. No private function has an alias's name. **[pester]**
 - **Parameter names** are PowerShell's standard ones where one exists (`Name`, `Path`, `Uri`, `PassThru`, `Force`), singular, PascalCase, never a common parameter's name. Other spellings go in `[Alias()]`. **[analyzer]**, **[review]**

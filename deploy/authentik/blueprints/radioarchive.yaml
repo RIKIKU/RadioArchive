@@ -6,7 +6,8 @@
 # the combined deployment (R103, R105), in PagerArchive's Authentik, which
 # keeps its own sign-in, enrolment and brand. So it holds only what is
 # RadioArchive's own: its OIDC provider and application, its email
-# mapping and its sign-out flow. Authentik keeps only who people are;
+# mapping, its sign-out flow and the service account that switches users
+# off and on when a radio admin disables or enables them (ADR 0033). Authentik keeps only who people are;
 # listeners' saved settings, and who is a radio admin, are in RadioArchive's
 # database (ADR 0021, ADR 0025). Nothing here names a flow of the
 # standalone file.
@@ -15,6 +16,8 @@
 # containers. Reads these environment variables (set in compose.yaml):
 #   RA_APP_URL              the radio's public URL, e.g. https://radio.example.org
 #   RA_OIDC_CLIENT_SECRET   the radio's OIDC client secret
+#   RA_AUTHENTIK_API_TOKEN  the key of the accounts service account's token,
+#                           the API's AUTHENTIK_API_TOKEN (ADR 0033)
 #
 # Their names start RA_ so that they can sit beside PagerArchive's PA_ ones
 # in one Authentik.
@@ -54,11 +57,13 @@ entries:
   # ------------------------------------------------------------------ OIDC
   # The email scope, as the radio's: Authentik's own mapping always says
   # email_verified false. This one says true while the user's address is
-  # the one an emailed code proved (radioarchive-standalone.yaml's sign-up
-  # records it in the radioarchive_email_proven attribute), ignoring case.
-  # The API makes only a proven INITIAL_ADMIN_EMAIL the first admin
-  # (ADR 0025). An operator who creates a user by hand vouches for the
-  # address by setting that attribute to it (README.md).
+  # the one an emailed code proved, ignoring case. The proof is the user
+  # attribute email_proven, shared with PagerArchive (agreed in issue #128,
+  # ADR 0033): radioarchive-standalone.yaml's sign-up sets it after the
+  # code, and in the combined deployment PagerArchive's invitation
+  # enrolment does. The API makes only a proven INITIAL_ADMIN_EMAIL the
+  # first admin (ADR 0025). An operator who creates a user by hand vouches
+  # for the address by setting that attribute to it (README.md).
   - model: authentik_providers_oauth2.scopemapping
     id: scope-email
     identifiers:
@@ -68,7 +73,7 @@ entries:
       description: Email address
       expression: |
         email = request.user.email or ""
-        proven = str(request.user.attributes.get("radioarchive_email_proven") or "")
+        proven = str(request.user.attributes.get("email_proven") or "")
         return {"email": email, "email_verified": email != "" and proven.lower() == email.lower()}
 
   # A confidential client: the radio's API holds the secret, and also sends
@@ -190,15 +195,65 @@ entries:
       policy: !KeyOf pkce
       order: 0
 
-  # ------------------------------------- removed: the API's account
-  # The API holds no Authentik token (ADR 0021): a signed-in listener's
-  # saved settings are in RadioArchive's own database, and Authentik keeps
-  # only who they are. An Authentik that loaded an earlier version of this
-  # file still has the API's account, its token, and the policy that gave
-  # the account "view user" and "change user" on each listener's user.
-  # These entries delete them (the policy's binding and the role's object
-  # permissions go with them), so no token of the radio's can change a
-  # user's groups. On an Authentik that never had them they do nothing.
+  # ------------------------------------ the accounts service account
+  # When an admin disables, enables or deletes an account, the radio
+  # switches the Authentik user off or on, or deletes them, with this
+  # account's token (ADR 0033; owner, 2026-11-25). A service account, not a
+  # person, in no superuser group, whose role holds the least that needs:
+  # viewing, changing and deleting users. Who is a radio admin lives in
+  # RadioArchive's database (ADR 0025), so nothing this token can change,
+  # groups included, makes anyone a radio admin. The radio refuses to
+  # switch off or delete an Authentik superuser or a service account. Its
+  # names are new: the old API account's ("radioarchive-api", "RadioArchive
+  # API") are removed below and stay removed.
+  #
+  # The token's key is RA_AUTHENTIK_API_TOKEN, the API's AUTHENTIK_API_TOKEN.
+  - model: authentik_rbac.role
+    id: accounts-role
+    identifiers:
+      name: RadioArchive accounts
+    attrs:
+      permissions:
+        - authentik_core.view_user
+        - authentik_core.change_user
+        - authentik_core.delete_user
+  - model: authentik_core.group
+    id: accounts-group
+    identifiers:
+      name: RadioArchive accounts
+    attrs:
+      is_superuser: false
+      roles:
+        - !KeyOf accounts-role
+  - model: authentik_core.user
+    id: accounts-user
+    identifiers:
+      username: radioarchive-accounts
+    attrs:
+      name: RadioArchive accounts
+      type: service_account
+      path: users/service
+      groups:
+        - !KeyOf accounts-group
+  - model: authentik_core.token
+    identifiers:
+      identifier: radioarchive-accounts
+    attrs:
+      intent: api
+      expiring: false
+      description: RadioArchive switches users off and on, and deletes them, when an admin disables, enables or deletes an account (ADR 0033)
+      user: !KeyOf accounts-user
+      key: !Env RA_AUTHENTIK_API_TOKEN
+
+  # ------------------------------------- removed: the API's old account
+  # The API's first token (ADR 0009) kept saved settings in Authentik and
+  # had "view user" and "change user" on each listener's user through a
+  # policy; ADR 0021 moved the settings to RadioArchive's own database and
+  # removed it. An Authentik that loaded that version of this file still
+  # has the old account, its token and the policy. These entries delete
+  # them (the policy's binding and the role's object permissions go with
+  # them). On an Authentik that never had them they do nothing. The
+  # accounts service account above is a different one, with its own names.
   - model: authentik_policies_expression.expressionpolicy
     state: absent
     identifiers:

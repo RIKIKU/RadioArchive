@@ -25,7 +25,7 @@ SPEC says only "sign-in as in PagerArchive". PagerArchive's ADR 0009 and its Pow
 | **Staying signed in** | The refresh token: on Windows a DPAPI-encrypted file under local application data; elsewhere the default SecretManagement vault, or `-Vault`; with neither, this session only, with a warning |
 | **Tokens** | `SecureString`s from end to end; Authentik's token, device and revocation requests built and read as bytes; never in output, `-Verbose`, `-Debug`, `$Error`, a transcript or a file in plain text |
 | **Names** | `Verb-RadioArchiveNoun`, each with an `Ra` alias (`Get-RaTalkgroup`). R51's `Get-Talkgroup` is an example of the pipeline, not a name |
-| **Commands** | 32, for everything the admin API does: below |
+| **Commands** | 35, for everything the admin API does: below (the three for disabling, enabling and deleting accounts added with ADR 0033) |
 | **Tests** | Pester 5.9.1 meta-tests, unit tests with the API mocked, sign-in tests and PSScriptAnalyzer with zero findings in CI on Windows and Linux, on 7.6.0 and the newest stable release; behaviour tests against the compose stack with Authentik |
 
 ## The module's client in Authentik
@@ -173,7 +173,7 @@ Local, not roaming, application data: a refresh token is replaced at every use, 
 | Rejection | `Get-RadioArchiveRejection` | |
 | Recorder | `Get-`, `Set-RadioArchiveRecorder` | State and the quiet threshold only: **never keys** (R10) |
 | Retention | `Get-`, `Set-RadioArchiveRetention` | Shortening asks first, saying how many recordings go |
-| Account | `Get-`, `Set-RadioArchiveAccount` | Roles (ADR 0025); disabling and deletion come with issue #105's API |
+| Account | `Get-`, `Set-`, `Disable-`, `Enable-`, `Remove-RadioArchiveAccount` | Roles (ADR 0025); disabling, enabling and deleting (ADR 0033) |
 | Audit log | `Get-RadioArchiveAuditLog` | ADR 0029's read API, newest first, by who, kind, thing and time |
 
 Objects' properties are named as the parameters that take them, so a `Get-` pipes into its `Set-`: a talkgroup is `SystemId` and `Id`, and `Get-RadioArchiveTalkgroup -Group North | Set-RadioArchiveTalkgroup -State Hidden` hides every talkgroup in North. `Set-`, `Rename-` and `Remove-` bind only identity from the pipeline; `New-` binds every field, so an export made with `Export-Csv` adds again with `Import-Csv`. Deletions, state changes and role changes ask first (ConfirmImpact `High`); everything that changes supports `-WhatIf`. The setup import and export are issue #117's.
