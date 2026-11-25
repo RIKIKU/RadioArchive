@@ -64,6 +64,10 @@ _Avoid_: Blacklisted talkgroup, rejected talkgroup
 A talkgroup created automatically the first time a call is heard on it, which no admin has named or checked yet.
 _Avoid_: Unknown talkgroup, placeholder
 
+**Last heard**:
+When a call was last heard on a talkgroup, as its own talkgroup or in its patch, including calls refused because the talkgroup is ignored; kept after retention deletes the calls.
+_Avoid_: Last seen, last active
+
 **Tag**:
 The one label a talkgroup carries for the kind of traffic on it, such as dispatch or tactical.
 _Avoid_: Category, type

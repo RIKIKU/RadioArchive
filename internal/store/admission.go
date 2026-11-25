@@ -57,6 +57,20 @@ type Admission struct {
 	// Counted reports that this decision counted a newly rejected call
 	// (each call is counted once, however often it's heard).
 	Counted bool
+	// HeardSystem and HeardTalkgroups are the talkgroups this decision
+	// hears the call on, for their last heard (ADR 0026): an admitted
+	// call's own and its patch's, or, for a call refused because a
+	// talkgroup in its patch is ignored, that talkgroup. None when the call
+	// was decided before, or refused for any other reason. IDs the system
+	// doesn't list may be among them.
+	HeardSystem     int64
+	HeardTalkgroups []int32
+}
+
+// heard is an admission of a call on talkgroup, patched with patched, in
+// system.
+func heard(system int64, talkgroup int32, patched []int32) Admission {
+	return Admission{SystemID: system, HeardSystem: system, HeardTalkgroups: union([]int32{talkgroup}, patched)}
 }
 
 // Admit decides whether the server takes a call and under which system. It's
@@ -109,6 +123,7 @@ func Admit(ctx context.Context, q *db.Queries, c HeardCall) (Admission, error) {
 			return Admission{}, false, dbErr("ignored talkgroup", err)
 		}
 		a, err := reject(&system, tg, IgnoredTalkgroup)
+		a.HeardSystem, a.HeardTalkgroups = system, []int32{tg}
 		return a, true, err
 	}
 
@@ -121,8 +136,11 @@ func Admit(ctx context.Context, q *db.Queries, c HeardCall) (Admission, error) {
 		}
 		patched = union(row.PatchedTalkgroups, patched)
 		a, refused, err := ignored(row.SystemID)
-		if err != nil || !refused {
-			return Admission{SystemID: row.SystemID}, err
+		if err != nil {
+			return Admission{}, err
+		}
+		if !refused {
+			return heard(row.SystemID, c.Talkgroup, patched), nil
 		}
 		if err := q.DeleteUnrecordedCall(ctx, row.ID); err != nil {
 			return Admission{}, dbErr("delete refused call", err)
@@ -156,7 +174,7 @@ func Admit(ctx context.Context, q *db.Queries, c HeardCall) (Admission, error) {
 	if a, refused, err := ignored(sys.ID); err != nil || refused {
 		return a, err
 	}
-	return Admission{SystemID: sys.ID}, nil
+	return heard(sys.ID, c.Talkgroup, patched), nil
 }
 
 func dbErr(what string, err error) error {
