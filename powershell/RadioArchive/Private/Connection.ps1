@@ -363,7 +363,7 @@ function Invoke-RaApi {
             ErrorAction                    = 'Stop'
         }
         if ($PSBoundParameters.ContainsKey('Body')) {
-            $request.Body = [System.Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 8 -Compress))
+            $request.Body = [System.Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 16 -Compress))
             $request.ContentType = 'application/json; charset=utf-8'
         }
         if ($OutFile) {

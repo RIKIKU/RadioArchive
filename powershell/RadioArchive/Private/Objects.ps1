@@ -125,6 +125,8 @@ function ConvertTo-RaTalkgroup {
         LedColour         = $Row.led_colour
         SortOrder         = [int]$Row.sort_order
         FiregroundChannel = $Row.fireground_channel
+        Type              = [string](Get-RaProperty -Row $Row -Name 'type')
+        Frequency         = Get-RaProperty -Row $Row -Name 'frequency'
         LastHeardAt       = ConvertTo-RaTime -Value (Get-RaProperty -Row $Row -Name 'last_heard_at')
         Calls30Days       = if ($null -ne $calls) { [long]$calls } else { $null }
         CreatedAt         = ConvertTo-RaTime -Value (Get-RaProperty -Row $Row -Name 'created_at')

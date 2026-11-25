@@ -34,7 +34,7 @@ BeforeAll {
         'Disable-RadioArchiveAccount', 'Enable-RadioArchiveAccount', 'Remove-RadioArchiveAccount')
     # Commands about the radio as a whole, which take nothing from the
     # pipeline (guidelines section 3).
-    $noItems = @('Get-RadioArchiveRetention')
+    $noItems = @('Get-RadioArchiveRetention', 'Export-RadioArchiveSetup')
 }
 
 Describe 'The manifest (guidelines sections 1 and 10)' {
@@ -89,7 +89,7 @@ Describe '<Name> (guidelines sections 2 to 8)' -ForEach $commands {
         $verb, $noun = $Name -split '-', 2
         $help = Get-Help -Name $Name -Full
         $source = $command.ScriptBlock.ToString()
-        $changes = $verb -in @('New', 'Set', 'Remove', 'Rename', 'Add', 'Disable', 'Enable')
+        $changes = $verb -in @('New', 'Set', 'Remove', 'Rename', 'Add', 'Disable', 'Enable', 'Import')
     }
 
     It 'uses an approved verb' {
@@ -109,7 +109,7 @@ Describe '<Name> (guidelines sections 2 to 8)' -ForEach $commands {
         $output = @($command.OutputType.Name)
         if ($Name -eq 'Disconnect-RadioArchive') {
             $output | Should -Be @('System.Void')
-        } elseif ($Name -eq 'Save-RadioArchiveRecording') {
+        } elseif ($Name -eq 'Save-RadioArchiveRecording' -or $verb -eq 'Export') {
             $output | Should -Be @('System.IO.FileInfo')
         } else {
             $output | Should -Not -BeNullOrEmpty
@@ -222,6 +222,12 @@ Describe 'Objects and parameters line up (guidelines section 3)' {
         @{ Type = 'RadioArchive.Account'; Command = 'Enable-RadioArchiveAccount'; Properties = @('AccountId') }
         @{ Type = 'RadioArchive.Account'; Command = 'Remove-RadioArchiveAccount'; Properties = @('AccountId') }
         @{ Type = 'RadioArchive.Call'; Command = 'Save-RadioArchiveRecording'; Properties = @('CallId') }
+        @{ Type = 'RadioArchive.Talkgroup'; Command = 'Import-RadioArchiveTalkgroup'; Properties = @('SystemId', 'Id', 'Label', 'Name', 'Tag', 'Group', 'State', 'Unreviewed', 'Type', 'Frequency', 'DelayMinutes', 'Alert', 'LedColour', 'SortOrder', 'FiregroundChannel') }
+        @{ Type = 'RadioArchive.Talkgroup'; Command = 'Export-RadioArchiveTalkgroup'; Properties = @('SystemId', 'Id') }
+        @{ Type = 'RadioArchive.Unit'; Command = 'Import-RadioArchiveUnit'; Properties = @('SystemId', 'Unit', 'Alias') }
+        @{ Type = 'RadioArchive.System'; Command = 'Import-RadioArchiveSystem'; Properties = @('SystemId', 'Label', 'Name', 'AutoCreate', 'Alert', 'LedColour', 'SortOrder') }
+        @{ Type = 'RadioArchive.Group'; Command = 'Import-RadioArchiveGroup'; Properties = @('Name', 'Alert', 'LedColour', 'SortOrder') }
+        @{ Type = 'RadioArchive.Tag'; Command = 'Import-RadioArchiveTag'; Properties = @('Name', 'Alert', 'LedColour', 'SortOrder') }
     ) {
         $c = Get-Command -Name $Command
         foreach ($p in $Properties) {
