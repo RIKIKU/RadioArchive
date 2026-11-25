@@ -1,0 +1,76 @@
+{
+  "uid": "ra-recorders",
+  "title": "RadioArchive: recorders",
+  "description": "Each recorder's signals (R14): connected, deaf or down, quiet; its client's version and queue (R5, R6); the decode rate per system; calls rejected from a recorder and shortName not attached to a system (R12). Recorders are named as admins named them; no talkgroup or unit is named.",
+  "tags": ["radioarchive"],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "refresh": "30s",
+  "time": {"from": "now-24h", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Connected",
+      "description": "1 while the recorder's client has its live connection open. Worry: 0 for more than 2 minutes (the \"Recorder disconnected\" alert).",
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "max by (recorder) (radioarchive_recorder_connected{job=\"radioarchive\"})", "legendFormat": "{{recorder}}", "instant": true}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "Disconnected", "color": "red"}, "1": {"text": "Connected", "color": "green"}}}], "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "textMode": "value_and_name"}
+    },
+    {
+      "id": 2, "type": "stat", "title": "Signals tripped",
+      "description": "Each recorder's tripped signals: disconnected, deaf (trunk-recorder down, or a control channel lost) and quiet (where an admin set a threshold).",
+      "gridPos": {"h": 5, "w": 8, "x": 8, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "max by (recorder, signal) (radioarchive_recorder_signal{job=\"radioarchive\"}) > 0", "legendFormat": "{{recorder}}: {{signal}}", "instant": true}],
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "orange"}, "noValue": "None"}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "textMode": "name"}
+    },
+    {
+      "id": 3, "type": "table", "title": "Clients",
+      "description": "The version each recorder's client last connected with, and whether it's a minor version behind the server (R6). A client two behind is refused, and counted below.",
+      "gridPos": {"h": 5, "w": 8, "x": 16, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "max by (recorder, version) (radioarchive_recorder_client_info{job=\"radioarchive\"})", "format": "table", "instant": true}],
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true, "Value": true}}}]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Decode rate per system",
+      "description": "Control-channel messages a second, per recorder and system, as trunk-recorder reports them. A healthy P25 control channel decodes about 40. Near 0 for an attached system: its control channel is lost (deaf).",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "max by (recorder, short_name) (radioarchive_recorder_decode_rate{job=\"radioarchive\"})", "legendFormat": "{{recorder}} / {{short_name}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []}
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Client queue: oldest recording waiting",
+      "description": "How long the oldest recording in each client's queue has waited to upload (R5). Worry: over an hour (the \"Client queue backed up\" alert). Entries over QUEUE_MAX_AGE (24 h) are dropped.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "max by (recorder) (radioarchive_recorder_queue_oldest_age_seconds{job=\"radioarchive\"})", "legendFormat": "{{recorder}} oldest"},
+        {"refId": "B", "expr": "max by (recorder) (radioarchive_recorder_queue_entries{job=\"radioarchive\"})", "legendFormat": "{{recorder}} entries"}
+      ],
+      "fieldConfig": {"defaults": {"min": 0}, "overrides": [{"matcher": {"id": "byFrameRefID", "options": "A"}, "properties": [{"id": "unit", "value": "s"}]}, {"matcher": {"id": "byFrameRefID", "options": "B"}, "properties": [{"id": "unit", "value": "short"}, {"id": "custom.axisPlacement", "value": "right"}]}]}
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Calls rejected from unattached recorder systems",
+      "description": "Calls from a recorder and trunk-recorder shortName not attached to any system, over the retention period (R12). A rise: attach the pair on the Systems page, or stop trunk-recorder recording that system.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 13},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "max by (recorder, short_name) (radioarchive_rejected_unattached_calls{job=\"radioarchive\"})", "legendFormat": "{{recorder}} / {{short_name}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []}
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Clients refused and out of date",
+      "description": "Recorder client connections and uploads refused for being more than one minor version behind, and connections from clients one behind (R6), in each 5 minutes. Recorder clients are upgraded by hand (R86).",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 13},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "sum(increase(radioarchive_recorder_clients_too_old_total{job=\"radioarchive\"}[5m]))", "legendFormat": "refused, too old"},
+        {"refId": "B", "expr": "sum(increase(radioarchive_recorder_clients_out_of_date_total{job=\"radioarchive\"}[5m]))", "legendFormat": "out of date"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []}
+    }
+  ]
+}

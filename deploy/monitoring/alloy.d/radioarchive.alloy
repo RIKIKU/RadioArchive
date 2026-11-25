@@ -1,0 +1,31 @@
+// RadioArchive's API, scraped by PagerArchive's monitoring stack (SPEC.md
+// R90, R91; ADR 0042). Copy this file, and the token file beside it, into
+// the stack's include/alloy.d/ folder, then `docker compose restart alloy`
+// there. docs/deploy.md, "Monitoring", says how.
+//
+// The API joins the stack's `monitoring` network with the alias
+// `radioarchive` (its compose.override.yaml), and answers /metrics only to
+// the bearer of its METRICS_TOKEN, which Alloy reads from
+// radioarchive-metrics-token in this folder: the token alone, with no line
+// break (printf '%s' "$METRICS_TOKEN" > radioarchive-metrics-token), readable
+// by Alloy only (chmod 600). A dead API is a failed scrape (up == 0), which
+// the "RadioArchive API unreachable" alert watches.
+
+local.file "radioarchive_metrics_token" {
+  filename  = "/etc/alloy/include/radioarchive-metrics-token"
+  is_secret = true
+}
+
+prometheus.scrape "radioarchive" {
+  job_name         = "radioarchive"
+  targets          = [{"__address__" = "radioarchive:8080"}]
+  metrics_path     = "/metrics"
+  scrape_interval  = "15s"
+  scrape_timeout   = "10s"
+  scrape_protocols = ["PrometheusText0.0.4"]
+  authorization {
+    type        = "Bearer"
+    credentials = local.file.radioarchive_metrics_token.content
+  }
+  forward_to = [prometheus.remote_write.prometheus.receiver]
+}

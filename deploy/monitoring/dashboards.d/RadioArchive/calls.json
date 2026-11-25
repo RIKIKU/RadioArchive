@@ -1,0 +1,95 @@
+{
+  "uid": "ra-calls",
+  "title": "RadioArchive: calls and listeners",
+  "description": "Recordings stored, calls rejected (R12, R17, R18), recordings missing (R19) and overlapping calls (R13); the live delay (R38); listeners' sockets and the limits they hit (R70-R73). Talkgroups appear only by their IDs (P1).",
+  "tags": ["radioarchive"],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "refresh": "30s",
+  "time": {"from": "now-24h", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "Recordings uploaded",
+      "description": "Recording uploads in each 5 minutes, by the server's answer: stored, duplicate (a retry of one already stored), or a refusal.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (status) (increase(radioarchive_recorder_uploads_total{job=\"radioarchive\"}[5m]))", "legendFormat": "{{status}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []}
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Calls rejected",
+      "description": "Calls refused in each 5 minutes: not attached (R12), an unknown talkgroup with auto-create off (R17), or an ignored talkgroup (R18).",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (reason) (increase(radioarchive_calls_rejected_total{job=\"radioarchive\"}[5m]))", "legendFormat": "{{reason}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Recordings missing",
+      "description": "Calls that ended between 10 minutes and a day ago whose recording hasn't arrived (R19). Worry: anything above 0 (the \"Recordings missing\" alert).",
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "max(radioarchive_recordings_missing{job=\"radioarchive\"})", "instant": true}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"}
+    },
+    {
+      "id": 4, "type": "table", "title": "Unknown and ignored talkgroups rejected",
+      "description": "Calls rejected on a talkgroup ID the system doesn't have (unknown_talkgroup), or an ignored one, over the retention period, by system and talkgroup ID (R17, R18).",
+      "gridPos": {"h": 6, "w": 9, "x": 6, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "max by (system, talkgroup, reason) (radioarchive_rejected_talkgroup_calls{job=\"radioarchive\"})", "format": "table", "instant": true}],
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}, "renameByName": {"Value": "calls"}}}]
+    },
+    {
+      "id": 5, "type": "table", "title": "Overlapping calls in the last 24 hours",
+      "description": "Two recorders on the same system and talkgroup whose calls overlap (R13). Keeping their coverage apart is trunk-recorder's config; the server stores both copies.",
+      "gridPos": {"h": 6, "w": 9, "x": 15, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "max by (system, talkgroup, recorder, other_recorder) (radioarchive_overlapping_calls{job=\"radioarchive\"})", "format": "table", "instant": true}],
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}, "renameByName": {"Value": "calls"}}}]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Live delay",
+      "description": "From a live call's first PCM at the recorder to the server passing its first frame on, p50 and p95 over 5 minutes (R38). Worry: p95 above 2 s for 5 minutes (the \"Live delay high\" alert).",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "histogram_quantile(0.5, sum by (le) (rate(radioarchive_live_delay_seconds_bucket{job=\"radioarchive\"}[5m])))", "legendFormat": "p50"},
+        {"refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(radioarchive_live_delay_seconds_bucket{job=\"radioarchive\"}[5m])))", "legendFormat": "p95"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s", "min": 0}, "overrides": []}
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Listeners' sockets",
+      "description": "Listener WebSockets open, and LIMIT_LIVE_TOTAL (R71). At the limit, new listeners see \"The radio is full\"; for 10 minutes, it alerts. Zips being sent (R72) on the right.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "max(radioarchive_live_sockets{job=\"radioarchive\"})", "legendFormat": "open"},
+        {"refId": "B", "expr": "max(radioarchive_live_sockets_limit{job=\"radioarchive\"})", "legendFormat": "limit"},
+        {"refId": "C", "expr": "max(radioarchive_zips_open{job=\"radioarchive\"})", "legendFormat": "zips"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": [{"matcher": {"id": "byFrameRefID", "options": "C"}, "properties": [{"id": "custom.axisPlacement", "value": "right"}]}]}
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Limit hits",
+      "description": "Requests refused over a heavy-use limit in each 5 minutes (R70-R73): requests (120 a minute), playback (600 a minute), live (4 per client, 50 in all) and zip (2 per client, 6 in all). On dashboards only (R91).",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 22},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (limit) (increase(radioarchive_limit_hits_total{job=\"radioarchive\"}[5m]))", "legendFormat": "{{limit}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []}
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Live feed",
+      "description": "Frames queued for listeners and dropped from slow listeners' full queues, a second; and the feed's events in each 5 minutes: calls withdrawn when a talkgroup is hidden (R31), delayed calls released (R23), slow listeners closed.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 22},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "sum by (result) (rate(radioarchive_live_frames_total{job=\"radioarchive\"}[5m]))", "legendFormat": "frames {{result}}/s"},
+        {"refId": "B", "expr": "sum by (kind) (increase(radioarchive_live_events_total{job=\"radioarchive\"}[5m]))", "legendFormat": "{{kind}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": [{"matcher": {"id": "byFrameRefID", "options": "B"}, "properties": [{"id": "custom.axisPlacement", "value": "right"}]}]}
+    }
+  ]
+}
