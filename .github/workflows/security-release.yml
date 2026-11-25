@@ -22,7 +22,9 @@ concurrency:
 jobs:
   release:
     name: Start the Release workflow, 30 minutes after the last security merge
-    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'security')
+    # Like the weekly schedule, only once the owner has switched releases on
+    # (ADR 0043): until then a security merge releases nothing by itself.
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'security') && vars.RELEASES_SCHEDULED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:

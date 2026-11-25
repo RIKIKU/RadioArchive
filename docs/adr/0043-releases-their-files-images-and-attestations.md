@@ -25,7 +25,7 @@ RadioArchive is released the way PagerArchive is (its ADRs 0016 and 0024): delib
 
 ## Why the schedule waits for a switch
 
-The owner wants to see M6 on cld01 before anything is released or deployed. A merged `release.yml` with a live schedule would release on the first Friday after the merge. The schedule is in the file, and a scheduled run does nothing until `RELEASES_SCHEDULED` is `true`. Manual runs are dry runs unless unticked.
+The owner wants to see M6 on cld01 before anything is released or deployed. A merged `release.yml` with a live schedule would release on the first Friday after the merge. The schedule is in the file, and a scheduled run does nothing until `RELEASES_SCHEDULED` is `true`; nor does a security merge start a release until then. Manual runs are dry runs unless unticked, and a pull request's run is always a dry run.
 
 ## Why the recorder side is built per architecture
 
