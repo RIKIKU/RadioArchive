@@ -21,8 +21,10 @@ import (
 
 // Defaults are SPEC.md section 6.11's numbers.
 const (
-	DefaultRequests = 120 // public API requests a minute per client (R73)
-	DefaultPlayback = 600 // recording playback requests a minute per client (R73)
+	DefaultRequests      = 120 // public API requests a minute per client (R73)
+	DefaultPlayback      = 600 // recording playback requests a minute per client (R73)
+	DefaultLivePerClient = 4   // listener WebSockets at once per client (R71)
+	DefaultLiveTotal     = 50  // listener WebSockets at once in all (R71)
 )
 
 // Config is the limits a deployment sets (section 6.11: every number is an
@@ -36,16 +38,21 @@ type Config struct {
 	// Playback is the recording playback requests a client may make a
 	// minute, ranges and all.
 	Playback int
+	// LivePerClient is the listener WebSockets one client may have open at
+	// once, and LiveTotal how many may be open in all.
+	LivePerClient, LiveTotal int
 }
 
 // Defaults is the SPEC's limits, with no trusted proxy.
 func Defaults() Config {
-	return Config{Requests: DefaultRequests, Playback: DefaultPlayback}
+	return Config{Requests: DefaultRequests, Playback: DefaultPlayback,
+		LivePerClient: DefaultLivePerClient, LiveTotal: DefaultLiveTotal}
 }
 
 // FromEnv reads the limits from the environment: TRUSTED_PROXY,
-// LIMIT_REQUESTS and LIMIT_PLAYBACK. Unset or empty is the default; a value
-// that isn't one is refused, naming the variable.
+// LIMIT_REQUESTS, LIMIT_PLAYBACK, LIMIT_LIVE_PER_CLIENT and
+// LIMIT_LIVE_TOTAL. Unset or empty is the default; a value that isn't one
+// is refused, naming the variable.
 func FromEnv(getenv func(string) string) (Config, error) {
 	c := Defaults()
 	if v := strings.TrimSpace(getenv("TRUSTED_PROXY")); v != "" {
@@ -58,7 +65,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	for _, n := range []struct {
 		name string
 		to   *int
-	}{{"LIMIT_REQUESTS", &c.Requests}, {"LIMIT_PLAYBACK", &c.Playback}} {
+	}{{"LIMIT_REQUESTS", &c.Requests}, {"LIMIT_PLAYBACK", &c.Playback},
+		{"LIMIT_LIVE_PER_CLIENT", &c.LivePerClient}, {"LIMIT_LIVE_TOTAL", &c.LiveTotal}} {
 		v := strings.TrimSpace(getenv(n.name))
 		if v == "" {
 			continue
@@ -233,6 +241,7 @@ type Limits struct {
 	cfg      Config
 	requests *window
 	playback *window
+	live     *slots
 	// hits counts refusals per kind, for M6's metrics (R90).
 	hits [Zip + 1]atomic.Int64
 }
@@ -249,12 +258,13 @@ func WithClock(now func() time.Time) Option {
 
 // New returns the limits cfg sets, with every count at nothing.
 func New(cfg Config, opts ...Option) (*Limits, error) {
-	if cfg.Requests < 1 || cfg.Playback < 1 {
+	if cfg.Requests < 1 || cfg.Playback < 1 || cfg.LivePerClient < 1 || cfg.LiveTotal < 1 {
 		return nil, errors.New("limits: every limit must be above 0")
 	}
 	l := &Limits{cfg: cfg,
 		requests: newWindow(cfg.Requests, time.Minute),
-		playback: newWindow(cfg.Playback, time.Minute)}
+		playback: newWindow(cfg.Playback, time.Minute),
+		live:     newSlots(cfg.LivePerClient, cfg.LiveTotal)}
 	for _, o := range opts {
 		o(l)
 	}

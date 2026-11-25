@@ -76,14 +76,15 @@ func TestParseTrustedProxy(t *testing.T) {
 func TestFromEnv(t *testing.T) {
 	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 	c, err := FromEnv(env(nil))
-	if err != nil || c != Defaults() || c.Requests != 120 || c.Playback != 600 || c.TrustedProxy.IsValid() {
+	if err != nil || c != Defaults() || c.Requests != 120 || c.Playback != 600 || c.LivePerClient != 4 || c.LiveTotal != 50 || c.TrustedProxy.IsValid() {
 		t.Fatalf("defaults: %+v %v", c, err)
 	}
 	c, err = FromEnv(env(map[string]string{"TRUSTED_PROXY": " 10.0.0.2 ", "LIMIT_REQUESTS": "5000", "LIMIT_PLAYBACK": "9000"}))
 	if err != nil || c.TrustedProxy != netip.MustParseAddr("10.0.0.2") || c.Requests != 5000 || c.Playback != 9000 {
 		t.Fatalf("set: %+v %v", c, err)
 	}
-	for k, v := range map[string]string{"TRUSTED_PROXY": "10.0.0.0/8", "LIMIT_REQUESTS": "0", "LIMIT_PLAYBACK": "lots"} {
+	for k, v := range map[string]string{"TRUSTED_PROXY": "10.0.0.0/8", "LIMIT_REQUESTS": "0", "LIMIT_PLAYBACK": "lots",
+		"LIMIT_LIVE_PER_CLIENT": "-1", "LIMIT_LIVE_TOTAL": "4.5"} {
 		if _, err := FromEnv(env(map[string]string{k: v})); err == nil || !strings.HasPrefix(err.Error(), k+":") {
 			t.Errorf("%s=%s: %v", k, v, err)
 		}

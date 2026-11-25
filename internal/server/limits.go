@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/RIKIKU/RadioArchive/internal/limits"
 	"github.com/RIKIKU/RadioArchive/internal/public"
@@ -57,9 +58,36 @@ func (a *API) limited(k limits.Kind, h http.Handler) http.Handler {
 				f.Write(w)
 				return
 			}
+		case limits.Live:
+			// A GET that isn't an upgrade is the browser asking why its
+			// socket was refused, since its WebSocket can't read the
+			// answer (ADR 0037): the same refusal, or else the handler's
+			// 426 Upgrade Required. It opens and counts nothing.
+			if !upgrade(r) {
+				if f, ok := l.LiveCheck(l.Client(r)); !ok && !a.byAdmin(w, r) {
+					f.Write(w)
+					return
+				}
+				break
+			}
+			release, f, ok := l.Live(l.Client(r))
+			switch {
+			case ok:
+				// The socket counts until the handler returns, when it
+				// has closed.
+				defer release()
+			case !a.byAdmin(w, r):
+				f.Write(w)
+				return
+			}
 		}
 		h.ServeHTTP(w, r)
 	})
+}
+
+// upgrade says whether r asks to become a WebSocket.
+func upgrade(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 }
 
 // byAdmin says whether a signed-in admin made r (R70): only a request with
