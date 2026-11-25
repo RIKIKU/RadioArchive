@@ -79,6 +79,38 @@ export async function saveLook(context: BrowserContext, baseURL: string, look: s
 	]);
 }
 
+/**
+ * Keeps the page in this browser's own look and theme. Every admin test
+ * signs in as the one fixture admin, whose account saves its settings
+ * (R41): a page opened once the browser is linked to the account adopts the
+ * account's look and theme, which a test running beside it in another
+ * theme may just have saved. So the account is read as one that holds no
+ * settings (an administrator's "not saved"), and nothing is adopted or
+ * saved. Call it before signing in.
+ */
+export async function ownLook(page: Page) {
+	await page.route(
+		(url) => url.pathname === '/api/v1/account',
+		async (route) => {
+			const r = await route.fetch();
+			const body = (await r.json()) as { saves?: boolean; profile?: unknown };
+			if (body && typeof body === 'object') {
+				body.saves = false;
+				body.profile = null;
+			}
+			await route.fulfill({ response: r, json: body });
+		}
+	);
+}
+
+/** The page shows the look and theme the test chose (saveLook), not another test's. */
+export async function inLook(page: Page, look: string, theme: string) {
+	const html = page.locator('html');
+	await expect(html).toHaveAttribute('data-theme', theme);
+	if (look === 'console') await expect(html).toHaveAttribute('data-look', 'console');
+	else await expect(html).not.toHaveAttribute('data-look', /./);
+}
+
 export async function axe(page: Page, width: number) {
 	// Nothing wider than the screen.
 	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);

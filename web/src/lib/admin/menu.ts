@@ -23,6 +23,8 @@ export interface AdminEntry {
 /** The admin pages, in R84's order. */
 export const adminPages: AdminEntry[] = [
 	{ href: '/admin/talkgroups', label: 'Talkgroups', icon: 'list', text: 'Every talkgroup: search, edit, hide and play' },
+	{ href: '/admin/units', label: 'Units', svg: adminIcons.units, text: 'Radio IDs and ranges, and their aliases' },
+	{ href: '/admin/systems', label: 'Systems', svg: adminIcons.systems, text: 'Systems, attachments, tags and groups' },
 	{ href: '/admin/recorders', label: 'Recorders', svg: adminIcons.recorders, text: 'Recorders, their signals and overlapping calls' },
 	{ href: '/admin/accounts', label: 'Accounts', svg: adminIcons.accounts, text: 'Who has signed in: roles, disabling and deleting' },
 	{ href: '/admin/audit', label: 'Audit log', svg: adminIcons.audit, text: 'Every admin change: who, how, when and what' },
