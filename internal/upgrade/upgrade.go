@@ -28,7 +28,7 @@ type failure struct {
 	Reason     string `json:"reason"`
 	RolledBack bool   `json:"rolled_back"`
 	Restored   bool   `json:"restored"`
-	ClearedAt   int64  `json:"cleared_at"`
+	ClearedAt  int64  `json:"cleared_at"`
 }
 
 type upgraded struct {
