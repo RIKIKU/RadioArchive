@@ -256,6 +256,9 @@ test('the first admin: INITIAL_ADMIN_EMAIL, proven by its code, is an admin who 
 	await row.getByRole('button', { name: /^Enable / }).click();
 	await expect(row).toContainText('Active');
 	expect(await authentikUser(request, otherEmail)).toMatchObject({ is_active: true });
+	// Their open page learns it was signed out when it next loads.
+	await other.reload();
+	await expect(other.getByRole('button', { name: 'Account menu, signed out' })).toBeVisible({ timeout: 15_000 });
 	await signIn(other, baseURL!, otherEmail);
 	expect((await account(other)).profile?.talkgroups).toEqual([{ id: 1002 }]);
 	// The admin can't disable themselves: no button on their own row.
