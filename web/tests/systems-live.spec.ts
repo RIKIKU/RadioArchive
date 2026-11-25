@@ -9,7 +9,7 @@
 // - Auto-create switched on for EX on the page: the next call on 4711
 //   creates it, public and unreviewed (A2). There's no deleting a
 //   talkgroup, so 4711 is left hidden, with a tag, afterwards; a retry
-//   uses 4712.
+//   uses the next ID EX doesn't list.
 // - A tag's LED colour set on the page shows for its talkgroups with none
 //   of their own: fireground's on 1002, in the catalogue and on Recent
 //   calls.
@@ -71,11 +71,15 @@ test('@live A2 through the page: Bench / other attached to EX from Not attached 
 
 test('@live A2: auto-create switched on for EX on the page; the next call on 4711 creates it, public and unreviewed', async ({ page }) => {
 	test.setTimeout(2 * 60_000);
-	const tg = 4711 + test.info().retry;
 	await systems(page);
 	type Row = { system_id: number; id: number; state: string; unreviewed: boolean; tag: string | null };
-	const row = async () => ((await (await page.request.get('/api/v1/admin/talkgroups')).json()) as { talkgroups: Row[] }).talkgroups.find((t) => t.system_id === 1 && t.id === tg);
-	expect(await row()).toBeUndefined();
+	const table = async () => ((await (await page.request.get('/api/v1/admin/talkgroups')).json()) as { talkgroups: Row[] }).talkgroups;
+	// 4711, unless an earlier try (or another browser, sharing a database
+	// when run by hand) left it: then the next one EX doesn't list.
+	const listed = new Set((await table()).filter((t) => t.system_id === 1).map((t) => t.id));
+	let tg = 4711;
+	while (listed.has(tg)) tg++;
+	const row = async () => (await table()).find((t) => t.system_id === 1 && t.id === tg);
 	try {
 		await page.getByRole('button', { name: 'Edit system EX' }).click();
 		const edit = page.getByRole('region', { name: 'Edit system EX' });
