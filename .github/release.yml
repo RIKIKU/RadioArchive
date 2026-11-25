@@ -1,0 +1,19 @@
+# What GitHub's generated release notes list (release.yml's --generate-notes;
+# ADR 0043), as PagerArchive's: the pull requests merged since the previous
+# release, those labelled "feature" first, Renovate's updates (label
+# "maintenance") in a section of their own.
+#
+# Label a pull request "feature" when it adds something a person can use or
+# see that wasn't there before, not for a fix, a refactor, CI or
+# documentation. Its merge makes the next release a minor version
+# (scripts/ci/release-version.sh). Add the label before the release is cut.
+changelog:
+  categories:
+    - title: New features
+      labels: [feature]
+    - title: Changes
+      labels: ["*"]
+      exclude:
+        labels: [maintenance, feature]
+    - title: Dependency updates
+      labels: [maintenance]

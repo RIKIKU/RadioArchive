@@ -23,9 +23,9 @@ type composeFile struct {
 	Services map[string]service `yaml:"services"`
 }
 
-func readCompose(t *testing.T) composeFile {
+func readCompose(t *testing.T, file string) composeFile {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "compose.yaml"))
+	b, err := os.ReadFile(filepath.Join("..", filepath.FromSlash(file)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,8 +41,17 @@ func readCompose(t *testing.T) composeFile {
 // the service on `docker compose up -d`, as PagerArchive's do (ADR 0009).
 // The database's first-start script is left out: it means nothing to a
 // database that already exists.
+//
+// Both compose files: the development one, and the release's
+// (deploy/release/compose.yaml, ADR 0043), whose ./deploy paths are the
+// configuration archive's, unpacked beside it, so the same as the repository's.
 func TestChangedConfigRecreatesItsService(t *testing.T) {
-	c := readCompose(t)
+	for _, file := range []string{"compose.yaml", "deploy/release/compose.yaml"} {
+		t.Run(file, func(t *testing.T) { checkLabels(t, readCompose(t, file)) })
+	}
+}
+
+func checkLabels(t *testing.T, c composeFile) {
 	labelled := 0
 	for name, s := range c.Services {
 		h := sha256.New()

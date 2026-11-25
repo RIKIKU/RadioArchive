@@ -1,0 +1,59 @@
+// What Renovate updates, and when (SPEC.md R87; ADR 0043), after
+// PagerArchive's: base images and actions pinned by digest, base images
+// held 3 days after their release, vulnerability fixes at once and labelled
+// "security", which security-release.yml releases 30 minutes after they
+// merge. Renovate reads this once the owner turns it on for the repository
+// (the Renovate app, or a workflow of PagerArchive's kind).
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [],
+  enabledManagers: ["dockerfile", "docker-compose", "gomod", "npm", "github-actions", "custom.regex"],
+  timezone: "Etc/UTC",
+  dependencyDashboard: false,
+  labels: ["maintenance"],
+  assignees: ["RIKIKU"],
+  postUpdateOptions: ["gomodTidy"],
+  // A fix for a known vulnerability gets its own pull request at once,
+  // labelled "security": its merge starts a release (security-release.yml).
+  vulnerabilityAlerts: {addLabels: ["security"], minimumReleaseAge: null},
+  osvVulnerabilityAlerts: true,
+  separateMinorPatch: true,
+  packageRules: [
+    // R87: the base images under our own images, pinned by digest, held 3
+    // days after their release.
+    {
+      matchManagers: ["dockerfile"],
+      matchUpdateTypes: ["digest", "pinDigest", "patch"],
+      groupName: "base images",
+      minimumReleaseAge: "3 days",
+    },
+    // Libraries and actions, monthly, each held 3 days.
+    {
+      matchManagers: ["gomod", "npm", "github-actions"],
+      matchUpdateTypes: ["patch", "digest", "pinDigest", "minor"],
+      groupName: "libraries",
+      schedule: ["* * 1 * *"],
+      minimumReleaseAge: "3 days",
+    },
+    // The images a deployment pulls (deploy/release, compose.yaml): Authentik
+    // and PostgreSQL by their tags, which a release's files move.
+    {
+      matchManagers: ["docker-compose"],
+      groupName: "deployment images",
+      minimumReleaseAge: "3 days",
+      // Our own images are named :main in the repository and stamped by the
+      // release (scripts/ci/release-assets.sh).
+      matchPackageNames: ["!ghcr.io/rikiku/radioarchive", "!ghcr.io/rikiku/radioarchive-client", "!ghcr.io/rikiku/radioarchive-recorder"],
+    },
+  ],
+  // PagerArchive's release whose monitoring stack CI checks against.
+  customManagers: [
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^scripts/ci/e2e-monitoring\\.sh$/"],
+      matchStrings: ["PA_RELEASE=\\$\\{PA_RELEASE:-(?<currentValue>v[0-9.]+)\\}"],
+      depNameTemplate: "RIKIKU/PagerArchive",
+      datasourceTemplate: "github-releases",
+    },
+  ],
+}

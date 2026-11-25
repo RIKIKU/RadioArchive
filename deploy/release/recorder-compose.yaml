@@ -1,0 +1,54 @@
+# RadioArchive's recorder host (SPEC.md R86; docs/deploy.md, "The recorder
+# host"). Attached to every release as recorder-compose.yaml: trunk-recorder
+# with RadioArchive's recorder plugin, beside the recorder client, which
+# encodes calls to Opus and sends them to your RadioArchive server. amd64 and
+# arm64 (a Raspberry Pi 4 is enough).
+#
+# Beside this file: recorder-env.example saved as .env and filled in, and
+# your trunk-recorder config.json, with the plugin in its "plugins" (see the
+# guide). Then:
+#
+#   docker compose up -d
+#
+# The client shares trunk-recorder's network (the plugin sends to 127.0.0.1
+# only) and its media folder, at the same path, so it can read each finished
+# recording and delete it once the server has it. Recorder clients are
+# upgraded by hand: a new release's file, then docker compose pull && up -d.
+name: radioarchive-recorder
+
+services:
+  trunk-recorder:
+    image: ghcr.io/rikiku/radioarchive-recorder:main
+    restart: unless-stopped
+    # The SDR dongles, as trunk-recorder's own docs give them.
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - media:/app/media
+
+  client:
+    image: ghcr.io/rikiku/radioarchive-client:main
+    restart: unless-stopped
+    network_mode: "service:trunk-recorder"
+    # trunk-recorder writes its recordings as root; the client deletes each
+    # one once the server has it.
+    user: "0:0"
+    environment:
+      SERVER_URL: ${SERVER_URL:?set SERVER_URL in .env}
+      CLIENT_KEY: ${CLIENT_KEY:?set CLIENT_KEY in .env}
+      UDP_ADDR: ${UDP_ADDR:-127.0.0.1:9850}
+      QUEUE_MAX_AGE: ${QUEUE_MAX_AGE:-24h}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - media:/app/media
+      # The queue of unsent recordings (R5), kept across restarts.
+      - queue:/var/lib/radioarchive-client/queue
+    depends_on:
+      - trunk-recorder
+
+volumes:
+  media:
+  queue:

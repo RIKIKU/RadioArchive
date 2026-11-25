@@ -1,0 +1,42 @@
+name: Security release
+
+# A security update is released straight away (SPEC.md R87; ADR 0043), as
+# PagerArchive's: when a pull request labelled "security" merges into main
+# (Renovate labels its vulnerability alerts' pull requests so), this starts
+# the Release workflow on main 30 minutes later, publishing (not a dry run).
+# A second security merge inside that time cancels the waiting run and
+# starts the wait again, so one release has both. Only a merged security
+# pull request's run joins that concurrency group.
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'security') && 'security-release' || format('security-release-not-{0}', github.run_id) }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Start the Release workflow, 30 minutes after the last security merge
+    # Like the weekly schedule, only once the owner has switched releases on
+    # (ADR 0043): until then a security merge releases nothing by itself.
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'security') && vars.RELEASES_SCHEDULED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Wait 30 minutes for another security merge
+        run: sleep 1800
+      - name: Release main now
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f dry_run=false
+          echo "::notice::Security update merged ($PR): the Release workflow is started on main."

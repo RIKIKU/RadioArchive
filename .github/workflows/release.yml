@@ -1,0 +1,328 @@
+name: Release
+
+# Cuts a release (SPEC.md R85-R87; ADR 0043), as PagerArchive's release
+# workflow does. A merge to main isn't one.
+#
+#   - Weekly, on Friday 18:17 UTC (Saturday morning in Australia), but only
+#     once the owner switches the schedule on: the repository variable
+#     RELEASES_SCHEDULED set to true. Until then a scheduled run does nothing.
+#   - "Release now": Actions, Release, Run workflow, on main, with "Dry run"
+#     unticked.
+#   - A security update: security-release.yml starts this on main 30
+#     minutes after a pull request labelled "security" merges.
+#
+# Each run releases the commit it starts on, if main changed since the
+# previous release in anything but documentation; otherwise "nothing to
+# release". scripts/ci/release-version.sh decides, and works out the
+# version (minor or patch, never major). Then every CI check runs on the
+# commit (ci.yml, called), the binaries and images are built for their
+# architectures, and the release's files are written. Only then, and not in
+# a dry run: the tag, the GitHub release with its notes and files, the
+# images pushed by version and major.minor, and every file and image
+# attested (GitHub artifact attestations, `gh attestation verify`).
+#
+# "Dry run" (the default, on any branch) does everything but tag, push,
+# publish and attest, and keeps the release's files as the run's artifact.
+# Off main a run that isn't a dry run fails before anything starts.
+#
+# One release at a time, never cancelled.
+on:
+  schedule:
+    - cron: "17 18 * * 5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: everything but tag, push and publish"
+        required: false
+        default: true
+        type: boolean
+  # A pull request that changes the release itself dry-runs it, so it's
+  # checked before it's on main (a manual run needs it there).
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/ci/release-*.sh
+      - scripts/ci/versions-lib.sh
+      - deploy/release/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  # A scheduled run publishes; a manual one only when "Dry run" is unticked;
+  # a pull request's never.
+  DRY_RUN: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+
+jobs:
+  plan:
+    name: What to release
+    if: github.event_name != 'schedule' || vars.RELEASES_SCHEDULED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      release: ${{ steps.version.outputs.release }}
+      version: ${{ steps.version.outputs.version }}
+      major_minor: ${{ steps.version.outputs.major_minor }}
+      tag: ${{ steps.version.outputs.tag }}
+      previous: ${{ steps.version.outputs.previous }}
+      dry_run: ${{ env.DRY_RUN }}
+    steps:
+      - name: A release is made from main
+        if: github.ref != 'refs/heads/main' && env.DRY_RUN != 'true'
+        run: |
+          echo "::error::A release is made from main only, and this run is on $GITHUB_REF. Off main, tick \"Dry run\"."
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Work out the version
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch --force --tags origin
+          RA_LATEST_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)
+          export RA_LATEST_RELEASE
+          sh scripts/ci/release-version.sh "$GITHUB_SHA"
+          tag=$(sed -n 's/^tag=//p' "$GITHUB_OUTPUT")
+          why=$(sed -n 's/^why=//p' "$GITHUB_OUTPUT")
+          if grep -qx 'release=false' "$GITHUB_OUTPUT"; then said="Nothing to release: $why"
+          elif [ "$DRY_RUN" = true ]; then said="Dry run: $tag would be released ($why). Nothing is tagged, pushed or published."
+          else said="Releasing $tag ($why)."; fi
+          echo "::notice::$said"
+          printf '### What to release\n\n%s\n' "$said" >>"$GITHUB_STEP_SUMMARY"
+      - name: The version rules' own checks
+        run: sh scripts/ci/release-version-checks.sh
+
+  checks:
+    name: Every check
+    needs: plan
+    # A pull request runs CI anyway.
+    if: needs.plan.outputs.release == 'true' && github.event_name != 'pull_request'
+    uses: ./.github/workflows/ci.yml
+
+  # The recorder side, natively on each architecture (SPEC.md R86): the
+  # plugin's .so and trunk-recorder's image with it, the client's binary and
+  # image. Pushed by digest only when publishing; merged into tags below.
+  recorder:
+    name: Recorder side (${{ matrix.arch }})
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      PUSH: ${{ needs.plan.outputs.dry_run != 'true' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Sign in to GHCR
+        if: env.PUSH == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: The plugin's .so, and the client's binary
+        run: |
+          mkdir -p out
+          docker buildx build --target so --output type=local,dest=out/so recorder/plugin
+          mv out/so/libradioarchive.so "out/libradioarchive-${{ matrix.arch }}.so"
+          docker buildx build --platform "linux/${{ matrix.arch }}" --build-arg VERSION="$VERSION" \
+            -f recorder/client/Dockerfile --load -t radioarchive-client:release .
+          id=$(docker create radioarchive-client:release)
+          docker cp "$id:/usr/local/bin/radioarchive-client" "out/radioarchive-client-${{ matrix.arch }}"
+          docker rm "$id"
+          file out/*
+      - name: The images, pushed by digest when publishing
+        run: |
+          mkdir -p digests
+          for img in recorder client; do
+            case $img in
+              recorder) ctx=recorder/plugin; file=recorder/plugin/Dockerfile; name=ghcr.io/rikiku/radioarchive-recorder ;;
+              client) ctx=.; file=recorder/client/Dockerfile; name=ghcr.io/rikiku/radioarchive-client ;;
+            esac
+            docker buildx build --platform "linux/${{ matrix.arch }}" --build-arg VERSION="$VERSION" -f "$file" \
+              --label org.opencontainers.image.version="$VERSION" \
+              --output "type=image,name=$name,push-by-digest=true,name-canonical=true,push=$PUSH" \
+              --metadata-file "meta-$img.json" "$ctx"
+            jq -r '."containerimage.digest"' "meta-$img.json" > "digests/$img-${{ matrix.arch }}"
+          done
+          cat digests/*
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: recorder-${{ matrix.arch }}
+          path: |
+            out/libradioarchive-*.so
+            out/radioarchive-client-*
+            digests/
+          if-no-files-found: error
+
+  # The server's image, amd64 only (section 7).
+  server:
+    name: Server image
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      PUSH: ${{ needs.plan.outputs.dry_run != 'true' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Sign in to GHCR
+        if: env.PUSH == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (and push when publishing)
+        run: |
+          mkdir -p digests
+          docker buildx build --platform linux/amd64 --build-arg VERSION="$VERSION" \
+            --label org.opencontainers.image.version="$VERSION" \
+            --output "type=image,name=ghcr.io/rikiku/radioarchive,push-by-digest=true,name-canonical=true,push=$PUSH" \
+            --metadata-file meta.json .
+          jq -r '."containerimage.digest"' meta.json > digests/server-amd64
+          cat digests/server-amd64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: server
+          path: digests/
+          if-no-files-found: error
+
+  # The release's files: compose and settings files, the configuration
+  # archive, the binaries with SHA256SUMS, and the module's zip. A dry run
+  # keeps them as the run's artifact.
+  files:
+    name: The release's files
+    needs: [plan, recorder]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: recorder-*
+          merge-multiple: true
+          path: built
+      - name: Write them
+        run: |
+          sh scripts/ci/release-assets.sh "$VERSION" release
+          cp built/out/* release/
+          (cd powershell && zip -qr "../release/RadioArchive-module-$VERSION.zip" RadioArchive)
+          (cd release && sha256sum libradioarchive-*.so radioarchive-client-* > SHA256SUMS && cat SHA256SUMS)
+          ls -l release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ needs.plan.outputs.version }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+
+  # Only when publishing, after every check: the images tagged by version
+  # and major.minor, the tag, the GitHub release, and the attestations.
+  publish:
+    name: Publish
+    needs: [plan, checks, recorder, server, files]
+    if: needs.plan.outputs.dry_run != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      MAJOR_MINOR: ${{ needs.plan.outputs.major_minor }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      PREVIOUS: ${{ needs.plan.outputs.previous }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: art
+      - name: Tag the images by version and major.minor
+        run: |
+          tags() { echo "-t ghcr.io/rikiku/$1:$VERSION -t ghcr.io/rikiku/$1:$MAJOR_MINOR"; }
+          # shellcheck disable=SC2046
+          docker buildx imagetools create $(tags radioarchive) "ghcr.io/rikiku/radioarchive@$(cat art/server/server-amd64)"
+          for img in recorder client; do
+            # shellcheck disable=SC2046
+            docker buildx imagetools create $(tags "radioarchive-$img") \
+              "ghcr.io/rikiku/radioarchive-$img@$(cat "art/recorder-amd64/digests/$img-amd64")" \
+              "ghcr.io/rikiku/radioarchive-$img@$(cat "art/recorder-arm64/digests/$img-arm64")"
+          done
+          for img in radioarchive radioarchive-recorder radioarchive-client; do
+            d=$(docker buildx imagetools inspect "ghcr.io/rikiku/$img:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)
+            echo "$img $d" | tee -a digests.txt
+          done
+      - name: Attest the files
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: art/release-${{ needs.plan.outputs.version }}/*
+      - name: The images' digests
+        run: |
+          # The image attestations, by the digests the tags name, pushed to
+          # GHCR beside them (gh attestation verify oci://<image>).
+          while read -r img digest; do
+            echo "IMG_${img//-/_}=$digest" >> "$GITHUB_ENV"
+          done < digests.txt
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/rikiku/radioarchive
+          subject-digest: ${{ env.IMG_radioarchive }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/rikiku/radioarchive-recorder
+          subject-digest: ${{ env.IMG_radioarchive_recorder }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/rikiku/radioarchive-client
+          subject-digest: ${{ env.IMG_radioarchive_client }}
+          push-to-registry: true
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "Server: \`ghcr.io/rikiku/radioarchive:$VERSION\` (amd64). Recorder host: \`ghcr.io/rikiku/radioarchive-recorder:$VERSION\` and \`ghcr.io/rikiku/radioarchive-client:$VERSION\` (amd64 and arm64)."
+            echo
+            echo "Every file and image is attested by this release's run: \`gh attestation verify <file> --repo RIKIKU/RadioArchive\`, or \`oci://<image>\` in place of the file (docs/deploy.md)."
+          } > notes.md
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md --generate-notes \
+            ${PREVIOUS:+--notes-start-tag "$PREVIOUS"} --latest art/release-"$VERSION"/*

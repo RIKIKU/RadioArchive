@@ -1,0 +1,15 @@
+# RadioArchive recorder host settings. Attached to every release as
+# recorder-env.example. Save it as .env next to recorder-compose.yaml.
+# See https://github.com/RIKIKU/RadioArchive/blob/main/docs/deploy.md
+
+# Your RadioArchive server's public URL.
+SERVER_URL=https://radio.example.org
+# This recorder's client key, printed once on the server by:
+#   docker compose exec api radioarchive recorder add "North hill"
+# Keep this file readable by you only (chmod 600 .env).
+CLIENT_KEY=
+# Where the plugin sends, as config.json's plugin "port" says.
+# UDP_ADDR=127.0.0.1:9850
+# A recording the server couldn't take is kept on disk this long, then dropped.
+# QUEUE_MAX_AGE=24h
+TZ=Australia/Melbourne
