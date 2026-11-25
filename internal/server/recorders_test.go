@@ -122,8 +122,10 @@ func newEnv(t *testing.T) *env {
 	return newEnvAt(t, "0.1.0-test")
 }
 
-// newEnvAt runs a server at serverVersion.
-func newEnvAt(t *testing.T, serverVersion string) *env {
+// newEnvAt runs a server at serverVersion, with more of the API's options
+// (WithLimits). A request with X-Test-Remote comes from that address, as a
+// listener's or a proxy's would (ADR 0036).
+func newEnvAt(t *testing.T, serverVersion string, more ...server.Option) *env {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	// A database of its own: the catalogue and fireground channel numbers
@@ -161,9 +163,14 @@ func newEnvAt(t *testing.T, serverVersion string) *env {
 		t.Fatal(err)
 	}
 	admin.WithRetention(e.job).WithRecorders(e.rs).WithClock(e.clock.now)
-	e.api = server.New(st, log, server.WithRecorders(e.rs), server.WithAdmin(admin),
-		server.WithPublic(public.New(e.gate, log, public.WithLocation(deploymentTZ(t)))), server.WithApp(web.Serve(appBuild)))
-	e.srv = httptest.NewServer(e.api)
+	e.api = server.New(st, log, append([]server.Option{server.WithRecorders(e.rs), server.WithAdmin(admin),
+		server.WithPublic(public.New(e.gate, log, public.WithLocation(deploymentTZ(t)))), server.WithApp(web.Serve(appBuild))}, more...)...)
+	e.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a := r.Header.Get("X-Test-Remote"); a != "" {
+			r.RemoteAddr = a
+		}
+		e.api.ServeHTTP(w, r)
+	}))
 	t.Cleanup(func() {
 		e.srv.Close()
 		cancel()

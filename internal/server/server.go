@@ -11,6 +11,7 @@ import (
 
 	"github.com/RIKIKU/RadioArchive/internal/account"
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
+	"github.com/RIKIKU/RadioArchive/internal/limits"
 	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/web"
 )
@@ -65,6 +66,9 @@ func (k RouteKind) String() string {
 type Route struct {
 	Pattern string
 	Kind    RouteKind
+	// Limit is the heavy-use limit in front of a public route or page
+	// (ADR 0036); other routes have none.
+	Limit limits.Kind
 }
 
 // API is the API's handler, with the table of what it serves.
@@ -78,6 +82,11 @@ type API struct {
 	app    *http.ServeMux
 	routes []Route
 	shell  *web.App // writes the public API's pages (WithApp)
+	// limits stand in front of the public routes and pages (WithLimits),
+	// and limitAuth says which requests are signed-in admins', which
+	// they let through.
+	limits    *limits.Limits
+	limitAuth AdminAuthenticator
 }
 
 // Option adds to the API's handler.
@@ -154,14 +163,20 @@ func WithRecorders(rs *Recorders) Option {
 }
 
 // WithPublic serves the public API, every route of which reads through the
-// gate (R32), and sees no cookie or credential (anonymous).
+// gate (R32), and sees no cookie or credential (anonymous). Each is behind
+// its heavy-use limit, once WithLimits is given.
 func WithPublic(p *public.API) Option {
 	return func(a *API) {
 		for _, r := range p.Routes() {
-			a.handle(PublicRoute, r.Pattern, anonymous(r.Handler))
+			k := kindOf(r.Pattern, r.Limit)
+			a.handle(PublicRoute, r.Pattern, a.limited(k, anonymous(r.Handler)))
+			a.routes[len(a.routes)-1].Limit = k
 		}
+		// A page reads through the gate as a request does: it's under the
+		// request limit (R73).
 		for _, pg := range p.Pages() {
-			a.handle(PageRoute, pg.Pattern, a.page(pg))
+			a.handle(PageRoute, pg.Pattern, a.limited(limits.Requests, a.page(pg)))
+			a.routes[len(a.routes)-1].Limit = limits.Requests
 		}
 	}
 }

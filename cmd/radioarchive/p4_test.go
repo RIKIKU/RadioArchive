@@ -19,6 +19,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/RIKIKU/RadioArchive/internal/gate"
+	"github.com/RIKIKU/RadioArchive/internal/limits"
 	"github.com/RIKIKU/RadioArchive/internal/oidcclient/oidctest"
 	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/internal/retention"
@@ -86,7 +87,12 @@ func binaryServer(t *testing.T, ctx context.Context, authentikURL string, more e
 		t.Fatal(err)
 	}
 	t.Setenv("RECORDINGS_DIR", dir)
-	if api, _, err = apiHandler(st, log, rs, g, job, sc); err != nil {
+	// The limits are the defaults unless more sets them (ADR 0036).
+	lc, err := limits.FromEnv(env.get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if api, _, err = apiHandler(st, log, rs, g, job, sc, lc); err != nil {
 		t.Fatal(err)
 	}
 	return st, logs, srv, api

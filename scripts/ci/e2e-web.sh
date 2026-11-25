@@ -123,8 +123,11 @@ api_token=made-up-e2e-web-authentik-api-token-0123456789
 "$tmp/fakeauthentik" -addr "127.0.0.1:$akport" -secret "$secret" -email "$admin_email" -api-token "$api_token" >"$tmp/authentik.log" 2>&1 &
 ak=$!
 # The deployment's time zone isn't the browsers' (UTC), so the Recent calls
-# page's tests show its times are TZ's (section 13).
+# page's tests show its times are TZ's (section 13). Every test comes from
+# 127.0.0.1, so the heavy-use limits are raised (SPEC.md section 6.11, ADR
+# 0036).
 TZ=Australia/Melbourne DATABASE_URL=$DATABASE_URL LISTEN_ADDR="127.0.0.1:$port" RECORDINGS_DIR="$tmp/recordings" RECORDER_NOTICE_AFTER=3s \
+	LIMIT_REQUESTS=100000 LIMIT_PLAYBACK=100000 \
 	APP_URL="http://127.0.0.1:$port" AUTHENTIK_URL="http://127.0.0.1:$akport" OIDC_CLIENT_SECRET="$secret" INITIAL_ADMIN_EMAIL="$admin_email" \
 	AUTHENTIK_API_TOKEN="$api_token" "$tmp/radioarchive" serve >"$tmp/api.log" 2>&1 &
 pid=$!
