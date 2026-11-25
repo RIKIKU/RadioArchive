@@ -1,6 +1,8 @@
 <script lang="ts">
-	// The Settings page (SPEC.md R88; ADR 0005, 0027), an admin page: the
-	// retention period in days, and the recordings volume's state.
+	// The Settings page (SPEC.md R88, R54; ADR 0005, 0027, 0032), an admin
+	// page: the retention period in days, the recordings volume's state, and
+	// how long the audit log keeps its entries (owner, 2026-11-25), which
+	// asks first only when a shorter period deletes entries, naming how many.
 	//
 	// Lengthening the period just saves. Shortening it is answered 409
 	// confirm_shorter_retention with how many recordings the next nightly
@@ -36,10 +38,104 @@
 		typed = String(a.body.days);
 	}
 
+	// The audit log's own period (owner, 2026-11-25; ADR 0032): the same
+	// form, asking first only when a shorter period deletes entries.
+	interface AuditRetention {
+		days: number;
+		default_days: number;
+		min_days: number;
+		max_days: number;
+		next_run: string;
+		entries: number;
+		oldest: string | null;
+	}
+	interface AuditShorter extends AdminError {
+		days: number;
+		entries: number;
+	}
+	let audit: AuditRetention | undefined = $state();
+	let auditTyped = $state('');
+	let auditProblem = $state('');
+	let auditStatus = $state('');
+	let auditSaving = $state(false);
+	let auditAsking: { days: number; entries: number } | undefined = $state();
+
+	async function loadAudit() {
+		const a = await admin<AuditRetention>('GET', '/audit/retention');
+		if (a.access !== 'open' || !a.body) return;
+		audit = a.body;
+		auditTyped = String(a.body.days);
+	}
+
 	onMount(() => {
 		void deploymentZone().then((z) => (timeZone = z));
 		void load();
+		void loadAudit();
 	});
+
+	async function focusAudit() {
+		await tick();
+		document.getElementById('audit-days')?.focus();
+	}
+
+	async function sendAudit(days: number, confirm: boolean) {
+		auditSaving = true;
+		const a = await admin<AuditRetention | AuditShorter>('PUT', '/audit/retention', confirm ? { days, confirm } : { days });
+		auditSaving = false;
+		if (a.status === 409 && (a.body as AuditShorter | undefined)?.error === 'confirm_shorter_audit_retention') {
+			const c = a.body as AuditShorter;
+			auditAsking = { days: c.days, entries: c.entries };
+			return;
+		}
+		if (a.access === 'sign-in' || a.access === 'not-admin') {
+			access = a.access;
+			return;
+		}
+		if (a.status === 400) {
+			auditProblem = (a.body as AdminError | undefined)?.message ?? "That isn't a number of days.";
+			await focusAudit();
+			return;
+		}
+		if (a.access !== 'open' || !a.body) {
+			auditStatus = "Couldn't save just now. Nothing changed. Try again in a minute.";
+			return;
+		}
+		audit = a.body as AuditRetention;
+		auditTyped = String(audit.days);
+		auditAsking = undefined;
+		auditStatus = `Saved: audit log entries are kept for ${plural(audit.days, 'day')}.`;
+	}
+
+	async function saveAudit(e: SubmitEvent) {
+		e.preventDefault();
+		if (!audit) return;
+		auditStatus = '';
+		auditAsking = undefined;
+		const raw = auditTyped.trim();
+		const days = Number(raw);
+		if (raw === '') auditProblem = 'Enter how many days audit log entries are kept.';
+		else if (!/^\d+$/.test(raw) || days < audit.min_days || days > audit.max_days)
+			auditProblem = `Enter whole days from ${audit.min_days} to ${audit.max_days.toLocaleString('en-AU')}.`;
+		else auditProblem = '';
+		if (auditProblem) {
+			await focusAudit();
+			return;
+		}
+		if (days === audit.days) {
+			auditStatus = `Nothing to change: audit log entries are kept for ${plural(days, 'day')}.`;
+			return;
+		}
+		await sendAudit(days, false);
+	}
+
+	async function cancelAudit() {
+		auditAsking = undefined;
+		if (audit) {
+			auditTyped = String(audit.days);
+			auditStatus = `Nothing changed: audit log entries are still kept for ${plural(audit.days, 'day')}.`;
+		}
+		await focusAudit();
+	}
 
 	const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString('en-AU')} ${n === 1 ? one : many}`;
 
@@ -160,6 +256,48 @@
 		{:else}
 			<p class="meta">The recordings volume couldn't be measured just now.</p>
 		{/if}
+
+		{#if audit}
+			<h2>Audit log</h2>
+			<form class="retention" novalidate onsubmit={saveAudit}>
+				<div class="field">
+					<label for="audit-days">Keep audit log entries (days) <span class="required">required</span></label>
+					<input
+						id="audit-days"
+						type="text"
+						inputmode="numeric"
+						pattern="[0-9]*"
+						autocomplete="off"
+						required
+						bind:value={auditTyped}
+						aria-invalid={auditProblem ? 'true' : undefined}
+						aria-describedby="audit-days-hint{auditProblem ? ' audit-days-error' : ''}"
+					/>
+					<p class="field-hint" id="audit-days-hint">
+						From {audit.min_days} to {audit.max_days.toLocaleString('en-AU')} days; {audit.default_days} by default. Each night the entries older than this are deleted, and one entry says how many went.
+						{#if audit.oldest}The log holds {plural(audit.entries, 'entry', 'entries')}, the oldest from {whenOf(audit.oldest, timeZone)}.{:else}The log is empty.{/if}
+					</p>
+					{#if auditProblem}<p class="field-error" id="audit-days-error">{auditProblem}</p>{/if}
+				</div>
+				<button type="submit" disabled={auditSaving} aria-label="Save the audit log's retention">Save</button>
+			</form>
+
+			{#if auditAsking}
+				<Confirm
+					title="Delete {plural(auditAsking.entries, 'audit log entry', 'audit log entries')}?"
+					confirmLabel="Shorten to {plural(auditAsking.days, 'day')}"
+					level={3}
+					busy={auditSaving}
+					onconfirm={() => sendAudit(auditAsking!.days, true)}
+					oncancel={cancelAudit}
+				>
+					<p>
+						Keeping audit log entries for {plural(auditAsking.days, 'day')} instead of {plural(audit.days, 'day')} deletes {plural(auditAsking.entries, 'entry', 'entries')} at the next nightly run ({whenOf(audit.next_run, timeZone)}). They can't be brought back.
+					</p>
+				</Confirm>
+			{/if}
+			<p class="audit-status" role="status">{auditStatus}</p>
+		{/if}
 	{:else}
 		<p class="meta" role="status">Loading…</p>
 	{/if}
@@ -176,10 +314,12 @@
 	.retention input {
 		width: var(--field-narrow);
 	}
-	.status {
+	.status,
+	.audit-status {
 		margin: var(--space-sm) 0 var(--space-xl);
 	}
-	.status:empty {
+	.status:empty,
+	.audit-status:empty {
 		display: none;
 	}
 </style>

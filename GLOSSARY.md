@@ -137,7 +137,7 @@ The account that signs in with the deployment's configured initial admin address
 _Avoid_: Owner, root, bootstrap admin
 
 **Audit log**:
-The radio's record of every change an admin makes: who made it, how (browser, module or import), when, and each changed field before and after. Kept a long time, never rewritten, and read only by admins.
+The radio's record of every change an admin makes: who made it, how (browser, module or import), when, and each changed field before and after. Kept for its own period (two years unless an admin changes it), never rewritten, and read only by admins; the nightly run deletes older entries and records how many went.
 _Avoid_: History, activity log, changelog
 
 **Setup**:

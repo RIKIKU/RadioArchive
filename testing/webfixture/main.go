@@ -11,7 +11,8 @@
 // call patched with 1003, which unit search must never find (ADR 0019). It
 // writes the rows directly: the fixture's setup is test data, put in before
 // the tests start, as the import (issue #115) will put a real setup in.
-// Running it again changes nothing.
+// Running it again changes nothing. It also gives the audit log a made-up
+// past for the Audit log page's tests (history, below).
 //
 // Given a recorder's name (one `radioarchive recorder add` made), it also
 // attaches the recorder as the fixture's `Bench`: its `ex` is system EX, for
@@ -101,6 +102,38 @@ VALUES (1, 5001, 5001, 'Engine 1'), (1, 5100, 5199, 'Portables'), (1, 9003, 9003
        (1, 9000, 9009, 'Covert fleet')
 ON CONFLICT DO NOTHING;
 `
+
+// history is the Audit log page's made-up past (issue #112; ADR 0029,
+// 0032): changes by the fixture's admin with a browser, by a second admin
+// with the module, an import and a browser, and the nightly run's prune,
+// days before now, so the page's filters (who, kind, thing, days) have
+// something of each to find whatever the other tests change meanwhile. An
+// entry is written directly, as the import (issue #115) will write its
+// own: the table refuses changes, not additions. It's added once.
+const history = `
+INSERT INTO audit_log (at, issuer, subject, admin_name, admin_email, via, kind, thing, label, action, changes)
+SELECT now() - make_interval(days => d), i, s, n, e, v, k, th, l, a, c::jsonb
+FROM (VALUES
+  (40, '', 'system', 'System', '', 'nightly', 'audit', '', 'Audit log', 'deleted',
+   '[{"field":"entries","before":12,"after":null},{"field":"before","before":"2024-10-16T03:00:00Z","after":null},{"field":"days","before":730,"after":null}]'),
+  (10, 'http://fixture.example.test', 'fixture-second-admin', 'Second Admin', 'second-admin@example.test', 'module',
+   'talkgroup', '1/1002', 'EX 1002 FG 41', 'changed', '[{"field":"name","before":"Fireground","after":"Fireground 41"}]'),
+  (9, 'http://fixture.example.test', 'fixture-second-admin', 'Second Admin', 'second-admin@example.test', 'import',
+   'unit', '1/5100-5199', 'EX 5100-5199 Portables', 'created',
+   '[{"field":"system_id","before":null,"after":1},{"field":"from","before":null,"after":5100},{"field":"to","before":null,"after":5199},{"field":"alias","before":null,"after":"Portables"}]'),
+  (8, 'http://fixture.example.test', 'fixture-admin', 'Fixture Admin', 'fixture-admin@example.test', 'browser',
+   'attachment', 'Bench/ex', 'Bench / ex', 'created',
+   '[{"field":"recorder","before":null,"after":"Bench"},{"field":"short_name","before":null,"after":"ex"},{"field":"system_id","before":null,"after":1},{"field":"system_label","before":null,"after":"EX"}]'),
+  (7, 'http://fixture.example.test', 'fixture-admin', 'Fixture Admin', 'fixture-admin@example.test', 'browser',
+   'talkgroup', '1/1003', 'EX 1003 ADMIN', 'changed', '[{"field":"state","before":"public","after":"hidden"}]'),
+  (6, 'http://fixture.example.test', 'fixture-admin', 'Fixture Admin', 'fixture-admin@example.test', 'browser',
+   'recorder', 'Bench', 'Bench', 'changed', '[{"field":"quiet_after_minutes","before":null,"after":1}]'),
+  (5, 'http://fixture.example.test', 'fixture-second-admin', 'Second Admin', 'second-admin@example.test', 'browser',
+   'account', 'fixture-listener', 'Fixture Listener', 'changed', '[{"field":"sessions","before":2,"after":0}]'),
+  (4, 'http://fixture.example.test', 'fixture-admin', 'Fixture Admin', 'fixture-admin@example.test', 'browser',
+   'talkgroup', '1/1001', 'EX 1001 DISP N', 'changed', '[{"field":"label","before":"DISP","after":"DISP N"}]')
+) AS h (d, i, s, n, e, v, k, th, l, a, c)
+WHERE NOT EXISTS (SELECT 1 FROM audit_log WHERE subject = 'fixture-second-admin')`
 
 // attach is the recorder's attachment: its `ex` is system EX.
 const attach = `
@@ -231,6 +264,10 @@ func main() {
 	}
 	if _, err := conn.Exec(ctx, fixture); err != nil {
 		fmt.Fprintln(os.Stderr, "webfixture:", err)
+		os.Exit(1)
+	}
+	if _, err := conn.Exec(ctx, history); err != nil {
+		fmt.Fprintln(os.Stderr, "webfixture: the audit log's history:", err)
 		os.Exit(1)
 	}
 	if len(os.Args) == 3 {

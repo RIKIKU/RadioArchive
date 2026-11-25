@@ -23,7 +23,7 @@ Everything here is the implementer's choice (spec "How to use this spec", item 6
 | **Before** | `au.Lock(kind, thing)` takes a transaction-level advisory lock on the thing before its "before" is read, so two admins changing one thing at once each record what the other left |
 | **Nothing changed** | A request that changes nothing (a refusal, a PATCH to the values already there, ending the sessions of someone with none) writes no entry |
 | **Not audited** | Reads, the audit log's included, and playback (R34, R54) |
-| **Kept** | Retention never touches it (R54). Triggers refuse `UPDATE`, `DELETE` and `TRUNCATE` on it, so nothing rewrites an entry |
+| **Kept** | Recordings' retention never touches it (R54). Triggers refuse `UPDATE`, `DELETE` and `TRUNCATE` on it, so nothing rewrites an entry. Amended 2026-11-25 (owner): entries older than the audit log's own period (730 days by default) are deleted by the nightly run, the one `DELETE` the trigger lets through; [ADR 0032](0032-the-audit-log-page-and-its-retention.md) |
 | **Not telemetry** | Entries hold names, because only admins read them. Logs, metrics and traces still never do (R90, A32): handlers log the admin's account ID and the things' IDs |
 | **The read API** | `GET /api/v1/admin/audit`: newest first, `limit` (1-200, default 50), `cursor` (the answer's `next`), and the filters `who` (the account's ID), `kind`, `thing`, `since` and `until` (RFC 3339, `until` exclusive) |
 | **The harness** | `cmd/radioarchive`'s `TestIntegrationAuditHarness`: through a real sign-in, a probe for every state-changing admin route of the binary, each a change it finds in the log with who, how and when, and a refused request that adds nothing. It fails while a route has no probe |
@@ -54,6 +54,8 @@ What the transaction can't do is make a new handler use it. As A10's harness doe
 
 R54 keeps the audit log "a long time (not subject to recording retention)". Retention deletes calls, transmissions and rejected-call counts only, and the table refuses `UPDATE`, `DELETE` and `TRUNCATE` from any role, the API's included. Nothing is pruned in M4. R89's nightly `pg_dump` (M6) dumps the `radioarchive` database with only call data excluded, so the audit log is in it with the setup.
 
+**Amended 2026-11-25.** The owner decided on issue #118 that old entries are deleted, and the prune came in M4 with the page rather than M6: the setting `AUDIT_RETENTION_DAYS` (730 days by default, 90 to 3,650, on the Settings page), and the nightly run's `audit_log_prune()`, which deletes the entries older than it and writes one entry of the system's saying how many went and from before when. Migration 00026 changes the trigger so that only that function's `DELETE` goes through, and only for entries past the period; `UPDATE`, `TRUNCATE` and every other `DELETE` are still refused. Recordings' retention still never touches the log. M6's backup is unchanged: the log is in the nightly dump with what the period has kept. See [ADR 0032](0032-the-audit-log-page-and-its-retention.md).
+
 An account deleted later (issue #118's open question 2, option a) keeps its entries, with the name and email as they were.
 
 ## Paging
@@ -82,14 +84,14 @@ The Audit log page (R84), with these filters and each change in words, needs the
 ## Open points
 
 1. **The server shell's recorder commands.** `radioarchive recorder add`, `rotate-key` and `retire` change recorders but aren't admin API routes and have no signed-in admin. Auditing them as "server shell" needs a `via` of `shell` and an actor with no account (the host's user, say). Left for a later slice; the table's checks would gain the value then.
-2. **How long "a long time" is.** Nothing is ever deleted. If the owner wants a limit (years), it's a nightly prune in M6 and a change to the triggers.
+2. **How long "a long time" is.** ~~Nothing is ever deleted. If the owner wants a limit (years), it's a nightly prune in M6 and a change to the triggers.~~ Decided 2026-11-25 (owner, issue #118): old entries are deleted, after 730 days by default; built in M4 with the page, not M6 ([ADR 0032](0032-the-audit-log-page-and-its-retention.md)).
 
 ## Consequences
 
 - Every admin change has an entry, and every entry a change.
 - Admins can read who changed what, how and when, through the API now and the page next.
 - A new state-changing admin route fails CI until it has an audit probe.
-- The database grows by one small row an admin change, never shrinking.
+- The database grows by one small row an admin change, ~~never shrinking~~ until the entry is past the audit log's period (amended 2026-11-25, ADR 0032).
 - `account.Admin` carries `Via`; an admin authenticator must say how a request was signed in, or its changes fail.
 - `retention.Job.SetDays`, `store.SetAccountRole` and `store.EndAccountListenerSessions` take the admin making the change.
 
@@ -103,7 +105,7 @@ The Audit log page (R84), with these filters and each change in words, needs the
 | A role change's entry, with the account's name; refused ones and no-ops write nothing | `TestIntegrationRoleChangesAudited` |
 | **A26**, server half: renaming 1001 with a session, hiding it with a bearer request (the module's stand-in until issue #116) and changing an attachment make three entries, each with who, how and when | `internal/server/audit_test.go`, `TestIntegrationA26Audit` |
 | Playing a recording, reading the talkgroup table, every admin read and the audit log add nothing; nor do refusals and no-ops | `TestIntegrationAuditNotForReads`; the harness, for every admin `GET` the binary serves |
-| The nightly retention run, ten years on, leaves the audit log as it was | `TestIntegrationAuditKeptByRetention` |
+| ~~The nightly retention run, ten years on, leaves the audit log as it was~~ Recordings' retention leaves the audit log alone; the audit log's own period prunes it (amended 2026-11-25, ADR 0032) | `TestIntegrationAuditRetention` (was `TestIntegrationAuditKeptByRetention`) |
 | Every state-changing admin route of the binary has a probe; each change through a real browser sign-in is found with who, how and when; each refused request adds nothing | `cmd/radioarchive/audit_test.go`, `TestIntegrationAuditHarness` (fails with a probe removed, or a handler's `Record` skipped) |
 | No log line holds a name an entry holds (A32) | `TestIntegrationAuditHarness` |
 | Anonymous use, the admin API's included, adds no row (P4) | `cmd/radioarchive/p4_test.go`, unchanged |

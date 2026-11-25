@@ -10,6 +10,9 @@
 //   attached, shows in R12's words.
 // - R88: lengthening retention just saves; shortening asks, naming the
 //   count, and saves once confirmed.
+// - A26's browser half (issue #112): renaming 1001 and moving Bench's
+//   attachment show in the Audit log page; the audit log's own period
+//   saves (ADR 0032).
 import { test, expect, type Page } from '@playwright/test';
 import { clientDisconnected, listen, recorderDeaf, sendCalls, tone } from './live.ts';
 import { recorderCard, signIn } from './admin.ts';
@@ -103,4 +106,63 @@ test('@live R88: lengthening retention just saves; shortening names the count, a
 	} finally {
 		if ((await retention()) !== 30) await page.request.put('/api/v1/admin/retention', { data: { days: 30, confirm: true } });
 	}
+});
+
+// A26, the browser half (issue #112): changes made in the browser are in
+// the Audit log page with who, how and when. (The module's half is the
+// fixture's made-up entry here, audit.spec.ts's; a real one through the
+// module is issue #117's.) Then the audit log's own period (ADR 0032): a
+// longer one saves, and a shorter one that deletes nothing saves without
+// asking; both are in the log as settings changes.
+test('@live A26, the browser half: renaming 1001 and moving an attachment show in the Audit log; the audit period saves', async ({ page }) => {
+	await signIn(page, 'admin');
+	const tg = '/api/v1/admin/systems/1/talkgroups/1001';
+	const att = '/api/v1/admin/recorders/Bench/attachments/ex';
+	const start = Date.now();
+	try {
+		expect((await page.request.patch(tg, { data: { label: 'DISP North' } })).ok()).toBe(true);
+		expect((await page.request.post('/api/v1/admin/systems', { data: { id: 2, label: 'EX-2', name: 'Example network two' } })).ok()).toBe(true);
+		expect((await page.request.put(att, { data: { system_id: 2 } })).ok()).toBe(true);
+	} finally {
+		await page.request.put(att, { data: { system_id: 1 } });
+		await page.request.delete('/api/v1/admin/systems/2');
+		await page.request.patch(tg, { data: { label: 'DISP N' } });
+	}
+	const table = page.getByRole('table', { name: 'Audit log' });
+	await page.goto('/admin/audit?kind=attachment');
+	const moved = table.getByRole('row').filter({ hasText: 'Bench / ex moved from EX to EX-2' }).first();
+	await expect(moved).toContainText('Fixture Admin');
+	await expect(moved).toContainText('Browser');
+	const at = Date.parse((await moved.locator('time').getAttribute('datetime'))!);
+	expect(at).toBeGreaterThanOrEqual(start - 2000);
+	expect(at).toBeLessThanOrEqual(Date.now() + 2000);
+	await expect(table.getByRole('row').filter({ hasText: 'Bench / ex moved from EX-2 to EX' }).first()).toBeVisible();
+	await page.goto('/admin/audit?kind=talkgroup&thing=1/1001');
+	const renamed = table.getByRole('row').filter({ hasText: 'Label DISP N → DISP North' }).first();
+	await expect(renamed).toContainText('Fixture Admin');
+	await expect(renamed).toContainText('Browser');
+	await expect(renamed.locator('time')).toBeVisible();
+
+	const period = async () => ((await (await page.request.get('/api/v1/admin/audit/retention')).json()) as { days: number }).days;
+	await page.goto('/admin/settings');
+	const days = page.getByRole('textbox', { name: 'Keep audit log entries (days) required' });
+	const save = page.getByRole('button', { name: "Save the audit log's retention" });
+	await expect(days).toHaveValue('730');
+	try {
+		await days.fill('1000');
+		await save.click();
+		await expect(page.locator('p.audit-status')).toHaveText('Saved: audit log entries are kept for 1,000 days.');
+		expect(await period()).toBe(1000);
+		// Shorter, but nothing is that old: no question.
+		await days.fill('730');
+		await save.click();
+		await expect(page.locator('p.audit-status')).toHaveText('Saved: audit log entries are kept for 730 days.');
+		await expect(page.getByRole('region', { name: /^Delete/ })).toHaveCount(0);
+	} finally {
+		if ((await period()) !== 730) await page.request.put('/api/v1/admin/audit/retention', { data: { days: 730, confirm: true } });
+	}
+	await page.goto('/admin/audit?kind=retention');
+	const set = table.getByRole('row').filter({ hasText: 'Audit log retention' });
+	await expect(set.first()).toContainText('Days 1000 → 730');
+	await expect(set.nth(1)).toContainText('Days 730 → 1000');
 });
