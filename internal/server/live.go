@@ -323,6 +323,7 @@ func (s *session) callStart(ctx context.Context, id cp.CallID, e event) error {
 		return protoErr(websocket.StatusInternalError, "call_start: %v", err)
 	}
 	s.rs.Stat.admitted(adm)
+	s.rs.touchHeard(ctx, adm, *e.StartTimeMS)
 	if adm.Rejected != "" {
 		// Its frames are refused (R12, R17, R18). The client isn't told: its
 		// recording's upload gets the same answer.

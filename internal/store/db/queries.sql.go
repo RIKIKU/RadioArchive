@@ -114,6 +114,187 @@ func (q *Queries) AdminRecording(ctx context.Context, id pgtype.UUID) (AdminReco
 	return i, err
 }
 
+const adminTalkgroupCalls = `-- name: AdminTalkgroupCalls :many
+SELECT c.id, c.talkgroup, c.patched_talkgroups, c.started_at, c.ended_at, c.recording_size,
+       call_state($1::bigint, c.talkgroup, c.patched_talkgroups)::talkgroup_state AS state
+FROM ((SELECT o.id, o.talkgroup, o.patched_talkgroups, o.started_at, o.ended_at, o.recording_size
+       FROM calls o
+       WHERE o.talkgroup = $2::integer AND o.system_id = $1::bigint
+         AND (o.started_at, o.id) < ($3::timestamptz, $4::uuid)
+       ORDER BY o.started_at DESC, o.id DESC
+       LIMIT $5)
+      UNION ALL
+      (SELECT p.id, p.talkgroup, p.patched_talkgroups, p.started_at, p.ended_at, p.recording_size
+       FROM calls p
+       WHERE p.patched_talkgroups @> ARRAY[$2::integer]
+         AND p.talkgroup <> $2::integer AND p.system_id = $1::bigint
+         AND (p.started_at, p.id) < ($3::timestamptz, $4::uuid)
+       ORDER BY p.started_at DESC, p.id DESC
+       LIMIT $5)) c
+ORDER BY c.started_at DESC, c.id DESC
+LIMIT $5
+`
+
+type AdminTalkgroupCallsParams struct {
+	SystemID  int64
+	Talkgroup int32
+	CursorAt  pgtype.Timestamptz
+	CursorID  pgtype.UUID
+	RowLimit  int32
+}
+
+type AdminTalkgroupCallsRow struct {
+	ID                pgtype.UUID
+	Talkgroup         int32
+	PatchedTalkgroups []int32
+	StartedAt         pgtype.Timestamptz
+	EndedAt           pgtype.Timestamptz
+	RecordingSize     *int64
+	State             TalkgroupState
+}
+
+// A talkgroup's stored calls, newest first, whatever their state (R34):
+// those on it and those patched with it (R16), started before the cursor
+// (with the call ID breaking ties). Each half reads its own index and stops
+// at the page; state is call_state's, now.
+func (q *Queries) AdminTalkgroupCalls(ctx context.Context, arg AdminTalkgroupCallsParams) ([]AdminTalkgroupCallsRow, error) {
+	rows, err := q.db.Query(ctx, adminTalkgroupCalls,
+		arg.SystemID,
+		arg.Talkgroup,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminTalkgroupCallsRow
+	for rows.Next() {
+		var i AdminTalkgroupCallsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Talkgroup,
+			&i.PatchedTalkgroups,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.RecordingSize,
+			&i.State,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const adminTalkgroupTable = `-- name: AdminTalkgroupTable :many
+WITH counts AS (
+    SELECT n.system_id, n.talkgroup_id, sum(n.calls)::bigint AS calls
+    FROM (SELECT c.system_id, c.talkgroup AS talkgroup_id, count(*) AS calls
+          FROM calls c
+          WHERE c.started_at >= $1
+          GROUP BY c.system_id, c.talkgroup
+          UNION ALL
+          SELECT c.system_id, p.p, count(*)
+          FROM calls c
+          CROSS JOIN LATERAL (SELECT DISTINCT x AS p FROM unnest(c.patched_talkgroups) AS x
+                              WHERE x <> c.talkgroup) p
+          WHERE c.started_at >= $1 AND c.patched_talkgroups <> '{}'
+          GROUP BY c.system_id, p.p
+          UNION ALL
+          SELECT j.system_id, j.talkgroup, count(*)
+          FROM rejected_calls j
+          WHERE j.reason = 'ignored_talkgroup' AND j.start_time >= $2::bigint
+          GROUP BY j.system_id, j.talkgroup) n
+    GROUP BY n.system_id, n.talkgroup_id
+)
+SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.unreviewed,
+       ARRAY(SELECT x.name FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
+             WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
+             ORDER BY x.sort_order, x.name)::text[] AS groups,
+       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel,
+       t.created_at, t.updated_at,
+       l.last_heard_at, COALESCE(n.calls, 0)::bigint AS calls_since
+FROM talkgroups t
+LEFT JOIN tags g ON g.id = t.tag_id
+LEFT JOIN talkgroup_last_heard l ON l.system_id = t.system_id AND l.talkgroup_id = t.talkgroup_id
+LEFT JOIN counts n ON n.system_id = t.system_id AND n.talkgroup_id = t.talkgroup_id
+ORDER BY t.system_id, t.talkgroup_id
+`
+
+type AdminTalkgroupTableParams struct {
+	Since     pgtype.Timestamptz
+	SinceUnix int64
+}
+
+type AdminTalkgroupTableRow struct {
+	SystemID          int64
+	TalkgroupID       int32
+	Label             string
+	Name              string
+	Tag               *string
+	State             TalkgroupState
+	Unreviewed        bool
+	Groups            []string
+	DelayMinutes      int32
+	Alert             *string
+	LedColour         *string
+	SortOrder         int32
+	FiregroundChannel *int32
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	LastHeardAt       pgtype.Timestamptz
+	CallsSince        int64
+}
+
+// Every talkgroup of every system, with its last heard and how often it
+// was heard since `since`: a stored call that started then or later, as
+// its own talkgroup or in its patch, or a call refused because it's
+// ignored. Hidden and ignored talkgroups alike: this is the admin's.
+// Each kind is counted on its own and the counts added, so the planner
+// aggregates a month of calls in parallel (ADR 0026).
+func (q *Queries) AdminTalkgroupTable(ctx context.Context, arg AdminTalkgroupTableParams) ([]AdminTalkgroupTableRow, error) {
+	rows, err := q.db.Query(ctx, adminTalkgroupTable, arg.Since, arg.SinceUnix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminTalkgroupTableRow
+	for rows.Next() {
+		var i AdminTalkgroupTableRow
+		if err := rows.Scan(
+			&i.SystemID,
+			&i.TalkgroupID,
+			&i.Label,
+			&i.Name,
+			&i.Tag,
+			&i.State,
+			&i.Unreviewed,
+			&i.Groups,
+			&i.DelayMinutes,
+			&i.Alert,
+			&i.LedColour,
+			&i.SortOrder,
+			&i.FiregroundChannel,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.LastHeardAt,
+			&i.CallsSince,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const attach = `-- name: Attach :one
 INSERT INTO attachments (recorder_id, short_name, system_id)
 VALUES ($1, $2, $3)
@@ -2550,6 +2731,35 @@ type TouchRecorderCallParams struct {
 // call.
 func (q *Queries) TouchRecorderCall(ctx context.Context, arg TouchRecorderCallParams) error {
 	_, err := q.db.Exec(ctx, touchRecorderCall, arg.At, arg.ID)
+	return err
+}
+
+const touchTalkgroupsHeard = `-- name: TouchTalkgroupsHeard :exec
+
+INSERT INTO talkgroup_last_heard (system_id, talkgroup_id, last_heard_at)
+SELECT t.system_id, t.talkgroup_id, $1::timestamptz
+FROM talkgroups t
+WHERE t.system_id = $2 AND t.talkgroup_id = ANY ($3::integer[])
+ORDER BY t.talkgroup_id
+ON CONFLICT (system_id, talkgroup_id) DO UPDATE
+SET last_heard_at = EXCLUDED.last_heard_at
+WHERE talkgroup_last_heard.last_heard_at < EXCLUDED.last_heard_at
+`
+
+type TouchTalkgroupsHeardParams struct {
+	At         pgtype.Timestamptz
+	SystemID   int64
+	Talkgroups []int32
+}
+
+// The admin table (R50; ADR 0026): every talkgroup, last heard and calls
+// in the last 30 days, and a talkgroup's calls whatever their state (R34).
+// Records that these talkgroups of the system were heard at the given
+// time. IDs the system doesn't list are skipped; it never moves back.
+// In ID order, so two calls touching the same talkgroups lock them in the
+// same order.
+func (q *Queries) TouchTalkgroupsHeard(ctx context.Context, arg TouchTalkgroupsHeardParams) error {
+	_, err := q.db.Exec(ctx, touchTalkgroupsHeard, arg.At, arg.SystemID, arg.Talkgroups)
 	return err
 }
 

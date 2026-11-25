@@ -492,3 +492,23 @@ func (rs *Recorders) touchCall(ctx context.Context, rec store.Recorder, startMS 
 		rs.log.Warn("couldn't record the recorder's last call", "recorder", rec.Name, "error", store.SafeError(err))
 	}
 }
+
+// touchHeard records the admission's talkgroups as heard on a call that
+// started at startMS (the client's clock), or now, if that's earlier: the
+// admin table's last heard (ADR 0026). After the call's transaction, as
+// touchCall is, so it holds no talkgroup's row while a recording is stored.
+// A failure is logged with IDs only: the call matters more.
+func (rs *Recorders) touchHeard(ctx context.Context, adm store.Admission, startMS int64) {
+	if len(adm.HeardTalkgroups) == 0 {
+		return
+	}
+	at := rs.sig.now()
+	if t := time.UnixMilli(startMS); startMS > 0 && t.Before(at) {
+		at = t
+	}
+	err := rs.st.TouchTalkgroupsHeard(ctx, db.TouchTalkgroupsHeardParams{SystemID: adm.HeardSystem,
+		Talkgroups: adm.HeardTalkgroups, At: pgtype.Timestamptz{Time: at.UTC(), Valid: true}})
+	if err != nil {
+		rs.log.Warn("couldn't record when talkgroups were last heard", "system", adm.HeardSystem, "error", store.SafeError(err))
+	}
+}

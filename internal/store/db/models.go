@@ -266,6 +266,12 @@ type TalkgroupGroup struct {
 	GroupID     int64
 }
 
+type TalkgroupLastHeard struct {
+	SystemID    int64
+	TalkgroupID int32
+	LastHeardAt pgtype.Timestamptz
+}
+
 type Transmission struct {
 	CallID     pgtype.UUID
 	OffsetMs   int32

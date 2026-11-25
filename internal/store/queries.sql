@@ -618,6 +618,87 @@ CROSS JOIN LATERAL (
     LIMIT sqlc.arg(per_unit)
 ) c;
 
+-- The admin table (R50; ADR 0026): every talkgroup, last heard and calls
+-- in the last 30 days, and a talkgroup's calls whatever their state (R34).
+
+-- name: TouchTalkgroupsHeard :exec
+-- Records that these talkgroups of the system were heard at the given
+-- time. IDs the system doesn't list are skipped; it never moves back.
+-- In ID order, so two calls touching the same talkgroups lock them in the
+-- same order.
+INSERT INTO talkgroup_last_heard (system_id, talkgroup_id, last_heard_at)
+SELECT t.system_id, t.talkgroup_id, sqlc.arg(at)::timestamptz
+FROM talkgroups t
+WHERE t.system_id = sqlc.arg(system_id) AND t.talkgroup_id = ANY (sqlc.arg(talkgroups)::integer[])
+ORDER BY t.talkgroup_id
+ON CONFLICT (system_id, talkgroup_id) DO UPDATE
+SET last_heard_at = EXCLUDED.last_heard_at
+WHERE talkgroup_last_heard.last_heard_at < EXCLUDED.last_heard_at;
+
+-- name: AdminTalkgroupTable :many
+-- Every talkgroup of every system, with its last heard and how often it
+-- was heard since `since`: a stored call that started then or later, as
+-- its own talkgroup or in its patch, or a call refused because it's
+-- ignored. Hidden and ignored talkgroups alike: this is the admin's.
+-- Each kind is counted on its own and the counts added, so the planner
+-- aggregates a month of calls in parallel (ADR 0026).
+WITH counts AS (
+    SELECT n.system_id, n.talkgroup_id, sum(n.calls)::bigint AS calls
+    FROM (SELECT c.system_id, c.talkgroup AS talkgroup_id, count(*) AS calls
+          FROM calls c
+          WHERE c.started_at >= sqlc.arg(since)
+          GROUP BY c.system_id, c.talkgroup
+          UNION ALL
+          SELECT c.system_id, p.p, count(*)
+          FROM calls c
+          CROSS JOIN LATERAL (SELECT DISTINCT x AS p FROM unnest(c.patched_talkgroups) AS x
+                              WHERE x <> c.talkgroup) p
+          WHERE c.started_at >= sqlc.arg(since) AND c.patched_talkgroups <> '{}'
+          GROUP BY c.system_id, p.p
+          UNION ALL
+          SELECT j.system_id, j.talkgroup, count(*)
+          FROM rejected_calls j
+          WHERE j.reason = 'ignored_talkgroup' AND j.start_time >= sqlc.arg(since_unix)::bigint
+          GROUP BY j.system_id, j.talkgroup) n
+    GROUP BY n.system_id, n.talkgroup_id
+)
+SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.unreviewed,
+       ARRAY(SELECT x.name FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
+             WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
+             ORDER BY x.sort_order, x.name)::text[] AS groups,
+       t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel,
+       t.created_at, t.updated_at,
+       l.last_heard_at, COALESCE(n.calls, 0)::bigint AS calls_since
+FROM talkgroups t
+LEFT JOIN tags g ON g.id = t.tag_id
+LEFT JOIN talkgroup_last_heard l ON l.system_id = t.system_id AND l.talkgroup_id = t.talkgroup_id
+LEFT JOIN counts n ON n.system_id = t.system_id AND n.talkgroup_id = t.talkgroup_id
+ORDER BY t.system_id, t.talkgroup_id;
+
+-- name: AdminTalkgroupCalls :many
+-- A talkgroup's stored calls, newest first, whatever their state (R34):
+-- those on it and those patched with it (R16), started before the cursor
+-- (with the call ID breaking ties). Each half reads its own index and stops
+-- at the page; state is call_state's, now.
+SELECT c.id, c.talkgroup, c.patched_talkgroups, c.started_at, c.ended_at, c.recording_size,
+       call_state(sqlc.arg(system_id)::bigint, c.talkgroup, c.patched_talkgroups)::talkgroup_state AS state
+FROM ((SELECT o.id, o.talkgroup, o.patched_talkgroups, o.started_at, o.ended_at, o.recording_size
+       FROM calls o
+       WHERE o.talkgroup = sqlc.arg(talkgroup)::integer AND o.system_id = sqlc.arg(system_id)::bigint
+         AND (o.started_at, o.id) < (sqlc.arg(cursor_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
+       ORDER BY o.started_at DESC, o.id DESC
+       LIMIT sqlc.arg(row_limit))
+      UNION ALL
+      (SELECT p.id, p.talkgroup, p.patched_talkgroups, p.started_at, p.ended_at, p.recording_size
+       FROM calls p
+       WHERE p.patched_talkgroups @> ARRAY[sqlc.arg(talkgroup)::integer]
+         AND p.talkgroup <> sqlc.arg(talkgroup)::integer AND p.system_id = sqlc.arg(system_id)::bigint
+         AND (p.started_at, p.id) < (sqlc.arg(cursor_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
+       ORDER BY p.started_at DESC, p.id DESC
+       LIMIT sqlc.arg(row_limit))) c
+ORDER BY c.started_at DESC, c.id DESC
+LIMIT sqlc.arg(row_limit);
+
 -- Admin playback (R34): any stored call's recording, whatever its state.
 
 -- name: AdminRecording :one

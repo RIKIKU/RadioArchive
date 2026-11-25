@@ -160,7 +160,7 @@ func newEnvAt(t *testing.T, serverVersion string) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin.WithRetention(e.job).WithRecorders(e.rs)
+	admin.WithRetention(e.job).WithRecorders(e.rs).WithClock(e.clock.now)
 	e.api = server.New(st, log, server.WithRecorders(e.rs), server.WithAdmin(admin),
 		server.WithPublic(public.New(e.gate, log, public.WithLocation(deploymentTZ(t)))), server.WithApp(web.Serve(appBuild)))
 	e.srv = httptest.NewServer(e.api)

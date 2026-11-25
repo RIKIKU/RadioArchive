@@ -290,6 +290,7 @@ func (rs *Recorders) store(ctx context.Context, rec store.Recorder, m cp.Recordi
 		return 0, cp.UploadResponse{}, err
 	}
 	rs.Stat.admitted(adm)
+	rs.touchHeard(ctx, adm, m.StartTimeMS)
 	if code == http.StatusCreated {
 		rs.touchCall(ctx, rec, m.StartTimeMS)
 	}

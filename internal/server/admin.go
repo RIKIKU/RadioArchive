@@ -50,6 +50,14 @@ type Admin struct {
 	ret  *retention.Job
 	rs   *Recorders
 	ls   ListenerSessions
+	now  func() time.Time
+}
+
+// WithClock gives the admin API its clock, for the talkgroup table's 30
+// days (ADR 0026). Without one it's time.Now.
+func (a *Admin) WithClock(now func() time.Time) *Admin {
+	a.now = now
+	return a
 }
 
 // ListenerSessions ends signed-in listeners' sessions (account.Service,
@@ -80,7 +88,7 @@ func NewAdmin(st *store.Store, log *slog.Logger, auth AdminAuthenticator, record
 	if auth == nil {
 		return nil, errors.New("the admin API needs an admin authenticator")
 	}
-	return &Admin{st: st, log: log, auth: auth, dir: recordingsDir}, nil
+	return &Admin{st: st, log: log, auth: auth, dir: recordingsDir, now: time.Now}, nil
 }
 
 // WithAdmin serves the admin API.
@@ -98,6 +106,8 @@ func WithAdmin(a *Admin) Option {
 			{"DELETE /systems/{system}", a.deleteSystem},
 			{"GET /systems/{system}/talkgroups", a.listTalkgroups},
 			{"GET /systems/{system}/talkgroups/{talkgroup}", a.getTalkgroup},
+			{"GET /systems/{system}/talkgroups/{talkgroup}/calls", a.talkgroupCalls},
+			{"GET /talkgroups", a.talkgroupTable},
 			{"PUT /systems/{system}/talkgroups/{talkgroup}", a.putTalkgroup},
 			{"PATCH /systems/{system}/talkgroups/{talkgroup}", a.patchTalkgroup},
 			{"GET /systems/{system}/units", a.listUnits},
