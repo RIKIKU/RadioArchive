@@ -397,7 +397,7 @@ function Export-RaCsv {
         throw (New-RaErrorRecord -ErrorId 'file_exists' -Category ResourceExists -Message "$file is already there. Add -Force to replace it.")
     }
     $lines = if ($Rows.Count -gt 0) {
-        @($Rows | Select-Object -Property $Column | ConvertTo-Csv -NoTypeInformation)
+        @($Rows | Select-Object -Property $Column | ConvertTo-Csv)
     } else {
         @(($Column | ForEach-Object -Process { '"' + $_ + '"' }) -join ',')
     }
