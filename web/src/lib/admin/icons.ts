@@ -27,6 +27,12 @@
 // cover. Each is the inner markup of a 24 x 24 outline SVG drawn with
 // currentColor, passed to ArchiveUx's Icon as svg and compiled into the app.
 export const adminIcons = {
+	/** Units (R26): an ID card (Tabler's id). */
+	units:
+		'<path d="M3 7a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v10a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3l0 -10" /><path d="M7 10a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M15 8l2 0" /><path d="M15 12l2 0" /><path d="M7 16l10 0" />',
+	/** Systems (R11): a network (Tabler's topology-star-3). */
+	systems:
+		'<path d="M10 19a2 2 0 1 0 -4 0a2 2 0 0 0 4 0" /><path d="M18 5a2 2 0 1 0 -4 0a2 2 0 0 0 4 0" /><path d="M10 5a2 2 0 1 0 -4 0a2 2 0 0 0 4 0" /><path d="M6 12a2 2 0 1 0 -4 0a2 2 0 0 0 4 0" /><path d="M18 19a2 2 0 1 0 -4 0a2 2 0 0 0 4 0" /><path d="M14 12a2 2 0 1 0 -4 0a2 2 0 0 0 4 0" /><path d="M22 12a2 2 0 1 0 -4 0a2 2 0 0 0 4 0" /><path d="M6 12h4" /><path d="M14 12h4" /><path d="M15 7l-2 3" /><path d="M9 7l2 3" /><path d="M11 14l-2 3" /><path d="M13 14l2 3" />',
 	/** Recorders (R14): an access point. */
 	recorders:
 		'<path d="M12 12l0 .01" /><path d="M14.828 9.172a4 4 0 0 1 0 5.656" /><path d="M17.657 6.343a8 8 0 0 1 0 11.314" /><path d="M9.168 14.828a4 4 0 0 1 0 -5.656" /><path d="M6.337 17.657a8 8 0 0 1 0 -11.314" />',

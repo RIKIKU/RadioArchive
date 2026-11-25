@@ -12,7 +12,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { axe, looks, recorderCard, saveLook, shot, signIn, themes, widths } from './admin.ts';
 
 const side = (page: Page) => page.locator('nav.side');
-const adminPaths = ['/admin/talkgroups', '/admin/recorders', '/admin/accounts', '/admin/audit', '/admin/settings'];
+const adminPaths = ['/admin/talkgroups', '/admin/units', '/admin/systems', '/admin/recorders', '/admin/accounts', '/admin/audit', '/admin/settings'];
 
 test('signed out: no Admin menu, the admin pages offer sign-in, and the admin API refuses', async ({ page, request }) => {
 	await page.goto('/');

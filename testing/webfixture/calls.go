@@ -78,8 +78,23 @@ func storeCalls(ctx context.Context, conn *pgx.Conn, recorder, dir string, now t
 	return nil
 }
 
+// lastHeard is the TouchTalkgroupsHeard query's rule (internal/store's
+// queries.sql) for system EX: talkgroups EX lists, heard at the given time
+// or now if that's earlier, never moved back.
+const lastHeard = `
+INSERT INTO talkgroup_last_heard (system_id, talkgroup_id, last_heard_at)
+SELECT t.system_id, t.talkgroup_id, least($2::timestamptz, now())
+FROM talkgroups t
+WHERE t.system_id = 1 AND t.talkgroup_id = ANY ($1::integer[])
+ORDER BY t.talkgroup_id
+ON CONFLICT (system_id, talkgroup_id) DO UPDATE
+SET last_heard_at = EXCLUDED.last_heard_at
+WHERE talkgroup_last_heard.last_heard_at < EXCLUDED.last_heard_at`
+
 // storeCall stores one call, and its recording unless it's in progress,
-// and returns its ID. n tells the calls apart.
+// and returns its ID. n tells the calls apart. It moves the talkgroups'
+// last heard as ingest would (ADR 0026), since it writes the call's row
+// itself rather than through ingest.
 func storeCall(ctx context.Context, conn *pgx.Conn, recorder, dir string, n int64, c fixtureCall) (string, error) {
 	var ended *time.Time
 	if !c.inProgress {
@@ -100,6 +115,12 @@ RETURNING id::text`, recorder, 7_900_000_000+n, c.start.Unix(), c.talkgroup, pat
 	}
 	if err != nil {
 		return "", err
+	}
+	// The admin table's last heard (ADR 0026), as ingest's touchHeard moves
+	// it for a call it takes: the call's talkgroup and its patch, at its
+	// start (or now, if that's earlier), never back.
+	if _, err := conn.Exec(ctx, lastHeard, append([]int32{c.talkgroup}, patched...), c.start); err != nil {
+		return "", fmt.Errorf("last heard: %w", err)
 	}
 	for j, u := range c.units {
 		if _, err := conn.Exec(ctx, `INSERT INTO transmissions (call_id, offset_ms, unit, duration_ms) VALUES ($1, $2, $3, $4)`,
