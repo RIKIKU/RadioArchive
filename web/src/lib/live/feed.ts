@@ -5,6 +5,7 @@
 // Message types it doesn't know are ignored.
 
 import type { LiveTalkgroup } from './listening-set.ts';
+import { limitOf } from '../limits.ts';
 
 export const LIVE_PATH = '/api/v1/live';
 
@@ -46,16 +47,21 @@ export interface FeedHandlers {
 	/** The socket is open and the set taken, or not. */
 	connected?(on: boolean): void;
 	/**
-	 * A feed notice is on or off (R15, R71; ADR 0007, 0010). A new socket
-	 * starts with every notice off: each welcome calls this with every kind
-	 * the listener has been told is on, off.
+	 * A feed notice is on or off (R15, R71; ADR 0007, 0010, 0037). A new
+	 * socket starts with every notice off: each welcome calls this with
+	 * every kind the listener has been told is on, off. A refused socket's
+	 * notice comes with the server's message (ADR 0039).
 	 */
-	notice?(kind: NoticeKind, active: boolean): void;
+	notice?(kind: NoticeKind, active: boolean, message?: string): void;
 }
 
-/** The feed notices (ADR 0007): the recorder notice (R15) and "the radio is full" (R71). */
-export type NoticeKind = 'recorders' | 'radio_full';
-const NOTICES: readonly NoticeKind[] = ['recorders', 'radio_full'];
+/**
+ * The feed notices (ADR 0007): the recorder notice (R15), which the server
+ * sends, and a socket refused over a limit (R71, ADR 0037), which the feed
+ * raises itself (ADR 0039): "the radio is full", or too many from here.
+ */
+export type NoticeKind = 'recorders' | 'radio_full' | 'too_many_live';
+const NOTICES: readonly NoticeKind[] = ['recorders', 'radio_full', 'too_many_live'];
 
 /** The binary frame's header (ADR 0007): kind, reserved, call ID, frame number. */
 export const FRAME_HEADER = 24;
@@ -120,12 +126,15 @@ export class LiveFeed {
 		this.#ws = undefined;
 		this.#welcomed = false;
 		ws?.close(1000);
+		for (const k of NOTICES) if (k !== 'recorders') this.#h.notice?.(k, false);
 	}
 
 	#connect() {
 		const ws = new WebSocket(this.#url);
 		ws.binaryType = 'arraybuffer';
 		this.#ws = ws;
+		let opened = false;
+		ws.onopen = () => (opened = true);
 		ws.onmessage = (m) => {
 			if (this.#ws !== ws) return;
 			if (m.data instanceof ArrayBuffer) {
@@ -141,10 +150,41 @@ export class LiveFeed {
 			this.#welcomed = false;
 			this.#h.connected?.(false);
 			if (this.#stopped) return;
-			this.#timer = setTimeout(() => {
-				if (!this.#stopped) this.#connect();
-			}, backoff(this.#tries++));
+			if (opened) {
+				this.#retry(backoff(this.#tries++));
+				return;
+			}
+			// Closed before it opened: maybe refused over a limit, which a
+			// WebSocket can't say, so the feed asks (ADR 0037, 0039).
+			void this.#refusal().then((l) => {
+				if (this.#stopped || this.#ws) return;
+				if (!l) {
+					this.#retry(backoff(this.#tries++));
+					return;
+				}
+				const kind: NoticeKind = l.error === 'radio_full' ? 'radio_full' : 'too_many_live';
+				this.#h.notice?.(kind === 'radio_full' ? 'too_many_live' : 'radio_full', false);
+				this.#h.notice?.(kind, true, l.message);
+				this.#retry(l.retry_after * 1000);
+			});
 		};
+	}
+
+	#retry(ms: number) {
+		clearTimeout(this.#timer);
+		this.#timer = setTimeout(() => {
+			if (!this.#stopped) this.#connect();
+		}, ms);
+	}
+
+	/** Why the last socket was refused, if over a limit: the live path asked by a plain GET (ADR 0037). */
+	async #refusal() {
+		try {
+			const r = await fetch(this.#url.replace(/^ws/, 'http'), { headers: { Accept: 'application/json' } });
+			return await limitOf(r);
+		} catch {
+			return undefined;
+		}
 	}
 
 	#text(text: string) {

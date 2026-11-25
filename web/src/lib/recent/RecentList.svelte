@@ -25,6 +25,7 @@
 	// sit in the row, as before.
 	import type { Snippet } from 'svelte';
 	import { Icon } from 'archiveux/components';
+	import DownloadLink from '#lib/call/DownloadLink.svelte';
 	import type { Player } from '#lib/audio/player.svelte.ts';
 	import type { Index } from '#lib/listening/set.ts';
 	import {
@@ -241,7 +242,7 @@
 								<button type="button" class="secondary from-here" aria-label="Play from here: {nameOf(c)}, {start}" onclick={() => playFromHere(c)}
 									><Icon name="play" /><span>Play from here</span></button
 								>
-								<a class="button secondary download" href={downloadURL(c)} download aria-label="Download: {nameOf(c)}, {start}"><span>Download</span></a>
+								<DownloadLink class="button secondary download" href={downloadURL(c)} label="Download: {nameOf(c)}, {start}"><span>Download</span></DownloadLink>
 							{/if}
 							{@render actions?.(c)}
 						</div>

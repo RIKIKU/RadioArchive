@@ -27,6 +27,7 @@
 	import { usePlayer } from '#lib/audio/context.ts';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import { indexOf, keyOf, resolve, type Catalogue, type Index } from '#lib/listening/set.ts';
+	import { limitText, refusedBy } from '#lib/limits.ts';
 	import { sendListeningSet } from '#lib/live/listening-set.ts';
 	import {
 		callInfoOf,
@@ -52,6 +53,8 @@
 	// The call, as the call details give it; null: unavailable.
 	let call: RecentCall | null | undefined = $state.raw();
 	let phase: 'loading' | 'failed' | 'done' = $state('loading');
+	// A limit's message for what failed (ADR 0039), in place of the page's own.
+	let limited: string | undefined = $state();
 	// What Listen live did: added for the session, or already in the set.
 	let live: '' | 'added' | 'in-set' = $state('');
 
@@ -59,7 +62,7 @@
 
 	async function catalogue(): Promise<Index> {
 		const r = await fetch('/api/v1/catalogue', { headers: { Accept: 'application/json' } });
-		if (!r.ok) throw new Error(String(r.status));
+		if (!r.ok) throw await refusedBy(r);
 		const c = (await r.json()) as Catalogue & { time_zone?: string };
 		const next = indexOf(c);
 		listening.settle(next);
@@ -73,7 +76,7 @@
 			headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
 			body: JSON.stringify({ ids: [callId] })
 		});
-		if (!r.ok) throw new Error(String(r.status));
+		if (!r.ok) throw await refusedBy(r);
 		const body = (await r.json()) as { calls: RecentCall[] };
 		return body.calls.find((c) => c.id === callId) ?? null;
 	}
@@ -95,8 +98,10 @@
 			call = c;
 			phase = 'done';
 			poll(callId, n);
-		} catch {
-			if (n === asked) phase = 'failed';
+		} catch (err) {
+			if (n !== asked) return;
+			limited = limitText(err);
+			phase = 'failed';
 		}
 	}
 
@@ -174,7 +179,7 @@
 {#if phase === 'loading'}
 	<p class="status" role="status">Loading the call…</p>
 {:else if phase === 'failed'}
-	<p class="error" role="alert">Couldn't load this call.</p>
+	<p class="error" role="alert">{limited ?? "Couldn't load this call."}</p>
 	<button type="button" class="secondary" onclick={() => load(id)}>Try again</button>
 {:else if call === null}
 	<section class="card unavailable" aria-labelledby="call-heading">

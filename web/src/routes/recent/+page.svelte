@@ -30,6 +30,7 @@
 	import { usePlayer } from '#lib/audio/context.ts';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import { indexOf, keyOf, resolve, search as searchTalkgroups, type Catalogue, type Index, type Talkgroup } from '#lib/listening/set.ts';
+	import { limitText, refusedBy } from '#lib/limits.ts';
 	import { sendListeningSet } from '#lib/live/listening-set.ts';
 	import {
 		UNIT,
@@ -56,19 +57,22 @@
 	let ix: Index | undefined = $state.raw();
 	let timeZone = $state('UTC');
 	let loading: 'loading' | 'failed' | 'done' = $state('loading');
+	// A limit's message for what failed (ADR 0039), in place of the page's own.
+	let limited: string | undefined = $state();
 
 	async function loadCatalogue() {
 		loading = 'loading';
 		try {
 			const r = await fetch('/api/v1/catalogue', { headers: { Accept: 'application/json' } });
-			if (!r.ok) throw new Error(String(r.status));
+			if (!r.ok) throw await refusedBy(r);
 			const c = (await r.json()) as Catalogue & { time_zone?: string };
 			const next = indexOf(c);
 			listening.settle(next);
 			timeZone = c.time_zone || 'UTC';
 			ix = next;
 			loading = 'done';
-		} catch {
+		} catch (err) {
+			limited = limitText(err);
 			loading = 'failed';
 		}
 	}
@@ -276,7 +280,7 @@
 {#if loading === 'loading'}
 	<p class="status" role="status">Loading talkgroups…</p>
 {:else if loading === 'failed'}
-	<p class="error" role="alert">Couldn't load the talkgroups.</p>
+	<p class="error" role="alert">{limited ?? "Couldn't load the talkgroups."}</p>
 	<button type="button" class="secondary" onclick={loadCatalogue}>Try again</button>
 {:else if ix}
 	<section class="search" aria-label="Filters">

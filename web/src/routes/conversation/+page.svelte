@@ -21,6 +21,7 @@
 	import { usePlayer } from '#lib/audio/context.ts';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import { indexOf, keyOf, resolve, type Catalogue, type Index } from '#lib/listening/set.ts';
+	import { limitText, refusedBy } from '#lib/limits.ts';
 	import { sendListeningSet } from '#lib/live/listening-set.ts';
 	import { callInfoOf, zoneLabel, type RecentCall } from '#lib/recent/search.ts';
 	import { readConversation, type SharedConversation } from '#lib/share/conversation.ts';
@@ -39,10 +40,12 @@
 	// The available calls, in the link's order.
 	let calls: RecentCall[] = $state.raw([]);
 	let phase: 'loading' | 'failed' | 'done' = $state('loading');
+	// A limit's message for what failed (ADR 0039), in place of the page's own.
+	let limited: string | undefined = $state();
 
 	async function catalogue(): Promise<Index> {
 		const r = await fetch('/api/v1/catalogue', { headers: { Accept: 'application/json' } });
-		if (!r.ok) throw new Error(String(r.status));
+		if (!r.ok) throw await refusedBy(r);
 		const c = (await r.json()) as Catalogue & { time_zone?: string };
 		const next = indexOf(c);
 		listening.settle(next);
@@ -59,7 +62,7 @@
 				headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
 				body: JSON.stringify({ ids: ids.slice(i, i + PER_REQUEST) })
 			});
-			if (!r.ok) throw new Error(String(r.status));
+			if (!r.ok) throw await refusedBy(r);
 			for (const c of ((await r.json()) as { calls: RecentCall[] }).calls) got.set(c.id, c);
 		}
 		return ids.map((id) => got.get(id)).filter((c): c is RecentCall => !!c);
@@ -82,8 +85,10 @@
 			calls = got;
 			phase = 'done';
 			poll(n);
-		} catch {
-			if (n === asked) phase = 'failed';
+		} catch (err) {
+			if (n !== asked) return;
+			limited = limitText(err);
+			phase = 'failed';
 		}
 	}
 
@@ -150,7 +155,7 @@
 {#if phase === 'loading'}
 	<p class="status" role="status">Loading the conversation…</p>
 {:else if phase === 'failed'}
-	<p class="error" role="alert">Couldn't load this conversation.</p>
+	<p class="error" role="alert">{limited ?? "Couldn't load this conversation."}</p>
 	<button type="button" class="secondary" onclick={load}>Try again</button>
 {:else if available && ix}
 	<section class="conversation" aria-labelledby="conversation-heading">
