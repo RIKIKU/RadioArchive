@@ -52,6 +52,33 @@ and email, path `users/radioarchive`, and the attribute
 vouches for it. Then set a password for the user (Set password) and sign in
 to the radio with it.
 
+### The PowerShell module
+
+Admins can do everything the admin API does from PowerShell 7.6 or later
+with the `RadioArchive` module in `powershell/RadioArchive`
+(`docs/adr/0028-the-powershell-module-its-sign-in-and-its-commands.md`,
+`docs/powershell-guidelines.md`). It signs in as the admin, through the
+radio's Authentik, with its own public client (`radioarchive-powershell`,
+in `radioarchive.yaml`): sign in to the radio with the browser once first,
+then
+
+```powershell
+Import-Module ./powershell/RadioArchive/RadioArchive.psd1
+Connect-RadioArchive -Uri http://localhost:8080 -AllowUnencryptedAuthentication   # or -UseDeviceCode
+Get-RadioArchiveTalkgroup -Group North | Set-RadioArchiveTalkgroup -State Hidden
+Get-Help about_RadioArchive
+```
+
+`-AllowUnencryptedAuthentication` is for a plain-HTTP test copy only. The
+sign-in is saved: on Windows encrypted for your account (DPAPI), elsewhere
+in your default SecretManagement vault, or for the session only without
+one. Its tests: `pwsh -File powershell/tests/Invoke-Tests.ps1` (Pester
+5.9.1, PSScriptAnalyzer 1.25.0), and against the stack
+`scripts/ci/e2e-module.sh`. `scripts/oauth-probe.sh` checks what the
+module relies on in the stack's Authentik. The API takes the module's
+issuer from `AUTHENTIK_URL` and `MODULE_CLIENT_ID` (default
+`radioarchive-powershell`).
+
 `sqlc generate` regenerates `internal/store/db` from `internal/store/queries.sql`; CI fails if it's out of date.
 
 ### The browser app
