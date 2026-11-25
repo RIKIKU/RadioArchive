@@ -88,9 +88,31 @@ func (s *Store) EndListenerSession(ctx context.Context, idHash []byte) (string, 
 
 // EndAccountListenerSessions deletes every session of the account (issuer
 // and subject), so each browser signed in as it is signed out at its next
-// request. It returns how many there were.
-func (s *Store) EndAccountListenerSessions(ctx context.Context, issuer, subject string) (int64, error) {
-	n, err := s.DeleteAccountListenerSessions(ctx, db.DeleteAccountListenerSessionsParams{Issuer: issuer, Subject: subject})
+// request, as the admin by asks. It returns how many there were. Ending
+// any is audited in the same transaction (ADR 0029); ending none changed
+// nothing, and isn't.
+func (s *Store) EndAccountListenerSessions(ctx context.Context, by Actor, issuer, subject string) (int64, error) {
+	var n int64
+	err := s.Audited(ctx, by, func(q *db.Queries, au *Audit) error {
+		if err := au.Lock(AuditAccount, subject); err != nil {
+			return err
+		}
+		var err error
+		if n, err = q.DeleteAccountListenerSessions(ctx, db.DeleteAccountListenerSessionsParams{Issuer: issuer, Subject: subject}); err != nil || n == 0 {
+			return err
+		}
+		label := ""
+		if r, err := q.GetAccount(ctx, db.GetAccountParams{Issuer: issuer, Subject: subject}); err == nil {
+			label = account(r).label()
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		return au.Record(Change{Kind: AuditAccount, Thing: subject, Label: label,
+			Before: map[string]int64{"sessions": n}, After: map[string]int64{"sessions": 0}})
+	})
+	if errors.Is(err, ErrNoActor) {
+		return 0, err
+	}
 	if err != nil {
 		return 0, fmt.Errorf("end the account's sessions: %s", SafeError(err))
 	}

@@ -22,6 +22,15 @@ type Admin struct {
 	Issuer, Subject string
 	// Name and Email are as Authentik gave them at the session's sign-in.
 	Name, Email string
+	// Via is how the request was signed in, for the audit log's "how"
+	// (ADR 0029): store.ViaBrowser for a session cookie. It's the
+	// authenticator's to say, never the client's.
+	Via string
+}
+
+// Actor is the admin as the audit log records them.
+func (a Admin) Actor() store.Actor {
+	return store.Actor{Issuer: a.Issuer, Subject: a.Subject, Name: a.Name, Email: a.Email, Via: a.Via}
 }
 
 // Why Service.Admin turns a request away.
@@ -49,7 +58,7 @@ func (s *Service) Admin(w http.ResponseWriter, r *http.Request) (Admin, error) {
 	if !se.Admin {
 		return Admin{}, ErrNotAdmin
 	}
-	return Admin{Issuer: se.Issuer, Subject: se.Subject, Name: se.Name, Email: se.Email}, nil
+	return Admin{Issuer: se.Issuer, Subject: se.Subject, Name: se.Name, Email: se.Email, Via: store.ViaBrowser}, nil
 }
 
 // Accounts are this deployment's accounts: everyone who has signed in,
@@ -68,5 +77,5 @@ func (s *Service) SetRole(ctx context.Context, by Admin, subject, role string) (
 	if !s.On() {
 		return store.Account{}, store.ErrNotAdmin
 	}
-	return s.cfg.Accounts.SetAccountRole(ctx, s.cfg.OIDC.Issuer, by.Subject, subject, role)
+	return s.cfg.Accounts.SetAccountRole(ctx, s.cfg.OIDC.Issuer, by.Actor(), subject, role)
 }

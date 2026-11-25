@@ -136,7 +136,7 @@ func (testAdmin) Admin(_ http.ResponseWriter, r *http.Request) (account.Admin, e
 	if v == "" {
 		return account.Admin{}, account.ErrSignInRequired
 	}
-	return account.Admin{Subject: v}, nil
+	return account.Admin{Subject: v, Name: "Test Admin", Via: store.ViaBrowser}, nil
 }
 
 // admin calls the admin API and wants code.

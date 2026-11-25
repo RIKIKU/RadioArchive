@@ -79,6 +79,16 @@ func (a *Admin) admin(w http.ResponseWriter, r *http.Request) (*http.Request, st
 	return r.WithContext(context.WithValue(r.Context(), adminKey{}, adm)), adm.Subject, true
 }
 
+// audited makes an admin change in one transaction with its audit log
+// entries (store.Audited, ADR 0029), as the admin the request's check
+// found, and how they signed in. Every state-changing admin handler writes
+// through it (or through a store method that does), so a change can't
+// commit without its entry.
+func (a *Admin) audited(r *http.Request, f func(q *db.Queries, au *store.Audit) error) error {
+	by, _ := AdminFrom(r.Context())
+	return a.st.Audited(r.Context(), by.Actor(), f)
+}
+
 // Admin serves the admin API's systems, attachments, talkgroups, rejected
 // calls and recordings (R11, R12, R17, R18, R21, R22, R34), and, given
 // the recorder endpoints, the recorders' state and signals (R14).
@@ -120,8 +130,9 @@ func (a *Admin) WithAccounts(acc AccountRoles) *Admin {
 // ADR 0022).
 type ListenerSessions interface {
 	// EndAccountSessions ends every session of the listener with this
-	// subject, returning how many there were.
-	EndAccountSessions(ctx context.Context, subject string) (int64, error)
+	// subject, as the admin by asks (audited), returning how many there
+	// were.
+	EndAccountSessions(ctx context.Context, by account.Admin, subject string) (int64, error)
 }
 
 // WithListenerSessions serves ending a listener's sessions: the first half
@@ -179,6 +190,7 @@ func WithAdmin(a *Admin) Option {
 			{"PATCH /groups/{group}", a.patchGroup},
 			{"GET /tags", a.listTags},
 			{"PATCH /tags/{tag}", a.patchTag},
+			{"GET /audit", a.auditLog},
 		} {
 			method, path, _ := strings.Cut(r.pattern, " ")
 			api.handle(AdminRoute, method+" "+AdminPath+path, a.serve(r.h))
@@ -217,7 +229,8 @@ func (a *Admin) endListenerSessions(r *http.Request, who string) (int, any, erro
 	if subject == "" || len(subject) > 255 {
 		return 0, nil, refuseAdmin(http.StatusBadRequest, "bad_subject", "Name the listener by their Authentik user ID.")
 	}
-	n, err := a.ls.EndAccountSessions(r.Context(), subject)
+	by, _ := AdminFrom(r.Context())
+	n, err := a.ls.EndAccountSessions(r.Context(), by, subject)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -442,13 +455,31 @@ func (a *Admin) createSystem(r *http.Request, who string) (int, any, error) {
 	if err := checkSettings(in.Alert, in.LEDColour); err != nil {
 		return 0, nil, err
 	}
-	s, err := a.st.CreateSystem(r.Context(), db.CreateSystemParams{ID: in.ID, Label: in.Label, Name: in.Name,
-		AutoCreate: in.AutoCreate, Alert: in.Alert, LedColour: in.LEDColour, SortOrder: in.SortOrder})
+	ctx := r.Context()
+	var out System
+	err := a.audited(r, func(q *db.Queries, au *store.Audit) error {
+		s, err := q.CreateSystem(ctx, db.CreateSystemParams{ID: in.ID, Label: in.Label, Name: in.Name,
+			AutoCreate: in.AutoCreate, Alert: in.Alert, LedColour: in.LEDColour, SortOrder: in.SortOrder})
+		if err != nil {
+			return systemConflict(err, in.ID, in.Label)
+		}
+		out = systemOf(db.GetSystemRow(s))
+		return au.Record(store.Change{Kind: store.AuditSystem, Thing: systemThing(out.ID), Label: out.Label,
+			After: out.audited()})
+	})
 	if err != nil {
-		return 0, nil, systemConflict(err, in.ID, in.Label)
+		return 0, nil, err
 	}
-	a.log.Info("admin created a system", "admin", who, "system", s.ID, "auto_create", s.AutoCreate)
-	return http.StatusCreated, systemOf(db.GetSystemRow(s)), nil
+	a.log.Info("admin created a system", "admin", who, "system", out.ID, "auto_create", out.AutoCreate)
+	return http.StatusCreated, out, nil
+}
+
+func systemThing(id int64) string { return strconv.FormatInt(id, 10) }
+
+// audited is the system as the audit log records it: without its times.
+func (s System) audited() System {
+	s.CreatedAt, s.UpdatedAt = nil, nil
+	return s
 }
 
 func (a *Admin) patchSystem(r *http.Request, who string) (int, any, error) {
@@ -478,21 +509,41 @@ func (a *Admin) patchSystem(r *http.Request, who string) (int, any, error) {
 	if err := in.check(); err != nil {
 		return 0, nil, err
 	}
-	s, err := a.st.UpdateSystem(r.Context(), db.UpdateSystemParams{ID: id, Label: in.Label, Name: in.Name,
-		AutoCreate: in.AutoCreate, SortOrder: in.SortOrder, SetAlert: in.Alert.Set, Alert: in.Alert.Value,
-		SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, nil, refuseAdmin(http.StatusNotFound, "system_not_found", "No system has ID %d.", id)
-	}
-	if err != nil {
-		label := ""
-		if in.Label != nil {
-			label = *in.Label
+	ctx := r.Context()
+	var out System
+	err = a.audited(r, func(q *db.Queries, au *store.Audit) error {
+		if err := au.Lock(store.AuditSystem, systemThing(id)); err != nil {
+			return dbErr("system", err)
 		}
-		return 0, nil, systemConflict(err, id, label)
+		was, err := q.GetSystem(ctx, id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return refuseAdmin(http.StatusNotFound, "system_not_found", "No system has ID %d.", id)
+		}
+		if err != nil {
+			return dbErr("system", err)
+		}
+		s, err := q.UpdateSystem(ctx, db.UpdateSystemParams{ID: id, Label: in.Label, Name: in.Name,
+			AutoCreate: in.AutoCreate, SortOrder: in.SortOrder, SetAlert: in.Alert.Set, Alert: in.Alert.Value,
+			SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return refuseAdmin(http.StatusNotFound, "system_not_found", "No system has ID %d.", id)
+		}
+		if err != nil {
+			label := ""
+			if in.Label != nil {
+				label = *in.Label
+			}
+			return systemConflict(err, id, label)
+		}
+		out = systemOf(db.GetSystemRow(s))
+		return au.Record(store.Change{Kind: store.AuditSystem, Thing: systemThing(id), Label: out.Label,
+			Before: systemOf(was).audited(), After: out.audited()})
+	})
+	if err != nil {
+		return 0, nil, err
 	}
-	a.log.Info("admin changed a system", "admin", who, "system", id, "auto_create", s.AutoCreate)
-	return http.StatusOK, systemOf(db.GetSystemRow(s)), nil
+	a.log.Info("admin changed a system", "admin", who, "system", id, "auto_create", out.AutoCreate)
+	return http.StatusOK, out, nil
 }
 
 func (a *Admin) deleteSystem(r *http.Request, who string) (int, any, error) {
@@ -501,7 +552,10 @@ func (a *Admin) deleteSystem(r *http.Request, who string) (int, any, error) {
 		return 0, nil, err
 	}
 	ctx := r.Context()
-	err = a.st.InTx(ctx, func(_ pgx.Tx, q *db.Queries) error {
+	err = a.audited(r, func(q *db.Queries, au *store.Audit) error {
+		if err := au.Lock(store.AuditSystem, systemThing(id)); err != nil {
+			return dbErr("system", err)
+		}
 		s, err := q.GetSystem(ctx, id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return refuseAdmin(http.StatusNotFound, "system_not_found", "No system has ID %d.", id)
@@ -525,7 +579,8 @@ func (a *Admin) deleteSystem(r *http.Request, who string) (int, any, error) {
 			}
 			return dbErr("delete system", err)
 		}
-		return nil
+		return au.Record(store.Change{Kind: store.AuditSystem, Thing: systemThing(id), Label: s.Label,
+			Before: systemOf(s).audited()})
 	})
 	if err != nil {
 		return 0, nil, err
@@ -720,11 +775,23 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 	fg := in.fireground()
 	ctx := r.Context()
 	code := http.StatusOK
-	err = a.st.InTx(ctx, func(_ pgx.Tx, q *db.Queries) error {
-		if _, err := q.GetSystem(ctx, sys); errors.Is(err, pgx.ErrNoRows) {
+	var t Talkgroup
+	err = a.audited(r, func(q *db.Queries, au *store.Audit) error {
+		system, err := q.GetSystem(ctx, sys)
+		if errors.Is(err, pgx.ErrNoRows) {
 			return refuseAdmin(http.StatusNotFound, "system_not_found", "No system has ID %d.", sys)
 		} else if err != nil {
 			return dbErr("system", err)
+		}
+		thing := talkgroupThing(sys, tg)
+		if err := au.Lock(store.AuditTalkgroup, thing); err != nil {
+			return dbErr("talkgroup", err)
+		}
+		var before any
+		if was, err := q.GetTalkgroup(ctx, db.GetTalkgroupParams{SystemID: sys, TalkgroupID: tg}); err == nil {
+			before = talkgroupOf(was).audited()
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return dbErr("talkgroup", err)
 		}
 		if fg != nil {
 			// R100: one talkgroup per number, across the deployment.
@@ -741,11 +808,8 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 			tagID = &id
 		}
 		if full {
-			_, err := q.GetTalkgroup(ctx, db.GetTalkgroupParams{SystemID: sys, TalkgroupID: tg})
-			if errors.Is(err, pgx.ErrNoRows) {
+			if before == nil {
 				code = http.StatusCreated
-			} else if err != nil {
-				return dbErr("talkgroup", err)
 			}
 			p := db.PutTalkgroupParams{SystemID: sys, TalkgroupID: tg, TagID: tagID, State: store.Public,
 				Alert: in.Alert.Value, LedColour: in.LEDColour.Value, FiregroundChannel: fg}
@@ -785,9 +849,21 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 			}
 		}
 		if in.Groups != nil {
-			return setGroups(ctx, q, sys, tg, *in.Groups)
+			if err := setGroups(ctx, q, sys, tg, *in.Groups); err != nil {
+				return err
+			}
 		}
-		return nil
+		now, err := q.GetTalkgroup(ctx, db.GetTalkgroupParams{SystemID: sys, TalkgroupID: tg})
+		if err != nil {
+			return dbErr("talkgroup", err)
+		}
+		t = talkgroupOf(now)
+		label := fmt.Sprintf("%s %d", system.Label, tg)
+		if t.Label != "" {
+			label += " " + t.Label
+		}
+		return au.Record(store.Change{Kind: store.AuditTalkgroup, Thing: thing, Label: label,
+			Before: before, After: t.audited()})
 	})
 	if code, constraint := pgCode(err); code == "23505" && constraint == "talkgroups_fireground_channel" && fg != nil {
 		// Another admin gave the number away meanwhile.
@@ -798,12 +874,16 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 	if err != nil {
 		return 0, nil, err
 	}
-	t, err := a.talkgroup(ctx, sys, tg)
-	if err != nil {
-		return 0, nil, err
-	}
 	a.log.Info("admin changed a talkgroup", "admin", who, "system", sys, "talkgroup", tg, "state", t.State)
 	return code, t, nil
+}
+
+func talkgroupThing(sys int64, tg int32) string { return fmt.Sprintf("%d/%d", sys, tg) }
+
+// audited is the talkgroup as the audit log records it: without its times.
+func (t Talkgroup) audited() Talkgroup {
+	t.CreatedAt, t.UpdatedAt = nil, nil
+	return t
 }
 
 // setGroups puts a talkgroup in exactly these groups, creating any that
@@ -921,18 +1001,57 @@ func (a *Admin) attach(r *http.Request, who string) (int, any, error) {
 	if err := decode(r, &in); err != nil {
 		return 0, nil, err
 	}
-	s, err := a.system(r.Context(), in.SystemID)
+	ctx := r.Context()
+	name := r.PathValue("recorder")
+	var out Attachment
+	err = a.audited(r, func(q *db.Queries, au *store.Audit) error {
+		s, err := q.GetSystem(ctx, in.SystemID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return refuseAdmin(http.StatusNotFound, "system_not_found", "No system has ID %d.", in.SystemID)
+		}
+		if err != nil {
+			return dbErr("system", err)
+		}
+		if err := au.Lock(store.AuditAttachment, attachmentThing(name, short)); err != nil {
+			return dbErr("attach", err)
+		}
+		before, err := attachmentNow(ctx, q, rec, name, short)
+		if err != nil {
+			return err
+		}
+		at, err := q.Attach(ctx, db.AttachParams{RecorderID: rec, ShortName: short, SystemID: s.ID})
+		if err != nil {
+			return dbErr("attach", err)
+		}
+		out = Attachment{Recorder: name, ShortName: short, SystemID: s.ID, SystemLabel: s.Label, AttachedAt: ts(at)}
+		after := out
+		after.AttachedAt = nil
+		return au.Record(store.Change{Kind: store.AuditAttachment, Thing: attachmentThing(name, short),
+			Label: name + " / " + short, Before: before, After: after})
+	})
 	if err != nil {
 		return 0, nil, err
 	}
-	at, err := a.st.Attach(r.Context(), db.AttachParams{RecorderID: rec, ShortName: short, SystemID: s.ID})
-	if err != nil {
-		return 0, nil, dbErr("attach", err)
+	a.log.Info("admin attached a recorder's system", "admin", who, "recorder", name,
+		"short_name", short, "system", out.SystemID)
+	return http.StatusOK, out, nil
+}
+
+// attachmentThing is an attachment's key in the audit log: the recorder's
+// name and the shortName.
+func attachmentThing(recorder, short string) string { return recorder + "/" + short }
+
+// attachmentNow is the pair's attachment as the audit log records it, or
+// nil (untyped) when it isn't attached.
+func attachmentNow(ctx context.Context, q *db.Queries, rec int64, name, short string) (any, error) {
+	x, err := q.GetAttachment(ctx, db.GetAttachmentParams{RecorderID: rec, ShortName: short})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
 	}
-	a.log.Info("admin attached a recorder's system", "admin", who, "recorder", r.PathValue("recorder"),
-		"short_name", short, "system", s.ID)
-	return http.StatusOK, Attachment{Recorder: r.PathValue("recorder"), ShortName: short, SystemID: s.ID,
-		SystemLabel: s.Label, AttachedAt: ts(at)}, nil
+	if err != nil {
+		return nil, dbErr("attachment", err)
+	}
+	return Attachment{Recorder: name, ShortName: short, SystemID: x.SystemID, SystemLabel: x.SystemLabel}, nil
 }
 
 func (a *Admin) detach(r *http.Request, who string) (int, any, error) {
@@ -940,12 +1059,28 @@ func (a *Admin) detach(r *http.Request, who string) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	n, err := a.st.Detach(r.Context(), db.DetachParams{RecorderID: rec, ShortName: short})
+	ctx := r.Context()
+	name := r.PathValue("recorder")
+	err = a.audited(r, func(q *db.Queries, au *store.Audit) error {
+		if err := au.Lock(store.AuditAttachment, attachmentThing(name, short)); err != nil {
+			return dbErr("detach", err)
+		}
+		before, err := attachmentNow(ctx, q, rec, name, short)
+		if err != nil {
+			return err
+		}
+		n, err := q.Detach(ctx, db.DetachParams{RecorderID: rec, ShortName: short})
+		if err != nil {
+			return dbErr("detach", err)
+		}
+		if n == 0 || before == nil {
+			return refuseAdmin(http.StatusNotFound, "attachment_not_found", "%s / %s isn't attached.", name, short)
+		}
+		return au.Record(store.Change{Kind: store.AuditAttachment, Thing: attachmentThing(name, short),
+			Label: name + " / " + short, Before: before})
+	})
 	if err != nil {
-		return 0, nil, dbErr("detach", err)
-	}
-	if n == 0 {
-		return 0, nil, refuseAdmin(http.StatusNotFound, "attachment_not_found", "%s / %s isn't attached.", r.PathValue("recorder"), short)
+		return 0, nil, err
 	}
 	a.log.Info("admin detached a recorder's system", "admin", who, "recorder", r.PathValue("recorder"), "short_name", short)
 	return http.StatusNoContent, nil, nil

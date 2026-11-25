@@ -83,7 +83,7 @@ func TestIntegrationListenerSessions(t *testing.T) {
 		t.Errorf("ended twice = %q, %v", tok, err)
 	}
 	start(hash(4), "42", "", now.Add(time.Hour))
-	if n, err := st.EndAccountListenerSessions(ctx, iss, "42"); err != nil || n != 2 {
+	if n, err := st.EndAccountListenerSessions(ctx, store.Actor{Subject: "admin", Via: store.ViaBrowser}, iss, "42"); err != nil || n != 2 {
 		t.Errorf("EndAccountListenerSessions = %d, %v; want 2", n, err)
 	}
 	if n, err := st.EndExpiredListenerSessions(ctx, now.Add(time.Minute)); err != nil || n != 1 {

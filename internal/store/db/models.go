@@ -115,6 +115,21 @@ type Attachment struct {
 	AttachedAt pgtype.Timestamptz
 }
 
+type AuditLog struct {
+	ID         int64
+	At         pgtype.Timestamptz
+	Issuer     string
+	Subject    string
+	AdminName  string
+	AdminEmail string
+	Via        string
+	Kind       string
+	Thing      string
+	Label      string
+	Action     string
+	Changes    []byte
+}
+
 type Call struct {
 	ID                pgtype.UUID
 	RecorderID        int64

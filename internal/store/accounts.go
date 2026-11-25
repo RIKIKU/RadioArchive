@@ -42,6 +42,15 @@ type Account struct {
 // Admin says whether the account is an admin now: role admin, active.
 func (a Account) Admin() bool { return a.Role == RoleAdmin && a.Status == StatusActive }
 
+// label is the name the audit log knows the account by: its name, or its
+// email if it has none.
+func (a Account) label() string {
+	if a.Name != "" {
+		return a.Name
+	}
+	return a.Email
+}
+
 func account(r db.Account) Account {
 	return Account{Issuer: r.Issuer, Subject: r.Subject, Name: r.Name, Email: r.Email, Role: r.Role, Status: r.Status,
 		FirstSignedIn: r.FirstSignedInAt.Time, LastSignedIn: r.LastSignedInAt.Time}
@@ -140,22 +149,23 @@ var (
 // admin by changes it. In one transaction, with the active admins locked
 // (SELECT … FOR UPDATE), it checks that by is still an active admin, that
 // by isn't changing their own role, and that demoting subject leaves an
-// active admin: so two admins demoting each other at once leave one. It
-// returns the account as it is now.
-func (s *Store) SetAccountRole(ctx context.Context, issuer, by, subject, role string) (Account, error) {
+// active admin: so two admins demoting each other at once leave one. The
+// change is audited in the same transaction (ADR 0029). It returns the
+// account as it is now.
+func (s *Store) SetAccountRole(ctx context.Context, issuer string, by Actor, subject, role string) (Account, error) {
 	if role != RoleListener && role != RoleAdmin {
 		return Account{}, fmt.Errorf("store: no role %q", role)
 	}
-	if by == subject {
+	if by.Subject == subject {
 		return Account{}, ErrOwnRole
 	}
 	var out Account
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.Audited(ctx, by, func(q *db.Queries, au *Audit) error {
 		admins, err := q.LockActiveAdmins(ctx, issuer)
 		if err != nil {
 			return err
 		}
-		if !slices.Contains(admins, by) {
+		if !slices.Contains(admins, by.Subject) {
 			return ErrNotAdmin
 		}
 		r, err := q.GetAccountForUpdate(ctx, db.GetAccountForUpdateParams{Issuer: issuer, Subject: subject})
@@ -177,10 +187,11 @@ func (s *Store) SetAccountRole(ctx context.Context, issuer, by, subject, role st
 			return err
 		}
 		out = account(r)
-		return nil
+		return au.Record(Change{Kind: AuditAccount, Thing: subject, Label: out.label(),
+			Before: map[string]string{"role": cur.Role}, After: map[string]string{"role": out.Role}})
 	})
 	switch {
-	case errors.Is(err, ErrNotAdmin), errors.Is(err, ErrNoAccount), errors.Is(err, ErrLastAdmin):
+	case errors.Is(err, ErrNoActor), errors.Is(err, ErrNotAdmin), errors.Is(err, ErrNoAccount), errors.Is(err, ErrLastAdmin):
 		return Account{}, err
 	case err != nil:
 		return Account{}, fmt.Errorf("change the account's role: %s", SafeError(err))

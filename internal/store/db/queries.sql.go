@@ -1517,6 +1517,48 @@ func (q *Queries) GetAccountForUpdate(ctx context.Context, arg GetAccountForUpda
 	return i, err
 }
 
+const getAttachment = `-- name: GetAttachment :one
+SELECT a.system_id, s.label AS system_label
+FROM attachments a JOIN systems s ON s.id = a.system_id
+WHERE a.recorder_id = $1 AND a.short_name = $2
+`
+
+type GetAttachmentParams struct {
+	RecorderID int64
+	ShortName  string
+}
+
+type GetAttachmentRow struct {
+	SystemID    int64
+	SystemLabel string
+}
+
+func (q *Queries) GetAttachment(ctx context.Context, arg GetAttachmentParams) (GetAttachmentRow, error) {
+	row := q.db.QueryRow(ctx, getAttachment, arg.RecorderID, arg.ShortName)
+	var i GetAttachmentRow
+	err := row.Scan(&i.SystemID, &i.SystemLabel)
+	return i, err
+}
+
+const getGroup = `-- name: GetGroup :one
+
+SELECT id, name, alert, led_colour, sort_order FROM groups WHERE id = $1
+`
+
+// Reads for the audit log's "before" (issue #112, ADR 0029).
+func (q *Queries) GetGroup(ctx context.Context, id int64) (Group, error) {
+	row := q.db.QueryRow(ctx, getGroup, id)
+	var i Group
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Alert,
+		&i.LedColour,
+		&i.SortOrder,
+	)
+	return i, err
+}
+
 const getJob = `-- name: GetJob :one
 
 SELECT name, ran_for, started_at, finished_at, ok, error, result FROM jobs WHERE name = $1
@@ -1644,6 +1686,23 @@ func (q *Queries) GetSystem(ctx context.Context, id int64) (GetSystemRow, error)
 	return i, err
 }
 
+const getTag = `-- name: GetTag :one
+SELECT id, name, alert, led_colour, sort_order FROM tags WHERE id = $1
+`
+
+func (q *Queries) GetTag(ctx context.Context, id int64) (Tag, error) {
+	row := q.db.QueryRow(ctx, getTag, id)
+	var i Tag
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Alert,
+		&i.LedColour,
+		&i.SortOrder,
+	)
+	return i, err
+}
+
 const getTalkgroup = `-- name: GetTalkgroup :one
 SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.unreviewed,
        ARRAY(SELECT x.name FROM talkgroup_groups m JOIN groups x ON x.id = m.group_id
@@ -1747,6 +1806,41 @@ func (q *Queries) IgnoredInPatch(ctx context.Context, arg IgnoredInPatchParams) 
 	var talkgroup_id int32
 	err := row.Scan(&talkgroup_id)
 	return talkgroup_id, err
+}
+
+const insertAuditEntry = `-- name: InsertAuditEntry :exec
+INSERT INTO audit_log (issuer, subject, admin_name, admin_email, via, kind, thing, label, action, changes)
+VALUES ($1, $2, $3, $4, $5,
+        $6, $7, $8, $9, $10)
+`
+
+type InsertAuditEntryParams struct {
+	Issuer     string
+	Subject    string
+	AdminName  string
+	AdminEmail string
+	Via        string
+	Kind       string
+	Thing      string
+	Label      string
+	Action     string
+	Changes    []byte
+}
+
+func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
+	_, err := q.db.Exec(ctx, insertAuditEntry,
+		arg.Issuer,
+		arg.Subject,
+		arg.AdminName,
+		arg.AdminEmail,
+		arg.Via,
+		arg.Kind,
+		arg.Thing,
+		arg.Label,
+		arg.Action,
+		arg.Changes,
+	)
+	return err
 }
 
 const insertListenerSession = `-- name: InsertListenerSession :exec
@@ -1853,6 +1947,75 @@ func (q *Queries) ListAttachments(ctx context.Context) ([]ListAttachmentsRow, er
 			&i.SystemID,
 			&i.SystemLabel,
 			&i.AttachedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditEntries = `-- name: ListAuditEntries :many
+SELECT id, at, issuer, subject, admin_name, admin_email, via, kind, thing, label, action, changes
+FROM audit_log
+WHERE ($1::text IS NULL OR subject = $1::text)
+  AND ($2::text IS NULL OR kind = $2::text)
+  AND ($3::text IS NULL OR thing = $3::text)
+  AND ($4::timestamptz IS NULL OR at >= $4::timestamptz)
+  AND ($5::timestamptz IS NULL OR at < $5::timestamptz)
+  AND ($6::timestamptz IS NULL
+       OR (at, id) < ($6::timestamptz, $7::bigint))
+ORDER BY at DESC, id DESC
+LIMIT $8
+`
+
+type ListAuditEntriesParams struct {
+	Subject  *string
+	Kind     *string
+	Thing    *string
+	Since    pgtype.Timestamptz
+	Until    pgtype.Timestamptz
+	AfterAt  pgtype.Timestamptz
+	AfterID  *int64
+	PageSize int32
+}
+
+// Newest first, after the cursor (the last entry of the page before), with
+// each filter given.
+func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]AuditLog, error) {
+	rows, err := q.db.Query(ctx, listAuditEntries,
+		arg.Subject,
+		arg.Kind,
+		arg.Thing,
+		arg.Since,
+		arg.Until,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.At,
+			&i.Issuer,
+			&i.Subject,
+			&i.AdminName,
+			&i.AdminEmail,
+			&i.Via,
+			&i.Kind,
+			&i.Thing,
+			&i.Label,
+			&i.Action,
+			&i.Changes,
 		); err != nil {
 			return nil, err
 		}
@@ -2200,6 +2363,26 @@ func (q *Queries) LockActiveAdmins(ctx context.Context, issuer string) ([]string
 	return items, nil
 }
 
+const lockAuditThing = `-- name: LockAuditThing :exec
+
+SELECT pg_advisory_xact_lock(112, hashtext($1::text || ':' || $2::text))
+`
+
+type LockAuditThingParams struct {
+	Kind  string
+	Thing string
+}
+
+// The audit log (SPEC.md R54; issue #112, ADR 0029): written only through
+// store.Audited, in the same transaction as the change.
+// One audited change of a thing at a time: the change reads the thing's
+// "before" after this, so two admins changing it at once each record what
+// the other left. The two-key form keeps clear of LockFirstAdmin's key.
+func (q *Queries) LockAuditThing(ctx context.Context, arg LockAuditThingParams) error {
+	_, err := q.db.Exec(ctx, lockAuditThing, arg.Kind, arg.Thing)
+	return err
+}
+
 const lockCallForRecording = `-- name: LockCallForRecording :one
 
 INSERT INTO calls (recorder_id, sys_num, call_num, start_time, system_id, short_name,
@@ -2538,6 +2721,19 @@ func (q *Queries) RecorderKeyIsCurrent(ctx context.Context, arg RecorderKeyIsCur
 	var current bool
 	err := row.Scan(&current)
 	return current, err
+}
+
+const recorderQuiet = `-- name: RecorderQuiet :one
+SELECT quiet_after_minutes FROM recorders WHERE name = $1 AND retired_at IS NULL
+`
+
+// An active recorder's quiet threshold; NULL is off. No row: unknown or
+// retired.
+func (q *Queries) RecorderQuiet(ctx context.Context, name string) (*int32, error) {
+	row := q.db.QueryRow(ctx, recorderQuiet, name)
+	var quiet_after_minutes *int32
+	err := row.Scan(&quiet_after_minutes)
+	return quiet_after_minutes, err
 }
 
 const rejectionFor = `-- name: RejectionFor :one

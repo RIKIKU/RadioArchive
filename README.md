@@ -37,6 +37,13 @@ deployment's sign-up proves it with the emailed code. Once an admin exists
 the setting does nothing; admins promote and demote others with
 `PATCH /api/v1/admin/accounts/{id}` (`{"role": "admin"}` or `{"role": "listener"}`).
 
+Every admin change is in the audit log, with who made it, how (browser,
+module or import), when, and each field before and after
+(`docs/adr/0029-the-audit-log.md`). Admins read it with
+`GET /api/v1/admin/audit` (newest first; `who`, `kind`, `thing`, `since`,
+`until`, `limit`, and `cursor` from the answer's `next`). It's never
+deleted, and retention doesn't touch it.
+
 With `LISTENER_SIGNUP=false` nobody can sign up, so the operator makes the
 first admin's user in Authentik's admin interface (http://localhost:9000/if/admin/,
 as `akadmin`): Directory, Users, Create, with the address as both username

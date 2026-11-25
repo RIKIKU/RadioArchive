@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"math"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/db"
 )
 
@@ -122,13 +124,32 @@ func (a *Admin) putUnit(r *http.Request, who string) (int, any, error) {
 		return 0, nil, refuseAdmin(http.StatusBadRequest, "invalid_alias", "alias can't hold \";\" or control characters.")
 	}
 	ctx := r.Context()
-	created, err := a.st.PutUnit(ctx, db.PutUnitParams{SystemID: sys, FirstID: from, LastID: to, Alias: *in.Alias})
+	var u db.Unit
+	var created bool
+	key := db.GetUnitParams{SystemID: sys, FirstID: from, LastID: to}
+	err = a.audited(r, func(q *db.Queries, au *store.Audit) error {
+		thing := unitThing(sys, from, to)
+		if err := au.Lock(store.AuditUnit, thing); err != nil {
+			return dbErr("unit", err)
+		}
+		var before any
+		if was, err := q.GetUnit(ctx, key); err == nil {
+			before = unitOf(was).audited()
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return dbErr("unit", err)
+		}
+		var err error
+		if created, err = q.PutUnit(ctx, db.PutUnitParams{SystemID: sys, FirstID: from, LastID: to, Alias: *in.Alias}); err != nil {
+			return dbErr("put unit", err)
+		}
+		if u, err = q.GetUnit(ctx, key); err != nil {
+			return dbErr("unit", err)
+		}
+		return au.Record(store.Change{Kind: store.AuditUnit, Thing: thing, Label: a.unitLabel(ctx, q, sys, from, to),
+			Before: before, After: unitOf(u).audited()})
+	})
 	if err != nil {
-		return 0, nil, dbErr("put unit", err)
-	}
-	u, err := a.st.GetUnit(ctx, db.GetUnitParams{SystemID: sys, FirstID: from, LastID: to})
-	if err != nil {
-		return 0, nil, dbErr("unit", err)
+		return 0, nil, err
 	}
 	// Never the alias: no unit name is logged (A32).
 	a.log.Info("admin set a unit", "admin", who, "system", sys, "from", from, "to", to, "created", created)
@@ -143,13 +164,62 @@ func (a *Admin) deleteUnit(r *http.Request, who string) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	n, err := a.st.DeleteUnit(r.Context(), db.DeleteUnitParams{SystemID: sys, FirstID: from, LastID: to})
+	ctx := r.Context()
+	err = a.audited(r, func(q *db.Queries, au *store.Audit) error {
+		thing := unitThing(sys, from, to)
+		if err := au.Lock(store.AuditUnit, thing); err != nil {
+			return dbErr("unit", err)
+		}
+		notFound := refuseAdmin(http.StatusNotFound, "unit_not_found", "System %d has no unit %s.", sys, r.PathValue("unit"))
+		was, err := q.GetUnit(ctx, db.GetUnitParams{SystemID: sys, FirstID: from, LastID: to})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound
+		}
+		if err != nil {
+			return dbErr("unit", err)
+		}
+		n, err := q.DeleteUnit(ctx, db.DeleteUnitParams{SystemID: sys, FirstID: from, LastID: to})
+		if err != nil {
+			return dbErr("delete unit", err)
+		}
+		if n == 0 {
+			return notFound
+		}
+		return au.Record(store.Change{Kind: store.AuditUnit, Thing: thing, Label: a.unitLabel(ctx, q, sys, from, to),
+			Before: unitOf(was).audited()})
+	})
 	if err != nil {
-		return 0, nil, dbErr("delete unit", err)
-	}
-	if n == 0 {
-		return 0, nil, refuseAdmin(http.StatusNotFound, "unit_not_found", "System %d has no unit %s.", sys, r.PathValue("unit"))
+		return 0, nil, err
 	}
 	a.log.Info("admin deleted a unit", "admin", who, "system", sys, "from", from, "to", to)
 	return http.StatusNoContent, nil, nil
+}
+
+// unitName is a unit's radio ID or range, as its path names it.
+func unitName(from, to int64) string {
+	if from == to {
+		return strconv.FormatInt(from, 10)
+	}
+	return strconv.FormatInt(from, 10) + "-" + strconv.FormatInt(to, 10)
+}
+
+// unitThing is a unit's key in the audit log: "1/5001", "1/5100-5199".
+func unitThing(sys, from, to int64) string {
+	return strconv.FormatInt(sys, 10) + "/" + unitName(from, to)
+}
+
+// unitLabel names a unit for the audit log: its system's label and its ID
+// or range, "EX 5001".
+func (a *Admin) unitLabel(ctx context.Context, q *db.Queries, sys, from, to int64) string {
+	label := strconv.FormatInt(sys, 10)
+	if s, err := q.GetSystem(ctx, sys); err == nil {
+		label = s.Label
+	}
+	return label + " " + unitName(from, to)
+}
+
+// audited is the unit as the audit log records it: without its times.
+func (u Unit) audited() Unit {
+	u.CreatedAt, u.UpdatedAt = nil, nil
+	return u
 }

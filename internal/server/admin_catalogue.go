@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -147,12 +148,52 @@ func (a *Admin) createGroup(r *http.Request, who string) (int, any, error) {
 	if in.SortOrder != nil {
 		p.SortOrder = *in.SortOrder
 	}
-	g, err := a.st.CreateGroup(r.Context(), p)
+	var out Label
+	err := a.audited(r, func(q *db.Queries, au *store.Audit) error {
+		g, err := q.CreateGroup(r.Context(), p)
+		if err != nil {
+			return nameTaken(err, "group", in.Name)
+		}
+		out = labelOf(g.ID, g.Name, g.Alert, g.LedColour, g.SortOrder)
+		return au.Record(store.Change{Kind: store.AuditGroup, Thing: strconv.FormatInt(g.ID, 10), Label: g.Name, After: out})
+	})
 	if err != nil {
-		return 0, nil, nameTaken(err, "group", in.Name)
+		return 0, nil, err
 	}
-	a.log.Info("admin created a group", "admin", who, "group", g.ID)
-	return http.StatusCreated, labelOf(g.ID, g.Name, g.Alert, g.LedColour, g.SortOrder), nil
+	a.log.Info("admin created a group", "admin", who, "group", out.ID)
+	return http.StatusCreated, out, nil
+}
+
+// patchLabel changes a group or a tag (kind), as get reads it and update
+// writes it, audited.
+func (a *Admin) patchLabel(r *http.Request, kind string, id int64, get func(*db.Queries) (db.Group, error),
+	update func(*db.Queries) (db.Group, error), name *string) (Label, error) {
+	var out Label
+	thing := strconv.FormatInt(id, 10)
+	notFound := refuseAdmin(http.StatusNotFound, kind+"_not_found", "No %s has ID %d.", kind, id)
+	err := a.audited(r, func(q *db.Queries, au *store.Audit) error {
+		if err := au.Lock(kind, thing); err != nil {
+			return dbErr(kind, err)
+		}
+		was, err := get(q)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound
+		}
+		if err != nil {
+			return dbErr(kind, err)
+		}
+		g, err := update(q)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound
+		}
+		if err != nil {
+			return nameTaken(err, kind, name)
+		}
+		out = labelOf(g.ID, g.Name, g.Alert, g.LedColour, g.SortOrder)
+		return au.Record(store.Change{Kind: kind, Thing: thing, Label: g.Name,
+			Before: labelOf(was.ID, was.Name, was.Alert, was.LedColour, was.SortOrder), After: out})
+	})
+	return out, err
 }
 
 func (a *Admin) patchGroup(r *http.Request, who string) (int, any, error) {
@@ -167,16 +208,18 @@ func (a *Admin) patchGroup(r *http.Request, who string) (int, any, error) {
 	if err := in.check("group", false); err != nil {
 		return 0, nil, err
 	}
-	g, err := a.st.UpdateGroup(r.Context(), db.UpdateGroupParams{ID: id, Name: in.Name, SortOrder: in.SortOrder,
-		SetAlert: in.Alert.Set, Alert: in.Alert.Value, SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, nil, refuseAdmin(http.StatusNotFound, "group_not_found", "No group has ID %d.", id)
-	}
+	ctx := r.Context()
+	out, err := a.patchLabel(r, store.AuditGroup, id,
+		func(q *db.Queries) (db.Group, error) { return q.GetGroup(ctx, id) },
+		func(q *db.Queries) (db.Group, error) {
+			return q.UpdateGroup(ctx, db.UpdateGroupParams{ID: id, Name: in.Name, SortOrder: in.SortOrder,
+				SetAlert: in.Alert.Set, Alert: in.Alert.Value, SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value})
+		}, in.Name)
 	if err != nil {
-		return 0, nil, nameTaken(err, "group", in.Name)
+		return 0, nil, err
 	}
 	a.log.Info("admin changed a group", "admin", who, "group", id)
-	return http.StatusOK, labelOf(g.ID, g.Name, g.Alert, g.LedColour, g.SortOrder), nil
+	return http.StatusOK, out, nil
 }
 
 func (a *Admin) listTags(r *http.Request, _ string) (int, any, error) {
@@ -203,14 +246,20 @@ func (a *Admin) patchTag(r *http.Request, who string) (int, any, error) {
 	if err := in.check("tag", false); err != nil {
 		return 0, nil, err
 	}
-	t, err := a.st.UpdateTag(r.Context(), db.UpdateTagParams{ID: id, Name: in.Name, SortOrder: in.SortOrder,
-		SetAlert: in.Alert.Set, Alert: in.Alert.Value, SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, nil, refuseAdmin(http.StatusNotFound, "tag_not_found", "No tag has ID %d.", id)
-	}
+	ctx := r.Context()
+	out, err := a.patchLabel(r, store.AuditTag, id,
+		func(q *db.Queries) (db.Group, error) {
+			t, err := q.GetTag(ctx, id)
+			return db.Group(t), err
+		},
+		func(q *db.Queries) (db.Group, error) {
+			t, err := q.UpdateTag(ctx, db.UpdateTagParams{ID: id, Name: in.Name, SortOrder: in.SortOrder,
+				SetAlert: in.Alert.Set, Alert: in.Alert.Value, SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value})
+			return db.Group(t), err
+		}, in.Name)
 	if err != nil {
-		return 0, nil, nameTaken(err, "tag", in.Name)
+		return 0, nil, err
 	}
 	a.log.Info("admin changed a tag", "admin", who, "tag", id)
-	return http.StatusOK, labelOf(t.ID, t.Name, t.Alert, t.LedColour, t.SortOrder), nil
+	return http.StatusOK, out, nil
 }

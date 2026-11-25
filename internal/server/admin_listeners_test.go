@@ -24,7 +24,7 @@ type endings struct {
 	fail  bool
 }
 
-func (e *endings) EndAccountSessions(_ context.Context, subject string) (int64, error) {
+func (e *endings) EndAccountSessions(_ context.Context, _ account.Admin, subject string) (int64, error) {
 	if e.fail {
 		return 0, errors.New("end the account's sessions: SQLSTATE 57P01")
 	}
