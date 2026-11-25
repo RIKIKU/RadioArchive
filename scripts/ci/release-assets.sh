@@ -9,7 +9,8 @@
 #   radioarchive-config.tar.gz    deploy/, unpacked next to compose.yaml: the
 #                                 Authentik blueprints and templates, the backup
 #                                 and upgrade scripts, the PostgreSQL init script,
-#                                 and the monitoring files for PagerArchive's stack
+#                                 the monitoring files for PagerArchive's stack,
+#                                 and the nginx example (docs/deploy.md)
 #   recorder-compose.yaml         the recorder host: trunk-recorder with the plugin
 #   recorder-env.example          its settings
 #
@@ -47,7 +48,7 @@ cp deploy/release/env.example "$out/env.example"
 cp deploy/release/recorder-env.example "$out/recorder-env.example"
 # The same bytes from the same files, whoever builds it.
 dirs=""
-for d in deploy/authentik deploy/backup deploy/postgres deploy/auto-upgrade deploy/monitoring; do
+for d in deploy/authentik deploy/backup deploy/postgres deploy/auto-upgrade deploy/monitoring deploy/nginx; do
 	[ ! -d "$d" ] || dirs="$dirs $d"
 done
 # shellcheck disable=SC2086 # the folders, one argument each
