@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,7 +46,20 @@ type Overlaps struct {
 func (a *Admin) overlaps(r *http.Request, _ string) (int, any, error) {
 	until := a.now().UTC()
 	since := until.Add(-OverlapWindow)
-	rows, err := a.st.RecorderOverlaps(r.Context(), db.RecorderOverlapsParams{
+	// Custom plans, in a read-only transaction, as the recent calls run
+	// (ADR 0013): with the window's bounds unknown, the generic plan joins
+	// the day's calls to every call of their talkgroups and filters, over
+	// a minute on a month's calls instead of a tenth of a second (ADR 0027).
+	ctx := r.Context()
+	tx, err := a.st.Pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return 0, nil, dbErr("overlaps", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, "SET LOCAL plan_cache_mode = force_custom_plan"); err != nil {
+		return 0, nil, dbErr("overlaps", err)
+	}
+	rows, err := a.st.WithTx(tx).RecorderOverlaps(ctx, db.RecorderOverlapsParams{
 		Since: pgtype.Timestamptz{Time: since, Valid: true}, Until: pgtype.Timestamptz{Time: until, Valid: true}})
 	if err != nil {
 		return 0, nil, dbErr("overlaps", err)

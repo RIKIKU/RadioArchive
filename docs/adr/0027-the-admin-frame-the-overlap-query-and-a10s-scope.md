@@ -47,11 +47,21 @@ R13 asks the Recorders page to warn when two recorders store the same calls, whi
 - **Ends included**, so two copies with the same start and end, or a zero-length one, count. Two calls that only touch, one starting the moment the other ended, count too; on one talkgroup that's rare, and it errs toward the warning.
 - **Every state.** A hidden or ignored-later talkgroup's copies are still two recorders' overlap, and the page is an admin's.
 
-**The query** (`RecorderOverlaps`). The 24 hours' ended calls, each joined to the other recorders' calls on its talkgroup that start no earlier than it, less the longest call in the window, and no later than its end. Bounding by the longest call keeps the join a range read of `calls (talkgroup, started_at)` (ADR 0013's index) without missing a long call's overlaps. Each pair is counted under the lower recorder ID, so once.
+**The query** (`RecorderOverlaps`). The 24 hours' ended calls, each with its lower bound (its start less the longest call in the window, and no earlier than the window), joined to the other recorders' calls on its talkgroup that start between that bound and its end. Bounding by the longest call keeps the join a range read of `calls (talkgroup, started_at)` (ADR 0013's index) without missing a long call's overlaps. Each pair is counted under the lower recorder ID, so once.
 
 **Speed**, on cld01, PostgreSQL 18 with its defaults, the query through `psql` (the handler adds a few rows of JSON), a database migrated from empty and then filled with a month in start-time order: 600,000 calls over 31 days from one recorder (60,000 on the busiest talkgroup, the rest over 999), and a second recorder storing a copy of 5 % of them, statistics as autovacuum left them. Cold is PostgreSQL restarted with the page cache dropped, then the one query.
 
-SPEED-TABLE
+| Database | Warm p50 | Warm p95 | Cold | Answer |
+|---|---|---|---|---|
+| Empty (migrated, two recorders, no calls) | 0.6 ms | 0.8 ms | | no rows |
+| The month (20,000 calls in the 24 hours, 968 overlapping pairs) | 63 ms | 76 ms | 0.28 s (5 rounds, 275-284 ms) | 1 row |
+
+Warm is 200 runs in one session. The plan reads the day's calls once by `calls (started_at, id)`, then for each one probes `calls (talkgroup, started_at)` between its lower bound and its end.
+
+Two things the first version got wrong, found by measuring, and how the query avoids them:
+
+- **The lower bound as an expression.** Written as `greatest(since, a.started_at - span.longest)` in the join, PostgreSQL used it as a filter, not an index bound, and each probe read the talkgroup's calls from the start of the month: 86 s. Computed as a column of a materialized CTE (`a.lo`), it bounds the index range.
+- **Generic plans.** With the window's bounds as unknown parameters, the generic plan joins the day's calls to every call of their talkgroups and filters 8.5 million rows. The handler runs the query with `plan_cache_mode = force_custom_plan` in a read-only transaction, as the recent calls (ADR 0013) and a talkgroup's calls (ADR 0026) do. Planning each time is the 0.6 ms on an empty database.
 
 ## A10 and the word "Admin"
 
@@ -103,7 +113,7 @@ If these recur (the Talkgroups and Units pages will want a state badge and a tab
 
 - An admin sees the Admin section; nothing else changes for anyone else. The public routes and the live feed answer exactly as before (A10, A13).
 - Every later admin page adds one line to `menu.ts` and wraps itself in `AdminPage.svelte`, which gives it the heading, the disk warning and the guard.
-- The Recorders page asks the admin API every 5 s while it's open: three small queries, the overlap one the largest (above).
+- The Recorders page asks the admin API every 5 s while it's open: three queries, the overlap one the largest (about 60 ms warm on a month, above). An admin leaving the page open all day costs the database about 1 % of a core.
 - A10's harness checks the app's files only as far as they hold more than the build.
 
 ## How each choice is verified

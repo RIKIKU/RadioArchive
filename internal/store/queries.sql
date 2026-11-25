@@ -327,13 +327,16 @@ WITH w AS (
       AND c.ended_at IS NOT NULL
 ), span AS (
     SELECT coalesce(max(w.ended_at - w.started_at), interval '0') AS longest FROM w
+), a AS MATERIALIZED (
+    SELECT w.recorder_id, w.system_id, w.talkgroup, w.started_at, w.ended_at,
+           greatest(sqlc.arg(since)::timestamptz, w.started_at - span.longest) AS lo
+    FROM w CROSS JOIN span
 ), o AS (
     SELECT a.recorder_id AS first_id, b.recorder_id AS second_id, a.system_id, a.talkgroup, count(*) AS calls
-    FROM w a
-    CROSS JOIN span
+    FROM a
     JOIN calls b ON b.talkgroup = a.talkgroup AND b.system_id = a.system_id AND b.recorder_id > a.recorder_id
      AND b.ended_at IS NOT NULL
-     AND b.started_at >= greatest(sqlc.arg(since)::timestamptz, a.started_at - span.longest)
+     AND b.started_at >= a.lo AND b.started_at >= sqlc.arg(since)::timestamptz
      AND b.started_at < sqlc.arg(until)::timestamptz
      AND b.started_at <= a.ended_at AND b.ended_at >= a.started_at
     GROUP BY a.recorder_id, b.recorder_id, a.system_id, a.talkgroup
