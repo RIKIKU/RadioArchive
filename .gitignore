@@ -9,5 +9,7 @@ web/test-results/
 web/playwright-report/
 # The module's behaviour tests' recordings (scripts/ci/e2e-module.sh).
 .e2e-module/
-# The development and test stack's made-up settings (scripts/dev-env.sh).
+# The development and test stack's made-up settings (scripts/dev-env.sh),
+# and its backups (compose.yaml's BACKUP_DIR).
 .env
+/backups/

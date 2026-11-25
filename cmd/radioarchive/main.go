@@ -50,6 +50,13 @@
 //	                answers 404. The reverse proxy denies /metrics
 //	                (docs/deploy.md); Alloy scrapes it from inside
 //
+// Backups (SPEC.md R89, ADR 0041), by the backup service:
+//
+//	BACKUP_STATUS_FILE  the backup service's status file, mounted read-only, which
+//	                admins' pages and /metrics show. Unset, there are no backups to show
+//	SETUP_EXPORT_DIR    a folder the setup export (R53) is written to hourly, for
+//	                the backup service to keep beside each night's dumps
+//
 // Listeners' sign-in (ADR 0009), on when AUTHENTIK_URL is set:
 //
 //	APP_URL                 the radio's public URL, e.g. https://radio.example.org
@@ -89,6 +96,7 @@ import (
 	_ "time/tzdata" // TZ's zone wherever the binary runs (ADR 0016)
 
 	"github.com/RIKIKU/RadioArchive/internal/account"
+	"github.com/RIKIKU/RadioArchive/internal/backup"
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/limits"
 	"github.com/RIKIKU/RadioArchive/internal/public"
@@ -215,16 +223,19 @@ func serve(log *slog.Logger) error {
 	if !sc.on() {
 		log.Warn("listener sign-in is off: AUTHENTIK_URL isn't set. Listening works as ever; nobody can save to an account")
 	}
-	mt, err := metricsToken(os.Getenv)
+	ops, err := operationsFromEnv(os.Getenv)
 	if err != nil {
 		return err
 	}
-	if mt == "" {
+	if ops.metricsToken == "" {
 		log.Info("metrics are off: METRICS_TOKEN isn't set, so /metrics answers 404")
 	}
-	handler, acc, err := apiHandler(st, log, rs, g, job, sc, lc, mt)
+	handler, acc, admin, err := apiHandler(st, log, rs, g, job, sc, lc, ops)
 	if err != nil {
 		return err
+	}
+	if ops.exportDir != "" {
+		go writeSetupExports(ctx, admin, ops.exportDir, log)
 	}
 	// Expired listener sessions are deleted hourly (ADR 0022).
 	go acc.Run(ctx)
@@ -264,27 +275,84 @@ func serve(log *slog.Logger) error {
 //
 // The metrics (ADR 0040) are at /metrics, for the bearer of metricsToken;
 // with none, /metrics answers 404.
-func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate, job *retention.Job, sc signInConfig, lc limits.Config, metricsToken string) (*server.API, *account.Service, error) {
+func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate.Gate, job *retention.Job, sc signInConfig, lc limits.Config, ops operations) (*server.API, *account.Service, *server.Admin, error) {
 	acc, err := sc.service(g, st, log)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	lim, err := limits.New(lc)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	admin, err := server.NewAdmin(st, log, acc, recordingsDir())
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// The deployment's clock: the talkgroup table's 30 days (ADR 0026).
 	admin.WithClock(time.Now).WithRetention(job).WithRecorders(rs).WithListenerSessions(acc).WithAccounts(acc)
 	reg := telemetry.NewRegistry(telemetry.All)
 	reg.Add(telemetry.Process(version.Version, time.Now()), rs, g.Live(), lim, job)
+	if ops.backup != nil {
+		admin.WithBackup(ops.backup)
+		reg.Add(ops.backup)
+	}
 	return server.New(st, log, server.WithRecorders(rs), server.WithPublic(public.New(g, log, public.WithLocation(deploymentZone()))),
 		server.WithAccount(acc), server.WithAdmin(admin), server.WithApp(web.New()),
 		// Admins are exempt, by the same check as the admin API's (R70).
-		server.WithLimits(lim, acc), server.WithMetrics(reg, metricsToken)), acc, nil
+		server.WithLimits(lim, acc), server.WithMetrics(reg, ops.metricsToken)), acc, admin, nil
+}
+
+// operations are the settings for running the deployment: the metrics
+// token (ADR 0040), and the backup's status file and the setup export's
+// folder (ADR 0041).
+type operations struct {
+	metricsToken string
+	backup       *backup.Reader
+	exportDir    string
+}
+
+// operationsFromEnv reads METRICS_TOKEN (or its file), BACKUP_STATUS_FILE
+// and SETUP_EXPORT_DIR.
+func operationsFromEnv(getenv func(string) string) (operations, error) {
+	mt, err := metricsToken(getenv)
+	if err != nil {
+		return operations{}, err
+	}
+	ops := operations{metricsToken: mt, exportDir: getenv("SETUP_EXPORT_DIR")}
+	if f := getenv("BACKUP_STATUS_FILE"); f != "" {
+		ops.backup = backup.New(f, nil)
+	}
+	return ops, nil
+}
+
+// SetupExportEvery is how often the setup is read for the backup's setup
+// export (ADR 0041); it's written when it has changed, so a night's copy is
+// at most this old.
+const SetupExportEvery = time.Minute
+
+// writeSetupExports writes the setup export to dir at start and whenever
+// the setup has changed, checking every SetupExportEvery, until ctx ends. A
+// failure is logged once, and tried again at the next check.
+func writeSetupExports(ctx context.Context, admin *server.Admin, dir string, log *slog.Logger) {
+	t := time.NewTicker(SetupExportEvery)
+	defer t.Stop()
+	var last []byte
+	failing := false
+	for {
+		b, err := admin.WriteSetupExport(ctx, dir, last)
+		switch {
+		case err != nil && ctx.Err() == nil && !failing:
+			log.Warn("couldn't write the setup export for the backup", "error", err)
+			failing = true
+		case err == nil:
+			last, failing = b, false
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // metricsToken is METRICS_TOKEN, or the contents of METRICS_TOKEN_FILE: ""

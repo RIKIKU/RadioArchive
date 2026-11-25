@@ -126,6 +126,15 @@ admin_email=fixture-admin@example.test
 api_token=made-up-e2e-web-authentik-api-token-0123456789
 "$tmp/fakeauthentik" -addr "127.0.0.1:$akport" -secret "$secret" -email "$admin_email" -api-token "$api_token" >"$tmp/authentik.log" 2>&1 &
 ak=$!
+# A good night's backup status, as the backup service writes it (ADR 0041):
+# the admin pages show no backup alert unless a test makes the API say
+# otherwise (backup.spec.ts).
+now_s=$(date +%s)
+cat >"$tmp/backup-status.json" <<JSON
+{"database": "radioarchive", "since": $((now_s - 86400)), "last_night": "$(date +%F)", "last_run_at": $now_s,
+ "last_run_ok": true, "running_since": 0, "last_good_at": $now_s, "last_good_night": "$(date +%F)",
+ "last_good_bytes": 123456, "nights": 1, "error": ""}
+JSON
 # The deployment's time zone isn't the browsers' (UTC), so the Recent calls
 # page's tests show its times are TZ's (section 13). Every test comes from
 # 127.0.0.1, so the heavy-use limits are raised (SPEC.md section 6.11, ADR
@@ -134,7 +143,7 @@ TZ=Australia/Melbourne DATABASE_URL=$DATABASE_URL LISTEN_ADDR="127.0.0.1:$port" 
 	LIMIT_REQUESTS=100000 LIMIT_PLAYBACK=100000 LIMIT_LIVE_PER_CLIENT=100000 LIMIT_LIVE_TOTAL=100000 \
 	LIMIT_ZIPS_PER_CLIENT=100000 LIMIT_ZIPS_TOTAL=100000 LIMIT_ZIP_SPEED=100000 LIMIT_ZIP_SPEED_TOTAL=100000 \
 	APP_URL="http://127.0.0.1:$port" AUTHENTIK_URL="http://127.0.0.1:$akport" OIDC_CLIENT_SECRET="$secret" INITIAL_ADMIN_EMAIL="$admin_email" \
-	AUTHENTIK_API_TOKEN="$api_token" "$tmp/radioarchive" serve >"$tmp/api.log" 2>&1 &
+	AUTHENTIK_API_TOKEN="$api_token" BACKUP_STATUS_FILE="$tmp/backup-status.json" "$tmp/radioarchive" serve >"$tmp/api.log" 2>&1 &
 pid=$!
 # Node, not curl: Playwright's image may have no curl.
 wait_for 120 "the API" node -e "fetch(process.argv[1]).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))" \

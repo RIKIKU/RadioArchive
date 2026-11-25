@@ -275,6 +275,11 @@ jobs:
           pwsh -NoProfile -NonInteractive -File ./scripts/ci/Install-PowerShell.ps1 -Version 7.6.0 \
             -Destination "$RUNNER_TEMP/pwsh" -ModulePath "$RUNNER_TEMP/psmodules"
           RA_PWSH_DIR="$RUNNER_TEMP/pwsh" RA_PS_MODULES="$RUNNER_TEMP/psmodules" sh scripts/ci/e2e-module.sh
+      - name: A31 end to end (the nightly backup, restored into an empty install)
+        # Last, once the stack holds calls, accounts, saved settings and
+        # the module's audited changes (ADR 0041).
+        timeout-minutes: 10
+        run: sh scripts/ci/e2e-a31.sh
       - name: Upload the sign-in Playwright report
         if: failure() || cancelled()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
