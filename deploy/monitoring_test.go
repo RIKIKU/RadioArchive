@@ -87,7 +87,7 @@ func TestAlertRules(t *testing.T) {
 	}
 	want := []string{"ra-recorder-disconnected", "ra-recorder-deaf", "ra-recorder-quiet", "ra-unattached-calls",
 		"ra-recording-missing", "ra-live-delay", "ra-recordings-disk", "ra-retention-shortened",
-		"ra-recordings-volume-full", "ra-client-queue", "ra-api-unreachable", "ra-backup-failing", "ra-radio-full"}
+		"ra-recordings-volume-full", "ra-client-queue", "ra-api-unreachable", "ra-backup-failing", "ra-radio-full", "ra-upgrade-failed"}
 	var got []string
 	for _, r := range f.Groups[0].Rules {
 		got = append(got, r.UID)

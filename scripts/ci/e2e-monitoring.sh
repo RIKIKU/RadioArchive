@@ -88,7 +88,7 @@ monc logs alloy grafana 2>&1 | grep 'include:' || true
 
 # ── The rules ──────────────────────────────────────────────────────────────
 uids=$(sed -n 's/^ *- uid: \(ra-[a-z-]*\)$/\1/p' deploy/monitoring/alerts.d/radioarchive.yaml)
-[ "$(echo "$uids" | wc -l)" -ge 13 ] || fail "the rule file has $(echo "$uids" | wc -l) rules"
+[ "$(echo "$uids" | wc -l)" -ge 14 ] || fail "the rule file has $(echo "$uids" | wc -l) rules"
 for u in $uids; do
 	code=$(curl -s -o /dev/null -w '%{http_code}' -u "admin:$password" "http://$grafana/api/v1/provisioning/alert-rules/$u")
 	[ "$code" = 200 ] || fail "rule $u isn't provisioned (HTTP $code)"
@@ -158,7 +158,7 @@ echo "ok: it cleared once the client was back, at $(date -u +%T)"
 gf /api/prometheus/grafana/api/v1/rules | tr -d '\000-\037' >"$mon/rules.json"
 bad=$(jq -r '.data.groups[]? | select(.name == "RadioArchive") | .rules[]? | select(.health != "ok") | .name + ": " + (.lastError // .health)' "$mon/rules.json") ||
 	fail "Grafana's rules didn't parse: $(head -c 400 "$mon/rules.json")"
-jq -e '[.data.groups[]? | select(.name == "RadioArchive") | .rules[]?] | length >= 13' "$mon/rules.json" >/dev/null ||
+jq -e '[.data.groups[]? | select(.name == "RadioArchive") | .rules[]?] | length >= 14' "$mon/rules.json" >/dev/null ||
 	fail "Grafana doesn't list RadioArchive's rules: $(head -c 400 "$mon/rules.json")"
 [ -z "$bad" ] || fail "rules in error: $bad"
 echo "ok: every RadioArchive rule evaluates"

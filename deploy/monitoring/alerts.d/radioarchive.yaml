@@ -511,3 +511,41 @@ groups:
             listeners see "The radio is full right now". The Listeners dashboard
             shows the sockets and limit hits. Raise the limit if the host can
             take it, or look for one client holding many.
+
+      # R87, R89: an automatic upgrade failed, and was rolled back (or the
+      # rollback failed too), or a run stopped part way. The API works it out
+      # from the upgrade script's status, as the admin pages show it. It
+      # clears when a later release upgrades, or after `auto-upgrade.sh clear`.
+      - uid: ra-upgrade-failed
+        title: RadioArchive upgrade failed
+        condition: failing
+        data:
+          - refId: state
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: state
+              instant: true
+              range: false
+              expr: max(radioarchive_auto_upgrade_failing{job="radioarchive"})
+          - refId: failing
+            datasourceUid: __expr__
+            model:
+              refId: failing
+              type: threshold
+              expression: state
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severity: critical
+          app: radioarchive
+        annotations:
+          summary: "RadioArchive's automatic upgrade failed"
+          description: >-
+            The admin pages say which release, at which step, and whether it was
+            rolled back. docs/deploy.md, "Automatic upgrades", says what to do.

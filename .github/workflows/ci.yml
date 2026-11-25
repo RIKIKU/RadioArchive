@@ -333,6 +333,25 @@ jobs:
           rm -f compose.override.yaml
           docker compose down --volumes
 
+  # The automatic upgrade (R87, R106; ADR 0044) on an install made from the
+  # release's files, against stand-ins for GitHub, its CLI and GHCR: the
+  # call rule, the host-wide lock, an upgrade, and a failed one rolled back
+  # (scripts/ci/e2e-auto-upgrade.sh).
+  auto-upgrade:
+    name: Automatic upgrade end to end
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: An upgrade, a held lock and a rollback
+        timeout-minutes: 35
+        run: sh scripts/ci/e2e-auto-upgrade.sh
+      - name: Logs
+        if: always()
+        run: |
+          cat .e2e-auto-upgrade/install/auto-upgrade/status/auto-upgrade.log 2>/dev/null || true
+          jq . .e2e-auto-upgrade/install/auto-upgrade/status/status.json 2>/dev/null || true
+
   # The PowerShell module (issue #116, ADR 0028, docs/powershell-guidelines.md):
   # PSScriptAnalyzer with zero findings, the meta-tests, the unit tests with
   # the API mocked and the sign-in tests (the DPAPI file on Windows; a

@@ -99,6 +99,22 @@ export interface Backup {
 export const backupAlert = (b: Backup | null | undefined): string | undefined =>
 	b && b.state === 'failing' && b.message ? b.message : undefined;
 
+/** GET /api/v1/admin/upgrade (R87, R89; ADR 0044): the automatic upgrade's state. */
+export interface Upgrade {
+	state: 'off' | 'ok' | 'running' | 'failing';
+	last_check_at: string | null;
+	last_result?: string;
+	running_version?: string;
+	latest_version?: string;
+	last_upgrade_at: string | null;
+	/** What failed, in words, when it did. */
+	message?: string;
+}
+
+/** The upgrade alert admins see on every admin page (R89), or nothing. */
+export const upgradeAlert = (u: Upgrade | null | undefined): string | undefined =>
+	u && u.state === 'failing' && u.message ? u.message : undefined;
+
 /** The disk warning admins see on every admin page (R88), or nothing. */
 export const diskWarning = (d: Disk | null | undefined): string | undefined => (d && d.state !== 'ok' && d.message ? d.message : undefined);
 

@@ -107,6 +107,9 @@ services:
       # keeps beside each night's dumps (R89).
       BACKUP_STATUS_FILE: /var/lib/radioarchive/backup-status/status.json
       SETUP_EXPORT_DIR: /var/lib/radioarchive/setup-export
+      # The automatic upgrade's state (ADR 0044), once it's switched on:
+      # deploy/auto-upgrade/auto-upgrade.sh enable sets AUTO_UPGRADE_STATUS_DIR.
+      AUTO_UPGRADE_STATUS_FILE: /auto-upgrade/status.json
     ports:
       - "${API_BIND:-127.0.0.1:8080}:8080"
     volumes:
@@ -114,6 +117,8 @@ services:
       - recordings:/var/lib/radioarchive/recordings
       - backup-status:/var/lib/radioarchive/backup-status:ro
       - setup-export:/var/lib/radioarchive/setup-export
+      # Nothing until automatic upgrades are on.
+      - ${AUTO_UPGRADE_STATUS_DIR:-/dev/null}:/auto-upgrade:ro
     depends_on:
       db:
         condition: service_healthy
