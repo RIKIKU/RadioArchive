@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -177,6 +178,8 @@ func NewAdmin(st *store.Store, log *slog.Logger, auth AdminAuthenticator, record
 func WithAdmin(a *Admin) Option {
 	return func(api *API) {
 		api.handle(AdminRoute, "GET "+AdminPath+"/calls/{call}/recording", a.signedIn(a.recording))
+		// The setup's export and import (ADR 0030).
+		api.handle(AdminRoute, "GET "+AdminPath+"/setup", a.signedIn(a.exportSetup))
 		for _, r := range []struct {
 			pattern string
 			h       func(*http.Request, string) (int, any, error)
@@ -208,6 +211,7 @@ func WithAdmin(a *Admin) Option {
 			{"GET /tags", a.listTags},
 			{"PATCH /tags/{tag}", a.patchTag},
 			{"GET /audit", a.auditLog},
+			{"POST /import", a.importSetup},
 		} {
 			method, path, _ := strings.Cut(r.pattern, " ")
 			api.handle(AdminRoute, method+" "+AdminPath+path, a.serve(r.h))
@@ -611,21 +615,26 @@ func (a *Admin) deleteSystem(r *http.Request, who string) (int, any, error) {
 // Talkgroup is a talkgroup as the admin API shows it. Alert and LEDColour
 // are its own: null takes them from its tag, groups or system (ADR 0006).
 type Talkgroup struct {
-	SystemID          int64      `json:"system_id"`
-	ID                int32      `json:"id"`
-	Label             string     `json:"label"`
-	Name              string     `json:"name"`
-	Tag               *string    `json:"tag"`
-	Groups            []string   `json:"groups"`
-	State             string     `json:"state"`
-	Unreviewed        bool       `json:"unreviewed"`
-	DelayMinutes      int32      `json:"delay_minutes"`
-	Alert             *string    `json:"alert"`
-	LEDColour         *string    `json:"led_colour"`
-	SortOrder         int32      `json:"sort_order"`
-	FiregroundChannel *int32     `json:"fireground_channel"`
-	CreatedAt         *time.Time `json:"created_at,omitempty"`
-	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+	SystemID          int64    `json:"system_id"`
+	ID                int32    `json:"id"`
+	Label             string   `json:"label"`
+	Name              string   `json:"name"`
+	Tag               *string  `json:"tag"`
+	Groups            []string `json:"groups"`
+	State             string   `json:"state"`
+	Unreviewed        bool     `json:"unreviewed"`
+	DelayMinutes      int32    `json:"delay_minutes"`
+	Alert             *string  `json:"alert"`
+	LEDColour         *string  `json:"led_colour"`
+	SortOrder         int32    `json:"sort_order"`
+	FiregroundChannel *int32   `json:"fireground_channel"`
+	// Type is what the setup says the talkgroup is (trunk-recorder's mode:
+	// D, T, E, ...), "" for nothing said; Frequency is in hertz (R22). Kept
+	// and shown, never a listener's (migration 00024, ADR 0030).
+	Type      string     `json:"type"`
+	Frequency *int64     `json:"frequency"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 func talkgroupOf(t db.GetTalkgroupRow) Talkgroup {
@@ -636,7 +645,7 @@ func talkgroupOf(t db.GetTalkgroupRow) Talkgroup {
 	return Talkgroup{SystemID: t.SystemID, ID: t.TalkgroupID, Label: t.Label, Name: t.Name, Tag: t.Tag,
 		Groups: groups, State: string(t.State), Unreviewed: t.Unreviewed, DelayMinutes: t.DelayMinutes,
 		Alert: t.Alert, LEDColour: t.LedColour, SortOrder: t.SortOrder, FiregroundChannel: t.FiregroundChannel,
-		CreatedAt: ts(t.CreatedAt), UpdatedAt: ts(t.UpdatedAt)}
+		Type: t.Type, Frequency: t.Frequency, CreatedAt: ts(t.CreatedAt), UpdatedAt: ts(t.UpdatedAt)}
 }
 
 func (a *Admin) listTalkgroups(r *http.Request, _ string) (int, any, error) {
@@ -702,10 +711,11 @@ func parseState(s string) (db.TalkgroupState, error) {
 const maxGroups = 50
 
 // talkgroupFields are a talkgroup's editable fields. In a PATCH, absent is
-// "unchanged"; null clears alert, LED colour and fireground channel number,
-// and groups: [] takes the talkgroup out of every group. In a PUT, absent is
-// the default: no groups, no delay, sort order 0, none of its own alert or
-// LED colour, and no fireground channel number.
+// "unchanged"; null clears alert, LED colour, fireground channel number and
+// frequency, and groups: [] takes the talkgroup out of every group. In a
+// PUT, absent is the default: no groups, no delay, sort order 0, none of
+// its own alert or LED colour, no fireground channel number, no type and
+// no frequency.
 type talkgroupFields struct {
 	Label             *string                    `json:"label"`
 	Name              *string                    `json:"name"`
@@ -714,8 +724,17 @@ type talkgroupFields struct {
 	Groups            *[]string                  `json:"groups"`
 	DelayMinutes      *int32                     `json:"delay_minutes"`
 	FiregroundChannel optional[firegroundNumber] `json:"fireground_channel"`
+	Type              *string                    `json:"type"`
+	Frequency         optional[int64]            `json:"frequency"`
 	settingsFields
 }
+
+// MaxTalkgroupType is the longest type, in bytes; MaxFrequency the highest
+// frequency, in hertz (100 GHz).
+const (
+	MaxTalkgroupType = 32
+	MaxFrequency     = 100_000_000_000
+)
 
 func (f *talkgroupFields) check() (*db.TalkgroupState, error) {
 	if f.Label != nil {
@@ -747,6 +766,18 @@ func (f *talkgroupFields) check() (*db.TalkgroupState, error) {
 			}
 		}
 		*f.Groups = gs
+	}
+	if f.Type != nil {
+		if err := text("type", *f.Type, 0, MaxTalkgroupType); err != nil {
+			return nil, err
+		}
+		if strings.ContainsFunc(*f.Type, unicode.IsControl) {
+			return nil, refuseAdmin(http.StatusBadRequest, "invalid_type", "type can't hold control characters.")
+		}
+	}
+	if v := f.Frequency.Value; v != nil && (*v < 1 || *v > MaxFrequency) {
+		return nil, refuseAdmin(http.StatusBadRequest, "invalid_frequency",
+			"frequency must be a whole number of hertz from 1 to %d, or null.", int64(MaxFrequency))
 	}
 	if f.DelayMinutes != nil && (*f.DelayMinutes < 0 || *f.DelayMinutes > store.MaxDelayMinutes) {
 		return nil, refuseAdmin(http.StatusBadRequest, "invalid_delay_minutes",
@@ -829,7 +860,11 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 				code = http.StatusCreated
 			}
 			p := db.PutTalkgroupParams{SystemID: sys, TalkgroupID: tg, TagID: tagID, State: store.Public,
-				Alert: in.Alert.Value, LedColour: in.LEDColour.Value, FiregroundChannel: fg}
+				Alert: in.Alert.Value, LedColour: in.LEDColour.Value, FiregroundChannel: fg,
+				Frequency: in.Frequency.Value}
+			if in.Type != nil {
+				p.Type = *in.Type
+			}
 			if in.Label != nil {
 				p.Label = *in.Label
 			}
@@ -857,7 +892,8 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 				DelayMinutes: in.DelayMinutes, SortOrder: in.SortOrder,
 				SetAlert: in.Alert.Set, Alert: in.Alert.Value,
 				SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value,
-				SetFiregroundChannel: in.FiregroundChannel.Set, FiregroundChannel: fg})
+				SetFiregroundChannel: in.FiregroundChannel.Set, FiregroundChannel: fg,
+				Type: in.Type, SetFrequency: in.Frequency.Set, Frequency: in.Frequency.Value})
 			if err != nil {
 				return talkgroupErr(err)
 			}

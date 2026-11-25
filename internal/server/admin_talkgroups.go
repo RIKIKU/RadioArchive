@@ -59,7 +59,7 @@ func (a *Admin) talkgroupTable(r *http.Request, _ string) (int, any, error) {
 			Talkgroup: talkgroupOf(db.GetTalkgroupRow{SystemID: t.SystemID, TalkgroupID: t.TalkgroupID,
 				Label: t.Label, Name: t.Name, Tag: t.Tag, State: t.State, Unreviewed: t.Unreviewed,
 				Groups: t.Groups, DelayMinutes: t.DelayMinutes, Alert: t.Alert, LedColour: t.LedColour,
-				SortOrder: t.SortOrder, FiregroundChannel: t.FiregroundChannel,
+				SortOrder: t.SortOrder, FiregroundChannel: t.FiregroundChannel, Type: t.Type, Frequency: t.Frequency,
 				CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt}),
 			LastHeardAt: ts(t.LastHeardAt),
 			Calls30Days: t.CallsSince,
