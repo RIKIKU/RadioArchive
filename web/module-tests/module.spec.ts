@@ -437,8 +437,11 @@ Import-Csv -Path '${p('talkgroups.csv')}' | Import-RadioArchiveTalkgroup -Update
 		expect(readFileSync(p('two.json')).equals(readFileSync(p('one.json')))).toBe(true);
 		expect(r.out.match(/^CSV .*$/gm)).toEqual(['CSV Unchanged']);
 	} finally {
-		await window(deviceHome, `Set-RadioArchiveTalkgroup -SystemId 1 -Id 1001 -Label 'DISP N' -Name 'Dispatch North' -DelayMinutes 0
+		// A window after one that began with -WhatIf: the sign-in it renewed
+		// was saved, -WhatIf or not.
+		const after = await window(deviceHome, `Set-RadioArchiveTalkgroup -SystemId 1 -Id 1001 -Label 'DISP N' -Name 'Dispatch North' -DelayMinutes 0
 Set-RadioArchiveTalkgroup -SystemId 1 -Id 1003 -DelayMinutes 0`).done;
+		expect(after.out).not.toContain('FAILED');
 	}
 });
 

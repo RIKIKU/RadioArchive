@@ -163,7 +163,10 @@ function Save-RaSignIn {
         $record.refreshToken = Protect-RaToken -Token $Connection.RefreshToken
     } else {
         try {
-            Microsoft.PowerShell.SecretManagement\Set-Secret -Name ('RadioArchive:' + $Connection.Uri) -SecureStringSecret $Connection.RefreshToken -Vault $Connection.Vault -ErrorAction Stop
+            # Never under the caller's -WhatIf: Authentik has already rotated
+            # the token, so a renewal not saved would end the sign-in (a
+            # previewing import, issue #117, renews and calls the radio).
+            Microsoft.PowerShell.SecretManagement\Set-Secret -Name ('RadioArchive:' + $Connection.Uri) -SecureStringSecret $Connection.RefreshToken -Vault $Connection.Vault -ErrorAction Stop -WhatIf:$false -Confirm:$false
         } catch {
             throw (New-RaErrorRecord -ErrorId 'vault_failed' -Category WriteError -Message "The sign-in couldn't be saved in the vault '$($Connection.Vault)': $($_.Exception.Message) If it's locked, unlock it (for SecretStore: Unlock-SecretStore).")
         }
@@ -171,7 +174,7 @@ function Save-RaSignIn {
     $path = Get-RaSignInPath -Origin $Connection.Uri
     $folder = Split-Path -Path $path -Parent
     if (-not (Test-Path -LiteralPath $folder)) {
-        $null = New-Item -ItemType Directory -Path $folder -Force
+        $null = New-Item -ItemType Directory -Path $folder -Force -WhatIf:$false -Confirm:$false
     }
     # Written under another name, then moved over the old file, so another
     # window never reads half a file.

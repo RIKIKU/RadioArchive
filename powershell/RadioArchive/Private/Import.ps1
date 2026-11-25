@@ -422,7 +422,7 @@ function Get-RaSetup {
         $null = Invoke-RaApi -Method GET -Path '/api/v1/admin/setup' -OutFile $temp
         [System.IO.File]::ReadAllText($temp) | ConvertFrom-Json -Depth 32 -DateKind String
     } finally {
-        Remove-Item -LiteralPath $temp -Force -ErrorAction Ignore
+        Remove-Item -LiteralPath $temp -Force -ErrorAction Ignore -WhatIf:$false -Confirm:$false
     }
 }
 

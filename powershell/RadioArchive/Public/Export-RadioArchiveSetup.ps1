@@ -50,7 +50,7 @@ function Export-RadioArchiveSetup {
             [System.IO.File]::Move($temp, $file, $true)
         } finally {
             if (Test-Path -LiteralPath $temp) {
-                Remove-Item -LiteralPath $temp -Force
+                Remove-Item -LiteralPath $temp -Force -WhatIf:$false -Confirm:$false
             }
         }
         Write-Warning -Message "$file holds hidden and ignored talkgroups too: keep it as you would the admin pages."
