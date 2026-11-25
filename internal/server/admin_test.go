@@ -16,21 +16,31 @@ import (
 
 	"github.com/RIKIKU/RadioArchive/internal/account"
 	"github.com/RIKIKU/RadioArchive/internal/server"
+	"github.com/RIKIKU/RadioArchive/internal/store"
 )
 
 // testAdmin stands in for admin sign-in (account.Service, ADR 0025, which
 // cmd/radioarchive's tests drive through a real sign-in): a request with
 // an X-Test-Admin header is from the admin with that ID. It's in a
-// _test.go file, so no binary contains it.
+// _test.go file, so no binary contains it. It signs in as a browser does;
+// "Authorization: Bearer <ID>" stands in for the module's token (issue
+// #116), so the audit log's "how" is the module's.
 type testAdmin struct{}
 
 func (testAdmin) Admin(_ http.ResponseWriter, r *http.Request) (account.Admin, error) {
+	if v, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && v != "" {
+		return account.Admin{Subject: v, Name: "Test Admin " + v, Email: v + "@example.test", Via: store.ViaModule}, nil
+	}
 	v := r.Header.Get("X-Test-Admin")
 	if v == "" {
 		return account.Admin{}, account.ErrSignInRequired
 	}
-	return account.Admin{Subject: v}, nil
+	return account.Admin{Subject: v, Name: "Test Admin", Email: "test.admin@example.test", Via: store.ViaBrowser}, nil
 }
+
+// testActor is testAdmin's admin, for changes a test makes without a
+// request.
+var testActor = store.Actor{Subject: "test admin", Name: "Test Admin", Email: "test.admin@example.test", Via: store.ViaBrowser}
 
 // adminReq calls the admin API as an admin (or as nobody, with as "").
 func (e *env) adminReq(t *testing.T, as, method, path string, body any) (int, []byte) {
@@ -140,7 +150,7 @@ func TestIntegrationAdminSignIn(t *testing.T) {
 		"PUT /systems/1/talkgroups/1001", "PUT /recorders/x/attachments/ex", "DELETE /systems/1",
 		"GET /calls/00000000-0000-4000-8000-000000000000/recording", "GET /retention", "PUT /retention",
 		"GET /groups", "POST /groups", "PATCH /groups/1", "GET /tags", "PATCH /tags/1",
-		"GET /recorders", "GET /recorders/x", "PATCH /recorders/x"} {
+		"GET /recorders", "GET /recorders/x", "PATCH /recorders/x", "GET /audit"} {
 		method, path, _ := strings.Cut(p, " ")
 		code, b := e.adminReq(t, "", method, path, map[string]any{})
 		if code != 401 || !strings.Contains(string(b), `"admin_sign_in_required"`) {

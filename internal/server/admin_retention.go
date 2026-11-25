@@ -129,7 +129,8 @@ func (a *Admin) putRetention(r *http.Request, who string) (int, any, error) {
 			Message: fmt.Sprintf("Shortening retention from %d to %d days deletes %s at the next nightly run. Confirm?",
 				cur, in.Days, recordingsCount(n))}, nil
 	}
-	if err := a.ret.SetDays(ctx, in.Days); err != nil {
+	by, _ := AdminFrom(ctx)
+	if err := a.ret.SetDays(ctx, by.Actor(), in.Days); err != nil {
 		return 0, nil, dbErr("retention", err)
 	}
 	a.log.Info("admin changed retention", "admin", who, "from_days", cur, "days", in.Days)

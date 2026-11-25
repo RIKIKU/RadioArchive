@@ -87,8 +87,9 @@ type Sessions interface {
 	RenewListenerSession(ctx context.Context, idHash []byte, now, expires time.Time) error
 	// EndListenerSession deletes it, returning its ID token ("" for none).
 	EndListenerSession(ctx context.Context, idHash []byte) (string, error)
-	// EndAccountListenerSessions deletes every session of the account.
-	EndAccountListenerSessions(ctx context.Context, issuer, subject string) (int64, error)
+	// EndAccountListenerSessions deletes every session of the account, as
+	// the admin by asks (audited).
+	EndAccountListenerSessions(ctx context.Context, by store.Actor, issuer, subject string) (int64, error)
 	// EndExpiredListenerSessions deletes those that ended by now.
 	EndExpiredListenerSessions(ctx context.Context, now time.Time) (int64, error)
 }
@@ -120,8 +121,8 @@ type Accounts interface {
 	// Accounts are the issuer's accounts.
 	Accounts(ctx context.Context, issuer string) ([]store.Account, error)
 	// SetAccountRole sets an account's role, as the admin by changes it,
-	// under the last-admin rule.
-	SetAccountRole(ctx context.Context, issuer, by, subject, role string) (store.Account, error)
+	// under the last-admin rule (audited).
+	SetAccountRole(ctx context.Context, issuer string, by store.Actor, subject, role string) (store.Account, error)
 }
 
 // Config is the account's settings. With OIDC nil, sign-in is off: the
@@ -313,12 +314,12 @@ func (s *Service) startSession(ctx context.Context, w http.ResponseWriter, se se
 // listener (M4); disabling them in Authentik is the second. The live feed
 // is anonymous (P3, R111) and never sees a session, so no live connection
 // belongs to one, and none needs closing. It returns how many sessions
-// there were.
-func (s *Service) EndAccountSessions(ctx context.Context, subject string) (int64, error) {
+// there were. The admin by asks; the audit log records it.
+func (s *Service) EndAccountSessions(ctx context.Context, by Admin, subject string) (int64, error) {
 	if !s.On() || subject == "" {
 		return 0, nil
 	}
-	return s.cfg.Sessions.EndAccountListenerSessions(ctx, s.cfg.OIDC.Issuer, subject)
+	return s.cfg.Sessions.EndAccountListenerSessions(ctx, by.Actor(), s.cfg.OIDC.Issuer, subject)
 }
 
 // Run deletes expired sessions now and every hour until ctx ends. With

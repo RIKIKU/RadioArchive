@@ -217,7 +217,11 @@ func ParseAt(s string) (time.Duration, error) {
 
 // Days is the retention period in force.
 func (j *Job) Days(ctx context.Context) (int, error) {
-	v, err := j.cfg.Store.GetSetting(ctx, daysKey)
+	return daysIn(ctx, j.cfg.Store.Queries)
+}
+
+func daysIn(ctx context.Context, q *db.Queries) (int, error) {
+	v, err := q.GetSetting(ctx, daysKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DefaultDays, nil
 	}
@@ -231,13 +235,27 @@ func (j *Job) Days(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// SetDays saves a retention period. It takes effect at the next nightly
+// SetDays saves a retention period, as the admin by changes it, audited
+// in the same transaction (ADR 0029). It takes effect at the next nightly
 // run.
-func (j *Job) SetDays(ctx context.Context, days int) error {
+func (j *Job) SetDays(ctx context.Context, by store.Actor, days int) error {
 	if days < MinDays || days > MaxDays {
 		return fmt.Errorf("retention must be %d to %d days", MinDays, MaxDays)
 	}
-	return j.cfg.Store.SetSetting(ctx, db.SetSettingParams{Key: daysKey, Value: strconv.Itoa(days)})
+	return j.cfg.Store.Audited(ctx, by, func(q *db.Queries, au *store.Audit) error {
+		if err := au.Lock(store.AuditRetention, ""); err != nil {
+			return err
+		}
+		was, err := daysIn(ctx, q)
+		if err != nil {
+			return err
+		}
+		if err := q.SetSetting(ctx, db.SetSettingParams{Key: daysKey, Value: strconv.Itoa(days)}); err != nil {
+			return err
+		}
+		return au.Record(store.Change{Kind: store.AuditRetention, Label: "Retention",
+			Before: map[string]int{"days": was}, After: map[string]int{"days": days}})
+	})
 }
 
 // Cutoff is when a call must have started by to be kept at now: calls that

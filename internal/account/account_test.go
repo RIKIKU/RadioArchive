@@ -122,7 +122,7 @@ func (d *accounts) Accounts(_ context.Context, iss string) ([]store.Account, err
 	return out, nil
 }
 
-func (d *accounts) SetAccountRole(_ context.Context, iss, by, sub, role string) (store.Account, error) {
+func (d *accounts) SetAccountRole(_ context.Context, iss string, _ store.Actor, sub, role string) (store.Account, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	a, ok := d.rows[[2]string{iss, sub}]
@@ -228,7 +228,7 @@ func (d *sessions) EndListenerSession(_ context.Context, h []byte) (string, erro
 	return r.idToken, nil
 }
 
-func (d *sessions) EndAccountListenerSessions(_ context.Context, iss, sub string) (int64, error) {
+func (d *sessions) EndAccountListenerSessions(_ context.Context, _ store.Actor, iss, sub string) (int64, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.refuse != nil {
@@ -865,7 +865,8 @@ func TestEndAccountSessions(t *testing.T) {
 	if st := w.state(t); st.Account == nil {
 		t.Fatal("not signed in")
 	}
-	n, err := w.svc.EndAccountSessions(context.Background(), subject)
+	by := Admin{Subject: "admin", Via: store.ViaBrowser}
+	n, err := w.svc.EndAccountSessions(context.Background(), by, subject)
 	if err != nil || n != 2 {
 		t.Fatalf("EndAccountSessions = %d, %v; want 2", n, err)
 	}
@@ -881,7 +882,7 @@ func TestEndAccountSessions(t *testing.T) {
 	if resp := w.put(t, `{"v":1,"talkgroups":[]}`); resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("save after the sessions ended = %d, want 401", resp.StatusCode)
 	}
-	if n, err := w.svc.EndAccountSessions(context.Background(), ""); n != 0 || err != nil {
+	if n, err := w.svc.EndAccountSessions(context.Background(), by, ""); n != 0 || err != nil {
 		t.Errorf("no subject ended %d, %v", n, err)
 	}
 }

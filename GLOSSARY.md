@@ -136,6 +136,10 @@ _Avoid_: Superuser, operator, moderator
 The account that signs in with the deployment's configured initial admin address, proven by Authentik, while no admin exists.
 _Avoid_: Owner, root, bootstrap admin
 
+**Audit log**:
+The radio's record of every change an admin makes: who made it, how (browser, module or import), when, and each changed field before and after. Kept a long time, never rewritten, and read only by admins.
+_Avoid_: History, activity log, changelog
+
 ## Deployment
 
 **Combined deployment**:

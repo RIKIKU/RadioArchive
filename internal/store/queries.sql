@@ -865,3 +865,50 @@ ORDER BY role, lower(email), subject;
 UPDATE accounts SET role = sqlc.arg(role)
 WHERE issuer = sqlc.arg(issuer) AND subject = sqlc.arg(subject)
 RETURNING issuer, subject, name, email, role, status, first_signed_in_at, last_signed_in_at;
+
+-- Reads for the audit log's "before" (issue #112, ADR 0029).
+
+-- name: GetGroup :one
+SELECT id, name, alert, led_colour, sort_order FROM groups WHERE id = sqlc.arg(id);
+
+-- name: GetTag :one
+SELECT id, name, alert, led_colour, sort_order FROM tags WHERE id = sqlc.arg(id);
+
+-- name: GetAttachment :one
+SELECT a.system_id, s.label AS system_label
+FROM attachments a JOIN systems s ON s.id = a.system_id
+WHERE a.recorder_id = sqlc.arg(recorder_id) AND a.short_name = sqlc.arg(short_name);
+
+-- name: RecorderQuiet :one
+-- An active recorder's quiet threshold; NULL is off. No row: unknown or
+-- retired.
+SELECT quiet_after_minutes FROM recorders WHERE name = sqlc.arg(name) AND retired_at IS NULL;
+
+-- The audit log (SPEC.md R54; issue #112, ADR 0029): written only through
+-- store.Audited, in the same transaction as the change.
+
+-- name: LockAuditThing :exec
+-- One audited change of a thing at a time: the change reads the thing's
+-- "before" after this, so two admins changing it at once each record what
+-- the other left. The two-key form keeps clear of LockFirstAdmin's key.
+SELECT pg_advisory_xact_lock(112, hashtext(sqlc.arg(kind)::text || ':' || sqlc.arg(thing)::text));
+
+-- name: InsertAuditEntry :exec
+INSERT INTO audit_log (issuer, subject, admin_name, admin_email, via, kind, thing, label, action, changes)
+VALUES (sqlc.arg(issuer), sqlc.arg(subject), sqlc.arg(admin_name), sqlc.arg(admin_email), sqlc.arg(via),
+        sqlc.arg(kind), sqlc.arg(thing), sqlc.arg(label), sqlc.arg(action), sqlc.arg(changes));
+
+-- name: ListAuditEntries :many
+-- Newest first, after the cursor (the last entry of the page before), with
+-- each filter given.
+SELECT id, at, issuer, subject, admin_name, admin_email, via, kind, thing, label, action, changes
+FROM audit_log
+WHERE (sqlc.narg(subject)::text IS NULL OR subject = sqlc.narg(subject)::text)
+  AND (sqlc.narg(kind)::text IS NULL OR kind = sqlc.narg(kind)::text)
+  AND (sqlc.narg(thing)::text IS NULL OR thing = sqlc.narg(thing)::text)
+  AND (sqlc.narg(since)::timestamptz IS NULL OR at >= sqlc.narg(since)::timestamptz)
+  AND (sqlc.narg(until)::timestamptz IS NULL OR at < sqlc.narg(until)::timestamptz)
+  AND (sqlc.narg(after_at)::timestamptz IS NULL
+       OR (at, id) < (sqlc.narg(after_at)::timestamptz, sqlc.narg(after_id)::bigint))
+ORDER BY at DESC, id DESC
+LIMIT sqlc.arg(page_size);

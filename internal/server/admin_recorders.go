@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/db"
 )
 
@@ -75,12 +76,29 @@ func (a *Admin) patchRecorder(r *http.Request, who string) (int, any, error) {
 		}
 		quiet = &n
 	}
-	_, err := a.st.SetRecorderQuiet(r.Context(), db.SetRecorderQuietParams{Name: name, QuietAfterMinutes: quiet})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, nil, refuseAdmin(http.StatusNotFound, "recorder_not_found", "No active recorder is named %q.", name)
-	}
+	ctx := r.Context()
+	notFound := refuseAdmin(http.StatusNotFound, "recorder_not_found", "No active recorder is named %q.", name)
+	err := a.audited(r, func(q *db.Queries, au *store.Audit) error {
+		if err := au.Lock(store.AuditRecorder, name); err != nil {
+			return dbErr("recorder", err)
+		}
+		was, err := q.RecorderQuiet(ctx, name)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound
+		}
+		if err != nil {
+			return dbErr("recorder", err)
+		}
+		if _, err := q.SetRecorderQuiet(ctx, db.SetRecorderQuietParams{Name: name, QuietAfterMinutes: quiet}); errors.Is(err, pgx.ErrNoRows) {
+			return notFound
+		} else if err != nil {
+			return dbErr("recorder", err)
+		}
+		return au.Record(store.Change{Kind: store.AuditRecorder, Thing: name, Label: name,
+			Before: map[string]*int32{"quiet_after_minutes": was}, After: map[string]*int32{"quiet_after_minutes": quiet}})
+	})
 	if err != nil {
-		return 0, nil, dbErr("recorder", err)
+		return 0, nil, err
 	}
 	if quiet == nil {
 		a.log.Info("admin turned a recorder's quiet signal off", "admin", who, "recorder", name)

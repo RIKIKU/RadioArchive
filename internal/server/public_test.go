@@ -148,13 +148,13 @@ func TestIntegrationCallDetails(t *testing.T) {
 	if x.DeletesAt == nil || *x.DeletesAt != "2025-12-25T03:00:00.000Z" {
 		t.Errorf("deletes_at %v, want 2025-12-25T03:00:00.000Z", x.DeletesAt)
 	}
-	if err := e.job.SetDays(context.Background(), 7); err != nil {
+	if err := e.job.SetDays(context.Background(), testActor, 7); err != nil {
 		t.Fatal(err)
 	}
 	if got := e.publicCalls(t, a); len(got) != 1 || got[0].DeletesAt == nil || *got[0].DeletesAt != "2025-12-02T03:00:00.000Z" {
 		t.Errorf("with 7 days, deletes_at %+v, want 2025-12-02T03:00:00.000Z", got)
 	}
-	if err := e.job.SetDays(context.Background(), 30); err != nil {
+	if err := e.job.SetDays(context.Background(), testActor, 30); err != nil {
 		t.Fatal(err)
 	}
 

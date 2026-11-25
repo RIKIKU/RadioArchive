@@ -24,6 +24,11 @@ func accountsStore(t *testing.T) *store.Store {
 	return st
 }
 
+// by is the admin with this subject, signed in with a browser.
+func by(sub string) store.Actor {
+	return store.Actor{Issuer: accountsIssuer, Subject: sub, Name: "Made Up " + sub, Via: store.ViaBrowser}
+}
+
 func signIn(t *testing.T, st *store.Store, sub, email string, verified bool, initial string) store.Account {
 	t.Helper()
 	a, _, err := st.SignInAccount(context.Background(), store.SignIn{Issuer: accountsIssuer, Subject: sub, Name: "Made Up " + sub,
@@ -114,32 +119,32 @@ func TestIntegrationLastAdmin(t *testing.T) {
 	signIn(t, st, "1", "owner@example.test", true, "owner@example.test")
 	signIn(t, st, "2", "second@example.test", true, "owner@example.test")
 
-	if _, err := st.SetAccountRole(ctx, accountsIssuer, "1", "1", store.RoleListener); !errors.Is(err, store.ErrOwnRole) {
+	if _, err := st.SetAccountRole(ctx, accountsIssuer, by("1"), "1", store.RoleListener); !errors.Is(err, store.ErrOwnRole) {
 		t.Errorf("own role: %v", err)
 	}
-	if _, err := st.SetAccountRole(ctx, accountsIssuer, "2", "1", store.RoleListener); !errors.Is(err, store.ErrNotAdmin) {
+	if _, err := st.SetAccountRole(ctx, accountsIssuer, by("2"), "1", store.RoleListener); !errors.Is(err, store.ErrNotAdmin) {
 		t.Errorf("a listener demoting the admin: %v", err)
 	}
-	if _, err := st.SetAccountRole(ctx, accountsIssuer, "1", "9", store.RoleAdmin); !errors.Is(err, store.ErrNoAccount) {
+	if _, err := st.SetAccountRole(ctx, accountsIssuer, by("1"), "9", store.RoleAdmin); !errors.Is(err, store.ErrNoAccount) {
 		t.Errorf("no such account: %v", err)
 	}
-	if a, err := st.SetAccountRole(ctx, accountsIssuer, "1", "2", store.RoleAdmin); err != nil || !a.Admin() {
+	if a, err := st.SetAccountRole(ctx, accountsIssuer, by("1"), "2", store.RoleAdmin); err != nil || !a.Admin() {
 		t.Fatalf("promote: %+v, %v", a, err)
 	}
-	if a, err := st.SetAccountRole(ctx, accountsIssuer, "1", "2", store.RoleAdmin); err != nil || !a.Admin() {
+	if a, err := st.SetAccountRole(ctx, accountsIssuer, by("1"), "2", store.RoleAdmin); err != nil || !a.Admin() {
 		t.Errorf("promote again changes nothing: %+v, %v", a, err)
 	}
-	if a, err := st.SetAccountRole(ctx, accountsIssuer, "2", "1", store.RoleListener); err != nil || a.Role != store.RoleListener {
+	if a, err := st.SetAccountRole(ctx, accountsIssuer, by("2"), "1", store.RoleListener); err != nil || a.Role != store.RoleListener {
 		t.Fatalf("demote: %+v, %v", a, err)
 	}
 	// 1 isn't an admin any more: it changes nothing, and 2 is the last.
-	if _, err := st.SetAccountRole(ctx, accountsIssuer, "1", "2", store.RoleListener); !errors.Is(err, store.ErrNotAdmin) {
+	if _, err := st.SetAccountRole(ctx, accountsIssuer, by("1"), "2", store.RoleListener); !errors.Is(err, store.ErrNotAdmin) {
 		t.Errorf("a demoted admin demoting: %v", err)
 	}
 	// The last active admin: only a disabled admin besides (issue #105
 	// sets status; here, by hand).
 	signIn(t, st, "3", "third@example.test", true, "")
-	if _, err := st.SetAccountRole(ctx, accountsIssuer, "2", "3", store.RoleAdmin); err != nil {
+	if _, err := st.SetAccountRole(ctx, accountsIssuer, by("2"), "3", store.RoleAdmin); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Pool.Exec(ctx, `UPDATE accounts SET status = 'disabled' WHERE subject = '3'`); err != nil {
@@ -148,10 +153,10 @@ func TestIntegrationLastAdmin(t *testing.T) {
 	if n := activeAdmins(t, st); n != 1 {
 		t.Fatalf("%d active admins, want 1", n)
 	}
-	if _, err := st.SetAccountRole(ctx, accountsIssuer, "3", "2", store.RoleListener); !errors.Is(err, store.ErrNotAdmin) {
+	if _, err := st.SetAccountRole(ctx, accountsIssuer, by("3"), "2", store.RoleListener); !errors.Is(err, store.ErrNotAdmin) {
 		t.Errorf("a disabled admin demoting: %v", err)
 	}
-	if _, err := st.SetAccountRole(ctx, accountsIssuer, "2", "3", store.RoleListener); err != nil {
+	if _, err := st.SetAccountRole(ctx, accountsIssuer, by("2"), "3", store.RoleListener); err != nil {
 		t.Errorf("demoting a disabled admin, with an active one left: %v", err)
 	}
 	if n := activeAdmins(t, st); n != 1 {
@@ -172,7 +177,7 @@ func TestIntegrationLastAdminAtOnce(t *testing.T) {
 		st := accountsStore(t)
 		signIn(t, st, "1", "owner@example.test", true, "owner@example.test")
 		signIn(t, st, "2", "second@example.test", true, "")
-		if _, err := st.SetAccountRole(ctx, accountsIssuer, "1", "2", store.RoleAdmin); err != nil {
+		if _, err := st.SetAccountRole(ctx, accountsIssuer, by("1"), "2", store.RoleAdmin); err != nil {
 			t.Fatal(err)
 		}
 		var wg sync.WaitGroup
@@ -181,7 +186,7 @@ func TestIntegrationLastAdminAtOnce(t *testing.T) {
 		for i, c := range [][2]string{{"1", "2"}, {"2", "1"}} {
 			wg.Go(func() {
 				<-start
-				_, errs[i] = st.SetAccountRole(ctx, accountsIssuer, c[0], c[1], store.RoleListener)
+				_, errs[i] = st.SetAccountRole(ctx, accountsIssuer, by(c[0]), c[1], store.RoleListener)
 			})
 		}
 		close(start)
