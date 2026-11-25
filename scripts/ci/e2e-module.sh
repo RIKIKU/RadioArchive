@@ -2,8 +2,10 @@
 # The PowerShell module's behaviour tests (issue #116, ADR 0028) against the
 # compose stack that scripts/ci/e2e-signin.sh started: the module's
 # sign-in through Authentik's own pages in a real browser, with a device
-# code, a second window, the admin commands, A26's module part and a 1003
-# recording saved byte for byte (web/module-tests).
+# code, a second window, the admin commands, a 1003 recording saved byte
+# for byte, and M4's end-to-end checks: A24 (the import's preview and round
+# trip), A26 (the browser, the module and an attachment in the audit log)
+# and section 9's step 2 (web/module-tests).
 #
 #   RA_PWSH_DIR=<folder holding pwsh> RA_PS_MODULES=<folder with SecretManagement and SecretStore> \
 #     sh scripts/ci/e2e-module.sh [playwright arguments]
@@ -38,6 +40,9 @@ wait_for 120 "the API" curl -fsS "$APP_URL/healthz"
 # they exist already.
 db="postgres://radioarchive:$POSTGRES_PASSWORD@127.0.0.1:$DB_PORT/radioarchive?sslmode=disable"
 docker compose exec -T api /usr/local/bin/radioarchive recorder add Bench >/dev/null 2>&1 || true
+# SPEC.md section 9, step 2: the recorder the first admin attaches with the
+# module, added from the shell (R10).
+docker compose exec -T api /usr/local/bin/radioarchive recorder add Step2 >/dev/null 2>&1 || true
 go run ./testing/webfixture "$db" Bench
 work=$PWD/.e2e-module
 rm -rf "$work"
