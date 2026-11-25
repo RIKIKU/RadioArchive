@@ -15,7 +15,10 @@ RUN go mod download
 COPY . .
 # The app, embedded by the web package (go:embed).
 COPY --from=web /web/build ./web/build
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o /out/radioarchive ./cmd/radioarchive
+# A release stamps its version (ADR 0043); any other build is a -dev one.
+ARG VERSION=0.1.0-dev
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+    -ldflags "-s -w -X github.com/RIKIKU/RadioArchive/internal/version.Version=${VERSION}" -o /out/radioarchive ./cmd/radioarchive
 # The recordings volume's mount point (R20), owned by distroless's nonroot
 # user so a new named volume starts out writable by the API.
 RUN mkdir -p /out/recordings /out/setup-export /out/backup-status

@@ -32,11 +32,14 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# A release stamps its version (ADR 0043); any other build is a -dev one.
+ARG VERSION=0.1.0-dev
 RUN set -eu; \
     triplet=$(cat /triplet); \
     CGO_ENABLED=1 GOOS=linux GOARCH=$TARGETARCH CC=$triplet-gcc \
     PKG_CONFIG_LIBDIR=/usr/lib/$triplet/pkgconfig:/usr/share/pkgconfig \
-      go build -trimpath -ldflags "-s -w" -o /out/radioarchive-client ./cmd/radioarchive-client; \
+      go build -trimpath -ldflags "-s -w -X github.com/RIKIKU/RadioArchive/internal/version.Version=${VERSION}" \
+      -o /out/radioarchive-client ./cmd/radioarchive-client; \
     mkdir -p /out/lib; \
     cp -L /usr/lib/$triplet/libopus.so.0 /out/lib/libopus.so.0; \
     mkdir -p /out/queue
