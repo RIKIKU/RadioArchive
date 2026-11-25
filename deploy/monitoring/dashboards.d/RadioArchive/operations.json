@@ -1,0 +1,88 @@
+{
+  "uid": "ra-operations",
+  "title": "RadioArchive: disk, backups and the server",
+  "description": "The recordings volume and retention (R88), the nightly backups (R89), and the API itself: up, its version, memory against the 256 MB budget (section 7), goroutines.",
+  "tags": ["radioarchive"],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "refresh": "1m",
+  "time": {"from": "now-7d", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "API",
+      "description": "Whether Alloy can scrape RadioArchive's /metrics. Down for 2 minutes: the \"RadioArchive API unreachable\" alert.",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "max(up{job=\"radioarchive\"})", "instant": true}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "Down", "color": "red"}, "1": {"text": "Up", "color": "green"}}}], "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"}
+    },
+    {
+      "id": 2, "type": "stat", "title": "Version",
+      "description": "The API's version.",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "max by (version) (radioarchive_build_info{job=\"radioarchive\"})", "legendFormat": "{{version}}", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "name", "colorMode": "none"}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Last good backup",
+      "description": "How long since the last good nightly backup (R89). Worry: over 36 hours, or the last one failed (the \"RadioArchive backup failing\" alert).",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "time() - max(radioarchive_backup_last_good_timestamp_seconds{job=\"radioarchive\"})", "instant": true}],
+      "fieldConfig": {"defaults": {"unit": "s", "noValue": "None yet", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 129600}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"}
+    },
+    {
+      "id": 4, "type": "stat", "title": "Backups",
+      "description": "Failing: the last backup failed, or the last good one is over 36 hours old. The admin pages say why.",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "max(radioarchive_backup_failing{job=\"radioarchive\"})", "instant": true}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "Good", "color": "green"}, "1": {"text": "Failing", "color": "red"}}}], "noValue": "Not set up", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"}
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Recordings volume free",
+      "description": "Free space on the recordings volume, as a share of it, with RECORDINGS_MIN_FREE. Under 15 % admins are warned and it alerts; under the minimum the oldest recordings are deleted early (R88).",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "max(radioarchive_recordings_volume_free_bytes{job=\"radioarchive\"} / radioarchive_recordings_volume_bytes{job=\"radioarchive\"})", "legendFormat": "free"},
+        {"refId": "B", "expr": "max(radioarchive_recordings_volume_min_free_ratio{job=\"radioarchive\"})", "legendFormat": "minimum"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Recordings deleted",
+      "description": "Recordings deleted in each hour: expired by the nightly run, orphan files with no row, and shortened (deleted early for low disk: the \"Retention shortened\" alert).",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (kind) (increase(radioarchive_retention_deleted_total{job=\"radioarchive\"}[1h]))", "legendFormat": "{{kind}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []}
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Backup size and nights kept",
+      "description": "The last good backup's dumps (call data left out), and the nights in the backup folder.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "max(radioarchive_backup_last_good_bytes{job=\"radioarchive\"})", "legendFormat": "size"},
+        {"refId": "B", "expr": "max(radioarchive_backup_nights{job=\"radioarchive\"})", "legendFormat": "nights"}
+      ],
+      "fieldConfig": {"defaults": {"min": 0}, "overrides": [{"matcher": {"id": "byFrameRefID", "options": "A"}, "properties": [{"id": "unit", "value": "bytes"}]}, {"matcher": {"id": "byFrameRefID", "options": "B"}, "properties": [{"id": "unit", "value": "short"}, {"id": "custom.axisPlacement", "value": "right"}]}]}
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "API memory",
+      "description": "The Go runtime's memory from the system, and its heap in use. The budget is 256 MB for the API with 50 live sockets and 5 calls at once (section 7, A37); the container's own figure is a little higher.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "max by (kind) (radioarchive_process_memory_bytes{job=\"radioarchive\"})", "legendFormat": "{{kind}}"},
+        {"refId": "B", "expr": "max(radioarchive_process_goroutines{job=\"radioarchive\"})", "legendFormat": "goroutines"}
+      ],
+      "fieldConfig": {"defaults": {"min": 0}, "overrides": [{"matcher": {"id": "byFrameRefID", "options": "A"}, "properties": [{"id": "unit", "value": "bytes"}]}, {"matcher": {"id": "byFrameRefID", "options": "B"}, "properties": [{"id": "unit", "value": "short"}, {"id": "custom.axisPlacement", "value": "right"}]}]}
+    }
+  ]
+}

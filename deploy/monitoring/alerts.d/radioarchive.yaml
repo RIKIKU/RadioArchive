@@ -1,0 +1,513 @@
+# RadioArchive's alert rules (SPEC.md R91; ADR 0042), for PagerArchive's
+# monitoring stack: copy this file into the stack's include/alerts.d/ folder
+# and `docker compose restart grafana` there. They go to the default
+# notification policy, so they reach whatever contact point you chose for
+# PagerArchive's alerts. Each resolves on its own once the problem is fixed.
+#
+# Each rule's threshold is its `params:`; change one here and restart
+# Grafana. None names a talkgroup or a unit (P1): recorders are named as
+# admins named them.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: RadioArchive
+    folder: RadioArchive
+    interval: 30s
+    rules:
+      # R14, R91: a recorder's client has been disconnected for 2 minutes.
+      # One alert per recorder; it clears when the client reconnects.
+      - uid: ra-recorder-disconnected
+        title: Recorder disconnected
+        condition: tripped
+        data:
+          - refId: signal
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: signal
+              instant: true
+              range: false
+              expr: max by (recorder) (radioarchive_recorder_signal{job="radioarchive", signal="disconnected"})
+          - refId: tripped
+            datasourceUid: __expr__
+            model:
+              refId: tripped
+              type: threshold
+              expression: signal
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        # THE THRESHOLD: how long disconnected before it alerts (R91: 2 minutes).
+        for: 2m
+        labels:
+          severity: critical
+          app: radioarchive
+        annotations:
+          summary: "Recorder {{ $labels.recorder }} is disconnected"
+          description: >-
+            The recorder client's live connection to RadioArchive has been down
+            for over 2 minutes: no live audio or recordings arrive from it.
+            Listeners see "Some talkgroups aren't being received right now".
+            Check the recorder host, its network, and the client's logs. The
+            client queues recordings on disk while it's away (R5).
+
+      # R14, R91: deaf or down for 2 minutes: no heartbeat from trunk-recorder,
+      # or an attached system's control channel lost (decode rate near 0).
+      - uid: ra-recorder-deaf
+        title: Recorder deaf or down
+        condition: tripped
+        data:
+          - refId: deaf
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: deaf
+              instant: true
+              range: false
+              expr: max by (recorder, reason) (radioarchive_recorder_deaf{job="radioarchive"})
+          - refId: tripped
+            datasourceUid: __expr__
+            model:
+              refId: tripped
+              type: threshold
+              expression: deaf
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        # THE THRESHOLD: how long deaf before it alerts (R91: 2 minutes).
+        for: 2m
+        labels:
+          severity: critical
+          app: radioarchive
+        annotations:
+          summary: "Recorder {{ $labels.recorder }} is deaf ({{ $labels.reason }})"
+          description: >-
+            no_heartbeat: the client relays nothing from trunk-recorder, which is
+            down or has lost its plugin. decode_rate: an attached system's
+            control channel decodes at near 0 messages a second, so its antenna,
+            dongle or tuning has a problem. The Recorders page says which system.
+
+      # R14, R91: quiet, only where an admin set a quiet threshold for the
+      # recorder (the signal is never tripped elsewhere).
+      - uid: ra-recorder-quiet
+        title: Recorder quiet
+        condition: tripped
+        data:
+          - refId: signal
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: signal
+              instant: true
+              range: false
+              expr: max by (recorder) (radioarchive_recorder_signal{job="radioarchive", signal="quiet"})
+          - refId: tripped
+            datasourceUid: __expr__
+            model:
+              refId: tripped
+              type: threshold
+              expression: signal
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severity: warning
+          app: radioarchive
+        annotations:
+          summary: "Recorder {{ $labels.recorder }} has heard no calls for its quiet threshold"
+          description: >-
+            No call from this recorder for longer than the quiet threshold an
+            admin set on the Recorders page. It's connected and decoding, so the
+            network may just be quiet, or trunk-recorder records nothing.
+
+      # R12, R91: calls rejected from a recorder + shortName not attached to a
+      # system, any in 15 minutes. The count is over the retention period, so
+      # the rise in 15 minutes is the new ones (a pair first seen counts all).
+      - uid: ra-unattached-calls
+        title: Calls from an unattached recorder system
+        condition: rejected
+        data:
+          - refId: calls
+            relativeTimeRange: {from: 1200, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: calls
+              instant: true
+              range: false
+              expr: >-
+                max by (recorder, short_name) (radioarchive_rejected_unattached_calls{job="radioarchive"})
+                - max by (recorder, short_name) (radioarchive_rejected_unattached_calls{job="radioarchive"} offset 15m
+                or radioarchive_rejected_unattached_calls{job="radioarchive"} * 0)
+          - refId: rejected
+            datasourceUid: __expr__
+            model:
+              refId: rejected
+              type: threshold
+              expression: calls
+              conditions:
+                - evaluator:
+                    type: gt
+                    # THE THRESHOLD: calls rejected in 15 minutes (R91: any).
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severity: warning
+          app: radioarchive
+        annotations:
+          summary: "{{ $labels.recorder }} / {{ $labels.short_name }}: calls rejected, not attached to a system"
+          description: >-
+            Calls from this recorder's trunk-recorder system aren't stored,
+            because the pair isn't attached to a system (R12). Attach it on the
+            Systems page, or remove the system from trunk-recorder's config.
+
+      # R19, R91: a recording that hasn't arrived 10 minutes after its call
+      # ended (counted for a day after the call, ADR 0040).
+      - uid: ra-recording-missing
+        title: Recordings missing
+        condition: missing
+        data:
+          - refId: calls
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: calls
+              instant: true
+              range: false
+              expr: max(radioarchive_recordings_missing{job="radioarchive"})
+          - refId: missing
+            datasourceUid: __expr__
+            model:
+              refId: missing
+              type: threshold
+              expression: calls
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severity: warning
+          app: radioarchive
+        annotations:
+          summary: "{{ $values.calls.Value }} recordings haven't arrived 10 minutes after their calls ended"
+          description: >-
+            The recorder client uploads each call's recording when it ends, and
+            queues it on disk while the server can't be reached. Check the
+            "Client queue" alert and the client's logs: its uploads may be
+            failing. It clears when they arrive, or a day after the call.
+
+      # R38, R91: live delay p95 over 2 s for 5 minutes, from the recorder's
+      # first PCM to the server passing the first frame on.
+      - uid: ra-live-delay
+        title: Live delay high
+        condition: slow
+        data:
+          - refId: p95
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: p95
+              instant: true
+              range: false
+              expr: histogram_quantile(0.95, sum by (le) (rate(radioarchive_live_delay_seconds_bucket{job="radioarchive"}[5m])))
+          - refId: slow
+            datasourceUid: __expr__
+            model:
+              refId: slow
+              type: threshold
+              expression: p95
+              conditions:
+                - evaluator:
+                    type: gt
+                    # THE THRESHOLD: seconds (R38, R91: 2).
+                    params: [2]
+        # No calls, no delay to measure.
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels:
+          severity: warning
+          app: radioarchive
+        annotations:
+          summary: "Live calls reach the server {{ humanize $values.p95.Value }} s behind the radio (p95)"
+          description: >-
+            Listeners hear calls later than the 2-second budget (R38). Check the
+            recorder host's load and network, and its clock: the delay is taken
+            on the recorder host's and the server's clocks.
+
+      # R88, R91: the recordings volume under 15 % free (admins see it too).
+      - uid: ra-recordings-disk
+        title: Recordings disk low
+        condition: low
+        data:
+          - refId: free
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: free
+              instant: true
+              range: false
+              expr: max(radioarchive_recordings_volume_free_bytes{job="radioarchive"} / radioarchive_recordings_volume_bytes{job="radioarchive"})
+          - refId: low
+            datasourceUid: __expr__
+            model:
+              refId: low
+              type: threshold
+              expression: free
+              conditions:
+                - evaluator:
+                    type: lt
+                    # THE THRESHOLD: free, as a fraction (R88: 15 %).
+                    params: [0.15]
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels:
+          severity: warning
+          app: radioarchive
+        annotations:
+          summary: "The recordings volume has {{ humanizePercentage $values.free.Value }} free"
+          description: >-
+            Below RECORDINGS_MIN_FREE (5 %), the oldest recordings are deleted
+            early. Make the volume bigger, or shorten retention in Settings.
+            docs/deploy.md, "Sizing", has the formula.
+
+      # R88, R91: "retention shortened": recordings deleted early for low disk
+      # in the last hour.
+      - uid: ra-retention-shortened
+        title: Retention shortened
+        condition: shortened
+        data:
+          - refId: deleted
+            relativeTimeRange: {from: 3900, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: deleted
+              instant: true
+              range: false
+              expr: max(increase(radioarchive_retention_deleted_total{job="radioarchive", kind="shortened"}[1h]))
+          - refId: shortened
+            datasourceUid: __expr__
+            model:
+              refId: shortened
+              type: threshold
+              expression: deleted
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severity: critical
+          app: radioarchive
+        annotations:
+          summary: "Recordings were deleted before their retention period ended: the volume is nearly full"
+          description: >-
+            The recordings volume fell below RECORDINGS_MIN_FREE, so the oldest
+            recordings were deleted early (R88). Make the volume bigger, or
+            shorten retention in Settings.
+
+      # R88, R91: "recordings volume full": below the minimum with only the last
+      # 24 hours' calls left, which are never deleted early.
+      - uid: ra-recordings-volume-full
+        title: Recordings volume full
+        condition: full
+        data:
+          - refId: state
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: state
+              instant: true
+              range: false
+              expr: max(radioarchive_recordings_volume_state{job="radioarchive", state="full"})
+          - refId: full
+            datasourceUid: __expr__
+            model:
+              refId: full
+              type: threshold
+              expression: state
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severity: critical
+          app: radioarchive
+        annotations:
+          summary: "The recordings volume is full"
+          description: >-
+            Free space is below RECORDINGS_MIN_FREE with only calls from the last
+            RECORDINGS_EARLY_DELETE_FLOOR (24 hours) left, so nothing more is
+            deleted early, and new recordings may fail to store. Make room now.
+
+      # R5, R91: the oldest recording in a recorder client's queue is over an
+      # hour old: its uploads aren't getting through.
+      - uid: ra-client-queue
+        title: Client queue backed up
+        condition: old
+        data:
+          - refId: age
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: age
+              instant: true
+              range: false
+              expr: max by (recorder) (radioarchive_recorder_queue_oldest_age_seconds{job="radioarchive"})
+          - refId: old
+            datasourceUid: __expr__
+            model:
+              refId: old
+              type: threshold
+              expression: age
+              conditions:
+                - evaluator:
+                    type: gt
+                    # THE THRESHOLD: seconds (R91: 1 hour).
+                    params: [3600]
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severity: warning
+          app: radioarchive
+        annotations:
+          summary: "{{ $labels.recorder }}'s client has had a recording waiting for {{ humanizeDuration $values.age.Value }}"
+          description: >-
+            The recorder client keeps recordings it couldn't upload on disk, and
+            drops them after QUEUE_MAX_AGE (24 hours, R5). Check the client's
+            logs for why its uploads fail.
+
+      # R91: the API can't be scraped, so it's down or unreachable.
+      - uid: ra-api-unreachable
+        title: RadioArchive API unreachable
+        condition: down
+        data:
+          - refId: up
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: up
+              instant: true
+              range: false
+              expr: max(up{job="radioarchive"})
+          - refId: down
+            datasourceUid: __expr__
+            model:
+              refId: down
+              type: threshold
+              expression: up
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+        # No scrape at all (Alloy not scraping it) is as bad.
+        noDataState: Alerting
+        execErrState: Error
+        for: 2m
+        labels:
+          severity: critical
+          app: radioarchive
+        annotations:
+          summary: "RadioArchive's API can't be reached"
+          description: >-
+            Alloy can't scrape RadioArchive's /metrics. The API is down, or not
+            on the monitoring network, or its METRICS_TOKEN doesn't match the
+            token file in include/alloy.d. docker compose ps and logs in
+            RadioArchive's folder say which.
+
+      # R89, R91: the last backup failed, or the last good one is more than 36
+      # hours old. The API works it out, as admin pages show it.
+      - uid: ra-backup-failing
+        title: RadioArchive backup failing
+        condition: failing
+        data:
+          - refId: state
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: state
+              instant: true
+              range: false
+              expr: max(radioarchive_backup_failing{job="radioarchive"})
+          - refId: failing
+            datasourceUid: __expr__
+            model:
+              refId: failing
+              type: threshold
+              expression: state
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severity: critical
+          app: radioarchive
+        annotations:
+          summary: "RadioArchive's nightly backup failed, or the last good one is more than 36 hours old"
+          description: >-
+            The admin pages say why, and when the last good backup was.
+            docs/deploy.md, "Backups".
+
+      # R71, R91: every listener socket the radio allows has been open for 10
+      # minutes: new listeners see "The radio is full".
+      - uid: ra-radio-full
+        title: The radio is full
+        condition: full
+        data:
+          - refId: state
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: state
+              instant: true
+              range: false
+              expr: max(radioarchive_live_full{job="radioarchive"})
+          - refId: full
+            datasourceUid: __expr__
+            model:
+              refId: full
+              type: threshold
+              expression: state
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        # THE THRESHOLD: how long full before it alerts (R91: 10 minutes).
+        for: 10m
+        labels:
+          severity: warning
+          app: radioarchive
+        annotations:
+          summary: "The radio has been full for 10 minutes: new listeners can't get in"
+          description: >-
+            LIMIT_LIVE_TOTAL listener connections are open (R71), so new
+            listeners see "The radio is full right now". The Listeners dashboard
+            shows the sockets and limit hits. Raise the limit if the host can
+            take it, or look for one client holding many.

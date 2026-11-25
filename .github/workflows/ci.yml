@@ -297,6 +297,40 @@ jobs:
         if: always()
         run: docker compose down --volumes
 
+  # RadioArchive's scrape, alert rules and dashboards in PagerArchive's
+  # monitoring stack (R90, R91; ADR 0042), as the deploy guide sets them up:
+  # the stack from PagerArchive's release, the files in its include
+  # folders, the API on its network. The rules load and evaluate, the scrape
+  # works, every panel's query runs, and "Recorder disconnected" fires and
+  # clears (scripts/ci/e2e-monitoring.sh).
+  monitoring:
+    name: Alerts and dashboards in PagerArchive's monitoring stack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Start the stack and build the client's image
+        run: |
+          sh scripts/dev-env.sh > .env
+          docker compose up --build --detach --wait --wait-timeout 420
+          docker build -f recorder/client/Dockerfile -t radioarchive-client:ci .
+      - name: The monitoring files in PagerArchive's stack
+        timeout-minutes: 25
+        run: sh scripts/ci/e2e-monitoring.sh radioarchive-client:ci
+      - name: Logs
+        if: always()
+        run: |
+          docker compose logs api
+          if [ -d .e2e-monitoring/deploy/monitoring ]; then
+            cd .e2e-monitoring/deploy/monitoring && docker compose logs alloy grafana | tail -n 300
+          fi
+      - name: Stop the stacks
+        if: always()
+        run: |
+          if [ -d .e2e-monitoring/deploy/monitoring ]; then (cd .e2e-monitoring/deploy/monitoring && docker compose down --volumes); fi
+          rm -f compose.override.yaml
+          docker compose down --volumes
+
   # The PowerShell module (issue #116, ADR 0028, docs/powershell-guidelines.md):
   # PSScriptAnalyzer with zero findings, the meta-tests, the unit tests with
   # the API mocked and the sign-in tests (the DPAPI file on Windows; a
