@@ -469,11 +469,11 @@ Add-RadioArchiveAttachment -Recorder Bench -ShortName a26 -SystemId 1 -Confirm:$
 	await expect(renamed).toContainText('Browser');
 	await when(renamed);
 	const hidden = table.getByRole('row').filter({ hasText: 'State public → hidden' }).first();
-	await expect(hidden).toContainText('Module');
+	await expect(hidden).toContainText('PowerShell module');
 	await when(hidden);
 	await page.goto('/admin/audit?kind=attachment');
 	const attached = table.getByRole('row').filter({ hasText: 'Bench / a26 attached to EX' }).first();
-	await expect(attached).toContainText('Module');
+	await expect(attached).toContainText('PowerShell module');
 	await when(attached);
 	// Who: the owner in the browser, the other admin with the module.
 	type Entry = { who: { id: string }; via: string; changes: { field: string; after: unknown }[] };
