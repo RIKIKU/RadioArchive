@@ -462,7 +462,8 @@ backup_busy() {
 # replace it. Then the install's files.
 back_up() {
 	local out
-	out=$(dc exec -T backup radioarchive-backup now 2>&1)
+	# By sh, as the service's entrypoint runs it: the file needn't be executable.
+	out=$(dc exec -T backup sh /usr/local/bin/radioarchive-backup now 2>&1)
 	case $out in *"another backup is running"*)
 		BUSY=1
 		REASON="a backup is running"
