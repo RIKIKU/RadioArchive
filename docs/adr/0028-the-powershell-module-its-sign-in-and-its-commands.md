@@ -197,7 +197,7 @@ Objects' properties are named as the parameters that take them, so a `Get-` pipe
 ## Open points
 
 1. **The combined deployment** loads `radioarchive.yaml`, so it gets the module's client too, but its device-code flow is PagerArchive's brand's, M7's to set.
-2. **Publishing** the module to the PowerShell Gallery joins the release workflow in M6.
+2. **Publishing** the module to the PowerShell Gallery joins the release workflow in M6. Settled in [ADR 0043](0043-releases-their-files-images-and-attestations.md): each release publishes it there, as PagerArchive's does.
 3. **The setup import and export** commands are issue #117's.
 4. **Disabling and deleting accounts** from the module come with issue #105's API.
 

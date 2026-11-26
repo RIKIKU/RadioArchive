@@ -81,4 +81,4 @@ Each rule says how it's checked: **[analyzer]** is PSScriptAnalyzer in CI, **[pe
 
 - **PSScriptAnalyzer with zero findings**, the meta-tests, the unit tests with the API mocked and the sign-in tests run in CI's `powershell` job on Windows and Linux, on 7.6.0 and the newest stable release (`powershell/tests/Invoke-Tests.ps1`). **[pester]**
 - **The behaviour tests** run the module against the compose stack with Authentik in CI's image job (`scripts/ci/e2e-module.sh`), on Linux, where the stack runs. **[stack]**
-- Publishing to the PowerShell Gallery joins the release workflow in M6.
+- Each release publishes the module to the PowerShell Gallery, with the release's version stamped into a copy of the manifest and checked by `Test-ModuleManifest` (`release.yml`'s `gallery` job, ADR 0043). A dry run checks it and publishes nothing.

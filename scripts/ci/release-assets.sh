@@ -14,8 +14,8 @@
 #   recorder-compose.yaml         the recorder host: trunk-recorder with the plugin
 #   recorder-env.example          its settings
 #
-# The binaries (the plugin's .so, the client, SHA256SUMS) and the module's
-# zip are the release workflow's own jobs'.
+# The binaries (the plugin's .so, the client, SHA256SUMS) are the release
+# workflow's own jobs'. The PowerShell module goes to the PowerShell Gallery.
 #
 # usage: scripts/ci/release-assets.sh <version> <folder>
 #        scripts/ci/release-assets.sh --list
