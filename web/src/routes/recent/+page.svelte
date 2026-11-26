@@ -14,8 +14,9 @@
 	//   the page's address, as chosen, so a filtered list can be linked to;
 	//   a unit is there by its radio ID, a range by its radio IDs.
 	// - The search's refusals (R73: over 31 days, too slow) show under the
-	//   form as ArchiveUx section 5 says: a field's under that field, the
-	//   rest under the form.
+	//   form as ArchiveUx section 5 says: a field's under that field (a
+	//   talkgroups one by the option it is about), with an error summary at
+	//   the top naming and linking each field, the rest under the form.
 	// - Pressing a call replays it in the dock, pausing live listening;
 	//   live calls keep queuing meanwhile (R46). Play from here waits on
 	//   #75's open question 3.
@@ -23,7 +24,7 @@
 	import { onMount, tick } from 'svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { DateRange, Suggest } from 'archiveux/components';
+	import { DateRange, ErrorSummary, Suggest } from 'archiveux/components';
 	import RecentList from '#lib/recent/RecentList.svelte';
 	import ShareButton from '#lib/share/ShareButton.svelte';
 	import AddToBasket from '#lib/basket/AddToBasket.svelte';
@@ -159,13 +160,25 @@
 	let submitted = false;
 	// Problems with the form: the listener's (checked here) and the server's.
 	let errors: { talkgroups?: string; dates?: string; unit?: string } = $state({});
+	// Which option of Talkgroups its problem is about, so it shows by that
+	// option (ArchiveUx section 5): the one the refused search had.
+	let tgScope: Scope = $state('chosen');
 	let formError = $state('');
-	const problems = $derived(Object.values(errors).filter(Boolean).length);
+	// The error summary's links (ArchiveUx's ErrorSummary): each problem,
+	// named by its field, leading to its control, in the form's order.
+	const problems = $derived(
+		[
+			errors.talkgroups && { id: tgScope === 'chosen' && (scope as Scope) === 'chosen' ? 'recent-talkgroup' : `scope-${tgScope}`, label: 'Talkgroups', message: errors.talkgroups },
+			errors.dates && { id: 'recent-dates', label: 'Date and time', message: errors.dates },
+			errors.unit && { id: 'recent-unit', label: 'Unit', message: errors.unit }
+		].filter((p): p is { id: string; label: string; message: string } => !!p)
+	);
+	let errorSummary: { focus(): void } | undefined = $state();
 
-	async function focusFirst() {
+	/** The focus to the error summary, once it's drawn. */
+	async function focusProblems() {
 		await tick();
-		const first = document.querySelector<HTMLElement>('.filters [aria-invalid="true"], .filters .invalid-group input, .filters .invalid-dates button');
-		first?.focus();
+		errorSummary?.focus();
 	}
 
 	function onrefusal(r: Refusal | undefined) {
@@ -177,9 +190,10 @@
 		const field = fieldOf(r.error);
 		if (field) {
 			errors = { [field]: r.message };
+			if (field === 'talkgroups') tgScope = filters.scope;
 			formError = '';
 			open = true;
-			if (submitted) void focusFirst();
+			if (submitted) void focusProblems();
 		} else {
 			errors = {};
 			formError = r.message;
@@ -190,7 +204,10 @@
 	function submit(e: SubmitEvent) {
 		e.preventDefault();
 		const next: typeof errors = {};
-		if (scope === 'chosen' && !chosen.length) next.talkgroups = 'Choose at least one talkgroup, or another option above.';
+		if (scope === 'chosen' && !chosen.length) {
+			next.talkgroups = 'Choose at least one talkgroup, or another option above.';
+			tgScope = 'chosen';
+		}
 		// A unit picked from the list, or a radio ID typed.
 		const typed = unitText.trim();
 		const u = picked && picked.label === typed ? picked.key : typed;
@@ -198,7 +215,7 @@
 		errors = next;
 		formError = '';
 		if (Object.keys(next).length) {
-			void focusFirst();
+			void focusProblems();
 			return;
 		}
 		const f: Filters = { scope, talkgroups: scope === 'chosen' ? chosen.map(spanOf) : [], ...range, unit: u, order };
@@ -292,19 +309,35 @@
 		</div>
 
 		<form id="recent-filters" class="filters" novalidate hidden={!open} onsubmit={submit}>
-			{#if problems}
-				<p class="error" aria-live="polite">{problems === 1 ? '1 field needs attention' : `${problems} fields need attention`}</p>
-			{/if}
+			<ErrorSummary bind:this={errorSummary} {problems} />
 
 			<fieldset class="field-group field" class:invalid-group={!!errors.talkgroups} aria-describedby="tg-hint{errors.talkgroups ? ' tg-error' : ''}">
 				<legend>Talkgroups</legend>
 				<p class="field-hint" id="tg-hint">No talkgroups chosen is your listening set.</p>
-				<label class="choice"><input type="radio" name="scope" value="set" bind:group={scope} /> Your listening set <span class="hint">{setHint}</span></label>
-				<label class="choice"><input type="radio" name="scope" value="all" bind:group={scope} /> Every talkgroup</label>
-				<label class="choice"><input type="radio" name="scope" value="chosen" bind:group={scope} /> These talkgroups</label>
+				<!-- A problem shows by the option it is about (ArchiveUx section 5). -->
+				{#snippet tgError(about: Scope)}
+					{#if errors.talkgroups && tgScope === about}<p class="field-error choice-error" id="tg-error">{errors.talkgroups}</p>{/if}
+				{/snippet}
+				<label class="choice"><input type="radio" id="scope-set" name="scope" value="set" bind:group={scope} /> Your listening set <span class="hint">{setHint}</span></label>
+				{@render tgError('set')}
+				<label class="choice"><input type="radio" id="scope-all" name="scope" value="all" bind:group={scope} /> Every talkgroup</label>
+				{@render tgError('all')}
+				<label class="choice"><input type="radio" id="scope-chosen" name="scope" value="chosen" bind:group={scope} /> These talkgroups</label>
 				{#if scope === 'chosen'}
 					<div class="pick">
-						<Suggest bind:text {suggest} onpick={pick} label="Add a talkgroup" showLabel icon="search" placeholder="Name, label, ID or tag" listLabel="Talkgroups" invalid={!!errors.talkgroups} />
+						<Suggest
+							bind:text
+							{suggest}
+							onpick={pick}
+							id="recent-talkgroup"
+							label="Add a talkgroup"
+							showLabel
+							icon="search"
+							placeholder="Name, label, ID or tag"
+							listLabel="Talkgroups"
+							describedby={errors.talkgroups && tgScope === 'chosen' ? 'tg-error' : undefined}
+							invalid={!!errors.talkgroups && tgScope === 'chosen'}
+						/>
 						{#if chosen.length}
 							<ul class="chosen" aria-label="Chosen talkgroups">
 								{#each chosen as t (keyOf(t))}
@@ -317,7 +350,7 @@
 						{/if}
 					</div>
 				{/if}
-				{#if errors.talkgroups}<p class="field-error" id="tg-error">{errors.talkgroups}</p>{/if}
+				{@render tgError('chosen')}
 			</fieldset>
 
 			<div class="field dates" class:invalid-dates={!!errors.dates} role="group" aria-labelledby="dates-label" aria-describedby="dates-hint{errors.dates ? ' dates-error' : ''}">
@@ -327,6 +360,9 @@
 						{...range}
 						times
 						{timeZone}
+						id="recent-dates"
+						invalid={!!errors.dates}
+						describedby="dates-hint{errors.dates ? ' dates-error' : ''}"
 						onchange={(from, to, fromTime = '', toTime = '') => {
 							range = { from, to, fromTime, toTime };
 							if (errors.dates) errors = { ...errors, dates: undefined };
@@ -426,6 +462,13 @@
 		font-size: var(--text-sm);
 	}
 	.pick {
+		margin: var(--space-xs) 0 0;
+	}
+	/* Under its option, lined up with the option's words. */
+	.choice-error {
+		margin: 0 0 var(--space-xs) calc(1em + var(--space-xs));
+	}
+	.pick + .choice-error {
 		margin: var(--space-xs) 0 0;
 	}
 	.chosen {

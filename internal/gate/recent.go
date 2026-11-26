@@ -131,15 +131,11 @@ func (g *Gate) recentCalls(ctx context.Context, s Search, from, to time.Time, li
 	if err != nil {
 		return Page{}, err
 	}
-	var named map[talkgroupKey]bool
-	var ids []int32
-	if s.Talkgroups != nil {
-		named, ids = cat.resolve(*s.Talkgroups)
-		if len(named) == 0 {
-			// No public talkgroup is named: nothing can match. A hidden
-			// talkgroup's ID answers here, as one that doesn't exist does.
-			return Page{Calls: []Call{}}, nil
-		}
+	named, ids, nothing := cat.filterOf(s.Talkgroups)
+	if nothing {
+		// No public talkgroup is named: nothing can match. A hidden
+		// talkgroup's ID answers here, as one that doesn't exist does.
+		return Page{Calls: []Call{}}, nil
 	}
 
 	// One read-only transaction, with the search's time as its statement
@@ -206,10 +202,7 @@ func (g *Gate) recentCalls(ctx context.Context, s Search, from, to time.Time, li
 			unitFirst, unitLast = &s.Unit.First, &s.Unit.Last
 		}
 	}
-	var tgs []int32
-	if s.Talkgroups != nil {
-		tgs = ids
-	}
+	tgs := ids
 
 	out := Page{Calls: make([]Call, 0, limit)}
 	batch := int32(limit + 1)
@@ -292,6 +285,28 @@ func rowOf(r db.GateRecentCallsNewestRow) db.GatePublicCallsRow {
 	return db.GatePublicCallsRow{ID: r.ID, SystemID: r.SystemID, Talkgroup: r.Talkgroup,
 		PatchedTalkgroups: r.PatchedTalkgroups, StartedAt: r.StartedAt, EndedAt: r.EndedAt,
 		RecordingSize: r.RecordingSize, Transmissions: r.Transmissions}
+}
+
+// filterOf is a search's talkgroup filter as the query takes it: the public
+// talkgroups a set names (named, checked against each row's system) and
+// their IDs (ids, for the query). nil and nil is no filter: a nil set, and
+// a set naming every public talkgroup, which finds exactly what no filter
+// does (only public talkgroups' calls are listed, and a call on one the
+// catalogue doesn't hold is held back either way), so a listening set with
+// every talkgroup on costs what no filter costs, however many it names
+// (ADR 0049). nothing: the set names no public talkgroup.
+func (c *Catalogue) filterOf(set *ListeningSet) (named map[talkgroupKey]bool, ids []int32, nothing bool) {
+	if set == nil {
+		return nil, nil, false
+	}
+	named, ids = c.resolve(*set)
+	switch len(named) {
+	case 0:
+		return nil, nil, true
+	case len(c.Talkgroups):
+		return nil, nil, false
+	}
+	return named, ids, false
 }
 
 // resolve finds the public talkgroups a set names: by system and ID, and

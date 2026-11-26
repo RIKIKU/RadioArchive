@@ -126,13 +126,16 @@ test('filters: talkgroups picked with Suggest, a unit, the order, kept in the ad
 	expect(await ids(page)).toEqual(want);
 
 	// A unit neither picked from the list nor a radio ID is the form's to
-	// say, under the field.
+	// say, under the field, and in the error summary, which takes the focus
+	// and links to the field (ArchiveUx 0.6.0).
 	await openFilters(page);
 	await page.getByLabel('Unit', { exact: true }).fill('Nobody at all');
 	await page.getByRole('button', { name: 'Show calls' }).click();
 	await expect(page.locator('#unit-error')).toHaveText('Choose a unit from the list, or enter a radio ID in digits, such as 2001.');
+	await expect(page.locator('.error-summary')).toBeFocused();
+	await expect(page.getByRole('heading', { name: '1 field needs attention' })).toBeVisible();
+	await page.getByRole('link', { name: 'Unit: Choose a unit from the list, or enter a radio ID in digits, such as 2001.' }).click();
 	await expect(page.getByLabel('Unit', { exact: true })).toBeFocused();
-	await expect(page.getByText('1 field needs attention')).toBeVisible();
 
 	// Clear filters: the listening set again.
 	await page.getByRole('button', { name: 'Clear filters' }).click();

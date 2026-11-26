@@ -28,9 +28,13 @@ import (
 // query string, or QUERY and POST with it in a JSON body (ADR 0016).
 const RecentCallsPath = "/api/v1/recent-calls"
 
-// MaxTalkgroups is the most talkgroups one search may name: a listening
-// set of the deployment's 1,000, which fits a URL nginx takes (ADR 0013).
-const MaxTalkgroups = 1000
+// MaxTalkgroups is the most talkgroups one search may name: ten times the
+// deployment's 1,000 (ADR 0049; ADR 0013 had 1,000, which a listening set
+// of 1,214 passed). It bounds what a request may hold, not what a search
+// costs: the query is given only the names the catalogue holds as public,
+// so at most the deployment's own talkgroups, and a set naming every one
+// of them is no filter at all. A set this long goes as a body (ADR 0016).
+const MaxTalkgroups = 10_000
 
 // RecentCallsResponse is a page of recent calls. Next is the cursor for
 // load more, or null on the last page.
@@ -252,9 +256,10 @@ func (a *API) recentCallsBody(w http.ResponseWriter, r *http.Request) {
 	a.serveRecent(w, r, q)
 }
 
-// MaxSearchBody is the most a search's JSON body may hold: 1,000
-// talkgroups, each with its system, and the other parameters, with room.
-const MaxSearchBody = 64 << 10
+// MaxSearchBody is the most a search's JSON body may hold: MaxTalkgroups
+// talkgroups, each with a 5-digit system and a 10-digit ID (about 20 bytes
+// each in JSON), and the other parameters, with room (ADR 0049).
+const MaxSearchBody = 256 << 10
 
 var invalidSearchBody = apiError{Code: "invalid_body",
 	Message: `The body is a JSON object of the search's parameters: {"talkgroups": ["1001", "1.1002"], "from", "to", "unit", "order", "cursor", "limit"}.`}
