@@ -149,7 +149,15 @@ export interface Ended {
 	how: 'skipped' | 'cleared' | 'withdrawn';
 	at: number;
 }
-export type Heard = { first: FirstFrame[]; played: Played[]; ended: Ended[]; alerts: { call_id: string; alert: string }[]; order: string[] };
+export type Heard = {
+	first: FirstFrame[];
+	played: Played[];
+	ended: Ended[];
+	alerts: { call_id: string; alert: string }[];
+	order: string[];
+	/** Previous's presses settling on a call (ADR 0048). */
+	previous: { call_id: string; steps: number }[];
+};
 
 /**
  * Opens the Listen page with the set given ({1001} if none), collecting
@@ -163,7 +171,8 @@ export async function listen(page: Page, path: 'webcodecs' | 'wasm' = 'webcodecs
 			if (removeDecoder) delete (window as { AudioDecoder?: unknown }).AudioDecoder;
 			localStorage.setItem('radioarchive.listening-set', JSON.stringify({ v: 1, talkgroups: set }));
 			if (playback) localStorage.setItem('radioarchive.playback', JSON.stringify(playback));
-			const heard: Heard = { first: [], played: [], ended: [], alerts: [], order: [] };
+			const heard: Heard = { first: [], played: [], ended: [], alerts: [], order: [], previous: [] };
+			addEventListener('radioarchive:previous', (e) => heard.previous.push((e as CustomEvent).detail));
 			(window as unknown as { heard: Heard }).heard = heard;
 			addEventListener('radioarchive:first-frame', (e) => {
 				const d = (e as CustomEvent).detail;
@@ -177,7 +186,8 @@ export async function listen(page: Page, path: 'webcodecs' | 'wasm' = 'webcodecs
 		{ removeDecoder: path === 'wasm', set, playback }
 	);
 	await page.goto('/');
-	await expect(page.getByRole('list', { name: 'Your listening set' })).toContainText('Dispatch North');
+	// The set has loaded: the talkgroups on, folded away at the page's foot.
+	await expect(page.getByText(/^Talkgroups on \(/)).toBeVisible();
 	await page.getByRole('button', { name: 'Start listening' }).click();
 	await expect(dock(page).getByText('Listening. Calls play here as they come in.')).toBeVisible({ timeout: 15_000 });
 	await expect(dock(page).locator('.player')).toHaveAttribute('data-decoder', path);

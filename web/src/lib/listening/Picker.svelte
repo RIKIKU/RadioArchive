@@ -1,49 +1,20 @@
 <script lang="ts">
-	// The listening-set picker (SPEC.md R42, R83): RadioArchive's own, from
-	// ArchiveUx's tokens and row pattern. Browse by group, switching on a
-	// whole group (its talkgroups as they are now, not a link to the group)
-	// or single talkgroups; or search by name, label, ID or tag. Grouped by
-	// system when there are several (R15). About 1,000 talkgroups, all in
-	// the browser, with no paging: the search runs here, as you type.
+	// The talkgroup search (SPEC.md R42, R83; ADR 0048): RadioArchive's own,
+	// from ArchiveUx's tokens and row pattern. It finds single talkgroups by
+	// name, label, ID or tag and switches each on or off; whole groups and
+	// tags are the tiles' (Tiles.svelte). About 1,000 talkgroups, all in the
+	// browser, with no paging: the search runs here, as you type.
 	import { search, type Index, type Talkgroup } from './set.ts';
 	import type { ListeningState } from './state.svelte.ts';
 
 	let { ix, listening }: { ix: Index; listening: ListeningState } = $props();
 
 	let query = $state('');
-	let open: Record<string, boolean> = $state({});
 	const uid = $props.id();
 
 	const found = $derived(query.trim() ? search(ix.catalogue.talkgroups, query) : []);
 
-	interface Shelf {
-		id: string;
-		name: string;
-		talkgroups: Talkgroup[];
-	}
-	interface Section {
-		id: string;
-		system?: string;
-		shelves: Shelf[];
-	}
-
-	// Each system's groups, in the catalogue's order, and its talkgroups in
-	// no group last. One system: one section with no heading.
-	const sections: Section[] = $derived.by(() => {
-		const systems = ix.catalogue.systems?.length ? ix.catalogue.systems : [undefined];
-		return systems.map((s) => {
-			const mine = ix.catalogue.talkgroups.filter((t) => s === undefined || t.system === s.id);
-			const shelves: Shelf[] = ix.catalogue.groups
-				.map((g, i) => ({ id: `${s?.id ?? 0}-g${i}`, name: g, talkgroups: mine.filter((t) => t.groups.includes(g)) }))
-				.filter((g) => g.talkgroups.length);
-			const loose = mine.filter((t) => !t.groups.length);
-			if (loose.length) shelves.push({ id: `${s?.id ?? 0}-none`, name: 'Not in a group', talkgroups: loose });
-			return { id: String(s?.id ?? 0), system: s ? s.name || s.label : undefined, shelves };
-		});
-	});
-
 	const count = (n: number) => `${n} talkgroup${n === 1 ? '' : 's'}`;
-	const allIn = (ts: Talkgroup[]) => ts.every((t) => listening.inSet(t));
 
 	function toggle(t: Talkgroup, on: boolean) {
 		if (on) listening.add(t);
@@ -82,40 +53,6 @@
 				{#each found as t (`${t.system ?? 0}.${t.id}`)}{@render row(t)}{/each}
 			</ul>
 		{/if}
-	{:else}
-		{#each sections as s (s.id)}
-			{#if s.system}<h3 class="system">{s.system}</h3>{/if}
-			<ul class="rows" aria-label={s.system ? `Groups in ${s.system}` : 'Groups'}>
-				{#each s.shelves as g (g.id)}
-					{@const opened = !!open[g.id]}
-					{@const every = allIn(g.talkgroups)}
-					<li class="group">
-						<div class="head">
-							<button
-								type="button"
-								class="ghost open"
-								aria-expanded={opened}
-								aria-controls="{uid}-{g.id}"
-								onclick={() => (open = { ...open, [g.id]: !opened })}
-							>
-								<span class="name">{g.name}</span>
-								<span class="meta">{count(g.talkgroups.length)}</span>
-							</button>
-							{#if every}
-								<button type="button" class="secondary" aria-label="Remove all of {g.name}" onclick={() => listening.remove(...g.talkgroups)}>Remove all</button>
-							{:else}
-								<button type="button" class="secondary" aria-label="Add all of {g.name}" onclick={() => listening.add(...g.talkgroups)}>Add all</button>
-							{/if}
-						</div>
-						<ul class="rows inner" id="{uid}-{g.id}" hidden={!opened} aria-label={g.name}>
-							{#if opened}
-								{#each g.talkgroups as t (`${t.system ?? 0}.${t.id}`)}{@render row(t)}{/each}
-							{/if}
-						</ul>
-					</li>
-				{/each}
-			</ul>
-		{/each}
 	{/if}
 </div>
 
@@ -133,15 +70,7 @@
 		padding: 0;
 		border-top: var(--border-width) solid var(--border);
 	}
-	.rows[hidden] {
-		display: none;
-	}
-	.inner {
-		border-top: 0;
-		padding-left: var(--row-pad-x);
-	}
-	.row,
-	.group > .head {
+	.row {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
@@ -152,16 +81,6 @@
 	}
 	.row:hover {
 		background: var(--plain-row-hover);
-	}
-	.inner > .row:last-child {
-		border-bottom: 0;
-	}
-	.group {
-		border-bottom: var(--border-width) solid var(--border);
-	}
-	.group > .head {
-		border-bottom: 0;
-		justify-content: space-between;
 	}
 	.pick {
 		display: flex;
@@ -192,19 +111,8 @@
 		font-size: var(--text-sm);
 		font-weight: var(--weight-normal);
 	}
-	.open {
-		flex: 1 1 auto;
-		justify-content: flex-start;
-		flex-wrap: wrap;
-		gap: var(--space-2xs) var(--space-md);
-		text-align: left;
-	}
 	.note {
 		color: var(--muted);
 		font-size: var(--text-sm);
-	}
-	.system {
-		margin: var(--space-xl) 0 var(--space-sm);
-		font-size: var(--text-lg);
 	}
 </style>

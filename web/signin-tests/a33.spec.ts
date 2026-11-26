@@ -152,6 +152,7 @@ test('A33: an account with {1002} on a browser with {1001}: one prompt, and noth
 	await prompt.getByRole('button', { name: "Use my account's set" }).click();
 	await expect(prompt).toHaveCount(0);
 	expect(ids(await savedSet(page))).toEqual([1002]);
+	await page.getByText(/^Talkgroups on \(/).click();
 	await expect(page.getByRole('list', { name: 'Your listening set' }).getByRole('listitem')).toHaveCount(1);
 	expect(ids((await account(page)).profile!.talkgroups)).toEqual([1002]);
 	// Once: the next page doesn't ask again.
@@ -176,7 +177,8 @@ test('signed in, changes are saved to the account; hold and session additions ne
 	await signUp(page, request, baseURL!, address('changes'));
 	await expect.poll(async () => (await account(page)).profile?.talkgroups, { timeout: 15_000 }).toEqual([{ id: 1001 }]);
 
-	// A priority mark and the look are saved.
+	// A priority mark (in the talkgroups on, folded away: ADR 0048) and the look are saved.
+	await page.getByText(/^Talkgroups on \(/).click();
 	await page.getByRole('checkbox', { name: 'Priority: Dispatch North' }).check();
 	await openMenu(page);
 	await page.getByRole('combobox', { name: 'Look' }).selectOption('console');

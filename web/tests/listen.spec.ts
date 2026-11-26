@@ -118,7 +118,7 @@ async function shot(page: Page, name: string) {
 for (const look of looks)
 	for (const theme of themes)
 		for (const width of widths)
-			test(`axe: the Listen page and the picker, ${look}, ${theme}, ${width}px`, async ({ page, context, baseURL }) => {
+			test(`axe: the Listen page, its tiles and its search, ${look}, ${theme}, ${width}px`, async ({ page, context, baseURL }) => {
 				await save(context, baseURL!, look, theme);
 				await page.setViewportSize({ width, height: 900 });
 				await page.goto('/');
@@ -140,12 +140,13 @@ for (const look of looks)
 				await axe(page, width);
 				await shot(page, `unavailable-${look}-${theme}-${width}`);
 
-				// Then one that does: the set, the session's addition, and the
-				// picker with a group open.
+				// Then one that does: the session's addition, the tiles with
+				// North on and the rest off, and the talkgroups on, opened.
 				await page.goto('/?fireground=41');
 				await expect(page.getByText('is added for this session')).toBeVisible();
-				await page.getByRole('button', { name: /^North/ }).click();
-				await expect(page.getByRole('list', { name: 'North' }).getByRole('listitem')).toHaveCount(1);
+				await expect(page.getByRole('list', { name: 'Agencies' }).getByRole('button', { name: /^North/ })).toHaveAttribute('aria-pressed', 'true');
+				await page.getByText(/^Talkgroups on \(/).click();
+				await expect(page.getByRole('list', { name: 'Your listening set' }).getByRole('listitem')).toHaveCount(1);
 				await axe(page, width);
 				await shot(page, `listen-${look}-${theme}-${width}`);
 

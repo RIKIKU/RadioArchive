@@ -70,7 +70,7 @@ const dock = (page: Page) => page.getByRole('region', { name: 'Now playing' });
 async function startListening(page: Page) {
 	await page.addInitScript(() => localStorage.setItem('radioarchive.listening-set', JSON.stringify({ v: 1, talkgroups: [{ id: 1001 }] })));
 	await page.goto('/');
-	await expect(page.getByRole('list', { name: 'Your listening set' })).toContainText('Dispatch North');
+	await expect(page.getByText('Talkgroups on (1): priority, remove and share')).toBeVisible();
 	await page.getByRole('button', { name: 'Start listening' }).click();
 }
 

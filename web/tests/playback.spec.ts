@@ -37,7 +37,8 @@ for (const path of paths) {
 			.toBe(200);
 		const r = await request.get(`/api/v1/calls/${first.call_id}/recording`);
 		expect(r.headers()['content-type']).toContain('ogg');
-		await page.getByRole('button', { name: 'Play again: Dispatch North' }).click();
+		// Previous, with nothing playing, goes back to the last call heard (ADR 0048).
+		await dock(page).getByRole('button', { name: 'Previous' }).click();
 		const again = await playedFrom(page, unit, 'recording');
 		console.log(`recording [${info.project.name}] ${first.call_id}: ${again.played.path}, ${again.played.frames} frames, peak ${again.played.peak.toFixed(3)}`);
 		expect(again.first.call_id).toBe(first.call_id);

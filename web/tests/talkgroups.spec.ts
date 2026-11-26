@@ -378,9 +378,9 @@ test("A13, the browser's half: an admin plays a 1003 recording from its row, in 
 	await page.goto('/');
 	await expect(page.getByRole('heading', { level: 1, name: 'Listen' })).toBeVisible();
 	// Group North holds 1001 and 1003; the listener's North has 1001 only.
-	await page.getByRole('region', { name: 'Choose talkgroups' }).getByRole('button', { name: /^North/ }).click();
-	await expect(page.getByRole('list', { name: 'North' }).getByRole('listitem')).toHaveCount(1);
-	await expect(page.getByRole('list', { name: 'North' })).toContainText('Dispatch North');
+	await expect(page.getByRole('list', { name: 'Agencies' }).getByRole('button', { name: /^North/ })).toHaveText(/North\s*1 off/);
+	await page.getByLabel('Search talkgroups').fill('north');
+	await expect(page.getByRole('list', { name: 'Search results' }).getByRole('listitem')).toHaveText([/Dispatch North/]);
 	await expect(page.locator('main')).not.toContainText('1003');
 	await expect(page.locator('main')).not.toContainText('ADMIN');
 	const catalogue = await (await page.request.get('/api/v1/catalogue')).text();
