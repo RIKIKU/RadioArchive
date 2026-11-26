@@ -156,14 +156,14 @@
 			</p>
 		</div>
 		<div class="controls" role="group" aria-label="Player controls">
-			<button type="button" class="secondary" disabled={!player.canPrevious} onclick={() => player.previous()}
-				><span class="flip"><Icon name="skip" /></span><span class="label">Previous</span></button
-			>
 			{#if player.paused}
 				<button type="button" class="secondary" onclick={() => player.resume()}><Icon name="play" /><span class="label">Resume</span></button>
 			{:else}
 				<button type="button" class="secondary" onclick={() => player.pause()}><Icon name="pause" /><span class="label">Pause</span></button>
 			{/if}
+			<button type="button" class="secondary" disabled={!player.canPrevious} onclick={() => player.previous()}
+				><span class="flip"><Icon name="skip" /></span><span class="label">Previous</span></button
+			>
 			<button type="button" class="secondary" disabled={!c} onclick={() => player.skip()}><Icon name="skip" /><span class="label">Skip</span></button>
 			<button type="button" class="secondary" aria-pressed={!!player.hold} disabled={!c && !player.hold} onclick={() => player.setHold(!player.hold)}
 				><Icon svg={dockIcons.hold} /><span class="label">Hold</span></button
