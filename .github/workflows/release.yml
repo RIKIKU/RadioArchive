@@ -19,10 +19,13 @@ name: Release
 # architectures, and the release's files are written. Only then, and not in
 # a dry run: the tag, the GitHub release with its notes and files, the
 # images pushed by version and major.minor, and every file and image
-# attested (GitHub artifact attestations, `gh attestation verify`).
+# attested (GitHub artifact attestations, `gh attestation verify`). Then
+# the PowerShell module is published to the PowerShell Gallery with the
+# release's version, as PagerArchive's is.
 #
 # "Dry run" (the default, on any branch) does everything but tag, push,
 # publish and attest, and keeps the release's files as the run's artifact.
+# It stamps and checks the module's manifest, but publishes nothing.
 # Off main a run that isn't a dry run fails before anything starts.
 #
 # One release at a time, never cancelled.
@@ -42,6 +45,7 @@ on:
     paths:
       - .github/workflows/release.yml
       - scripts/ci/release-*.sh
+      - scripts/ci/Publish-Module.ps1
       - scripts/ci/versions-lib.sh
       - deploy/release/**
 
@@ -215,8 +219,9 @@ jobs:
           if-no-files-found: error
 
   # The release's files: compose and settings files, the configuration
-  # archive, the binaries with SHA256SUMS, and the module's zip. A dry run
-  # keeps them as the run's artifact.
+  # archive, and the binaries with SHA256SUMS. A dry run keeps them as the
+  # run's artifact. The PowerShell module isn't one: it goes to the
+  # PowerShell Gallery (the gallery job, below).
   files:
     name: The release's files
     needs: [plan, recorder]
@@ -235,7 +240,6 @@ jobs:
         run: |
           sh scripts/ci/release-assets.sh "$VERSION" release
           cp built/out/* release/
-          (cd powershell && zip -qr "../release/RadioArchive-module-$VERSION.zip" RadioArchive)
           (cd release && sha256sum libradioarchive-*.so radioarchive-client-* > SHA256SUMS && cat SHA256SUMS)
           ls -l release
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -326,3 +330,60 @@ jobs:
           } > notes.md
           gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md --generate-notes \
             ${PREVIOUS:+--notes-start-tag "$PREVIOUS"} --latest art/release-"$VERSION"/*
+
+  # The PowerShell module on the PowerShell Gallery (ADR 0043), as
+  # PagerArchive's is (its ADR 0009, section 12): after the release is
+  # published, with the release's version (v1.2.3 is 1.2.3). Without the
+  # PSGALLERY_API_KEY secret it logs "PowerShell Gallery key not set:
+  # skipping publishing" and succeeds; the owner holds the key. A dry run,
+  # and so a pull request's run, stamps and checks the manifest and
+  # publishes nothing. Nothing is published off main. Re-run after a
+  # failure, it publishes the version, or finds it there already.
+  gallery:
+    name: PowerShell Gallery
+    needs: [plan, publish]
+    if: >-
+      !cancelled() && needs.plan.outputs.release == 'true' &&
+      (needs.publish.result == 'success' || needs.plan.outputs.dry_run == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      PUBLISH: ${{ needs.plan.outputs.dry_run != 'true' && github.ref == 'refs/heads/main' }}
+    steps:
+      - name: The Gallery key is set
+        id: key
+        env:
+          PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
+        run: |
+          if [ "$PUBLISH" != true ]; then
+            echo "Dry run: RadioArchive $VERSION's manifest is checked, and nothing is published."
+            echo check=true >> "$GITHUB_OUTPUT"
+          elif [ -z "$PSGALLERY_API_KEY" ]; then
+            echo "PowerShell Gallery key not set: skipping publishing"
+            echo "::notice::PowerShell Gallery key not set: skipping publishing"
+          else
+            echo check=true >> "$GITHUB_OUTPUT"
+            echo publish=true >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.key.outputs.check == 'true'
+      # The manifest needs 7.6, newer than the runner's own pwsh may be.
+      - name: Install PowerShell 7.6.0
+        if: steps.key.outputs.check == 'true'
+        shell: pwsh
+        run: |
+          $pwsh = ./scripts/ci/Install-PowerShell.ps1 -Version 7.6.0 -Destination (Join-Path $env:RUNNER_TEMP 'pwsh') | Select-Object -Last 1
+          "RA_PWSH=$pwsh" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Copy the module, stamp its version, check the manifest (and publish it)
+        if: steps.key.outputs.check == 'true'
+        shell: pwsh
+        env:
+          PSGALLERY_API_KEY: ${{ steps.key.outputs.publish == 'true' && secrets.PSGALLERY_API_KEY || '' }}
+          PUBLISH_MODULE: ${{ steps.key.outputs.publish }}
+        run: |
+          $arguments = @('-NoProfile', '-NonInteractive', '-File', './scripts/ci/Publish-Module.ps1',
+              '-Version', $env:VERSION, '-Destination', (Join-Path $env:RUNNER_TEMP 'gallery'))
+          if ($env:PUBLISH_MODULE -eq 'true') { $arguments += '-Publish' }
+          & $env:RA_PWSH @arguments
+          exit $LASTEXITCODE

@@ -75,7 +75,9 @@ to the radio with it.
 Admins can do everything the admin API does from PowerShell 7.6 or later
 with the `RadioArchive` module in `powershell/RadioArchive`
 (`docs/adr/0028-the-powershell-module-its-sign-in-and-its-commands.md`,
-`docs/powershell-guidelines.md`). It signs in as the admin, through the
+`docs/powershell-guidelines.md`). Each release publishes it to the
+PowerShell Gallery (`Install-PSResource -Name RadioArchive`); from a
+clone, import it as below. It signs in as the admin, through the
 radio's Authentik, with its own public client (`radioarchive-powershell`,
 in `radioarchive.yaml`): sign in to the radio with the browser once first,
 then

@@ -111,7 +111,7 @@ From outside: `https://radio.example.org/` opens the radio; `https://radio.examp
 ## The first admin and the setup
 
 1. Open the radio, choose **Sign in** in the account menu and sign up with `INITIAL_ADMIN_EMAIL`: Authentik emails a code. While no admin exists, that account becomes one. Admins promote others on **Admin → Accounts**.
-2. Create your system on **Admin → Systems** (or import a whole setup with the PowerShell module, `Import-RadioArchiveSetup`).
+2. Create your system on **Admin → Systems** (or import a whole setup with the PowerShell module, `Import-RadioArchiveSetup`). The module is on the PowerShell Gallery, published with each release: `Install-PSResource -Name RadioArchive` in PowerShell 7.6 or later, and `Update-PSResource -Name RadioArchive` after an upgrade. Its version is the release's.
 3. Add each recorder, from the server's shell only. It prints the recorder's client key once:
 
    ```sh
