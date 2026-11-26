@@ -53,7 +53,7 @@ The recorder plugin and recorder client; ingest, recordings and retention; the l
 - **Notifications** of any kind. A talkgroup's alert sound (R22) plays only in an open listener.
 - **Importing past recordings** from another system.
 - **Merging duplicate calls** from several recorders. Two recorders hearing one call store two calls (R13).
-- **Conventional and analog systems** (owner, 2026-11-24). v1 is P25 trunked, digital audio at 8 kHz. The import skips such rows and reports them (R52).
+- **Conventional and analog systems** (owner, 2026-11-24). v1 is P25 trunked: digital audio, 8 kHz live and 16 kHz in trunk-recorder v5's recordings (ADR 0046). The import skips such rows and reports them (R52).
 - **Doing PagerArchive's or ArchiveUx's work.** This repo lists what they need (section 11) and depends on their releases.
 - **TLS, DDoS protection, firewalling, blocking by country.** Left to the deployment (R74).
 - **iOS (iPhone and iPad)** is not supported (R40). If it ever becomes a requirement, the fallback for screen-off listening is LL-HLS (ADR 0001).
@@ -97,7 +97,7 @@ v1 supports P25 systems only; analog systems are ignored (owner, 2026-11-24).
   - uses **one client identity**, its own **client key** (R10), for its live WebSocket and its recording uploads (ADR 0002);
   - relays the plugin's heartbeat;
   - de-duplicates the copies trunk-recorder sends of a patched call, so each call is sent once (R16).
-- **R4. Encoding.** 12 kbit/s VBR, narrowband, `OPUS_APPLICATION_VOIP`, 20 ms frames, for both live frames and recordings. Recordings are Ogg/Opus with no comment padding.
+- **R4. Encoding.** 12 kbit/s VBR, narrowband, `OPUS_APPLICATION_VOIP`, 20 ms frames, for both live frames and recordings, each encoded at its own PCM rate, 8 or 16 kHz, never resampled (ADR 0046). Recordings are Ogg/Opus with no comment padding.
 - **R5. Disk-backed queue.** While the server can't be reached, the client keeps a **queue of unsent recordings on disk**. Each entry points at trunk-recorder's own file and is removed only after the server acknowledges the upload. On reconnect the oldest go first. Entries older than `QUEUE_MAX_AGE` (default 24 h) are dropped and counted. Live audio missed during an outage is lost: frames that arrive too late to be live are dropped, and the recording still arrives.
 - **R6. Versions.** The server accepts recorder clients up to **one minor version** behind its own. An older client is refused with an error naming both versions, and counted in a metric.
 

@@ -3,6 +3,7 @@ package fakerecorder_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"net"
 	"os"
@@ -423,6 +424,57 @@ func TestLoadScenarioRejects(t *testing.T) {
 	} {
 		if _, err := fakerecorder.LoadScenario(bytes.NewReader([]byte(js))); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// The recordings are as trunk-recorder v5.2.1 writes them (ADR 0046): a
+// call's 8 kHz live audio as a 16 kHz WAV, the same length and the same
+// audio.
+func TestRecordingsAt16k(t *testing.T) {
+	f, err := os.Open(filepath.Join("testdata", "scenarios", "acceptance.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	s, err := fakerecorder.LoadScenario(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := fakerecorder.Recordings(s, os.DirFS(fixtureDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Call A: the 1 s tone, then 500 ms of noise bursts.
+	b := recs["/app/media/ex/1001-1764000000_851012500.0-call_1.wav"]
+	var live []byte
+	for _, name := range []string{"tone-440hz-1s.pcm", "noise-bursts-500ms.pcm"} {
+		p, err := os.ReadFile(filepath.Join(fixtureDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		live = append(live, p...)
+	}
+	if len(b) < 44 {
+		t.Fatalf("call A's recording is %d bytes", len(b))
+	}
+	if rate := binary.LittleEndian.Uint32(b[24:]); rate != 16000 || fakerecorder.RecordingRate != 16000 {
+		t.Errorf("call A's recording is %d Hz, want 16000", rate)
+	}
+	pcm := b[44:]
+	if len(pcm) != 2*len(live) {
+		t.Fatalf("call A's recording holds %d bytes of PCM, want %d (1.5 s at 16 kHz)", len(pcm), 2*len(live))
+	}
+	// Every other sample is the live one, and the ones between lie
+	// between their neighbours.
+	le := binary.LittleEndian
+	for i := 0; i+1 < len(live)/2; i++ {
+		a, c := int16(le.Uint16(live[2*i:])), int16(le.Uint16(live[2*i+2:]))
+		if got := int16(le.Uint16(pcm[4*i:])); got != a {
+			t.Fatalf("sample %d at 16 kHz is %d, want the 8 kHz sample %d", 2*i, got, a)
+		}
+		if mid := int16(le.Uint16(pcm[4*i+2:])); mid < min(a, c) || mid > max(a, c) {
+			t.Fatalf("sample %d at 16 kHz is %d, not between %d and %d", 2*i+1, mid, a, c)
 		}
 	}
 }

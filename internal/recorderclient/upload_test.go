@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime"
@@ -62,6 +63,53 @@ func TestEncodeOggOpus(t *testing.T) {
 	}
 	if ogg[last+5]&0x04 == 0 {
 		t.Error("last page not marked end of stream")
+	}
+}
+
+// trunk-recorder v5 renders every call's WAV at 16 kHz, P25's included
+// (ADR 0046), and the client encodes each WAV at its own rate: 20 ms frames
+// at that rate, the header's input rate, and the pre-skip and granules
+// counted at 48 kHz, so the recording lasts as long as the WAV did.
+func TestRecordingRates(t *testing.T) {
+	for _, rate := range []int{8000, 16000} {
+		t.Run(fmt.Sprint(rate), func(t *testing.T) {
+			// 1.01 s of a WAV at rate, read as the uploader reads it.
+			wav := filepath.Join(t.TempDir(), "call.wav")
+			n := rate + rate/100
+			if err := os.WriteFile(wav, fakerecorder.WAV(rate, make([]byte, 2*n)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, pcm, err := ReadRecording(wav)
+			if err != nil || got != rate || len(pcm) != n {
+				t.Fatalf("ReadRecording = %d Hz, %d samples, %v; want %d, %d", got, len(pcm), err, rate, n)
+			}
+			var frames []int
+			var made int
+			newEnc := func(r int) (Encoder, error) {
+				made = r
+				return &rateEncoder{rate: r, frames: &frames}, nil
+			}
+			ogg, err := encodeOggOpus(newEnc, 1, rate, pcm)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if made != rate || len(frames) != 51 || frames[0] != rate/50 {
+				t.Errorf("encoder at %d Hz, %d frames of %d; want %d Hz, 51 of %d", made, len(frames), frames[0], rate, rate/50)
+			}
+			head := ogg[bytes.Index(ogg, []byte("OpusHead")):]
+			preSkip := int(binary.LittleEndian.Uint16(head[10:]))
+			if in := binary.LittleEndian.Uint32(head[12:]); in != uint32(rate) {
+				t.Errorf("OpusHead input rate %d, want %d", in, rate)
+			}
+			if want := rate / 400 * 48000 / rate; preSkip != want {
+				t.Errorf("pre-skip %d, want %d (the lookahead at 48 kHz)", preSkip, want)
+			}
+			last := bytes.LastIndex(ogg, []byte("OggS"))
+			g := int(binary.LittleEndian.Uint64(ogg[last+6:]))
+			if want := preSkip + 48480; g != want { // 1.01 s at 48 kHz
+				t.Errorf("final granule %d, want %d: %.3f s of audio, want 1.010", g, want, float64(g-preSkip)/48000)
+			}
+		})
 	}
 }
 
@@ -188,11 +236,11 @@ func TestUploadOutcomes(t *testing.T) {
 	}
 }
 
-// writeWAV writes 0.2 s of 8 kHz silence, as trunk-recorder would.
+// writeWAV writes 0.2 s of 16 kHz silence, as trunk-recorder v5 does.
 func writeWAV(t *testing.T, dir, name string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
-	if err := os.WriteFile(p, fakerecorder.WAV(8000, make([]byte, 3200)), 0o644); err != nil {
+	if err := os.WriteFile(p, fakerecorder.WAV(16000, make([]byte, 6400)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return p
@@ -215,10 +263,11 @@ func TestUploadMissingWAV(t *testing.T) {
 	if o := u.process(context.Background(), &entry{Recording: Recording{WAV: filepath.Join(t.TempDir(), "gone.wav"), Queued: now}}); o != outNoFile {
 		t.Errorf("outcome %q, want %q", o, outNoFile)
 	}
-	wav := filepath.Join(t.TempDir(), "16k.wav")
-	_ = os.WriteFile(wav, fakerecorder.WAV(16000, make([]byte, 640)), 0o644)
+	// A rate the client doesn't take is dropped like a missing file.
+	wav := filepath.Join(t.TempDir(), "11k.wav")
+	_ = os.WriteFile(wav, fakerecorder.WAV(11025, make([]byte, 640)), 0o644)
 	if o := u.process(context.Background(), &entry{Recording: Recording{WAV: wav, Queued: now}}); o != outNoFile {
-		t.Errorf("16 kHz recording: outcome %q, want %q", o, outNoFile)
+		t.Errorf("11025 Hz recording: outcome %q, want %q", o, outNoFile)
 	}
 	if n := u.m.Get(MetricMalformed, "reason", "sample_rate"); n != 1 {
 		t.Errorf("malformed{sample_rate} = %d, want 1", n)

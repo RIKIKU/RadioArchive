@@ -30,16 +30,19 @@ func TestEncodeDeterministic(t *testing.T) {
 		pcm[i] = int16(8000*math.Sin(float64(i)*0.3) + float64((i*7919)%2000) - 1000)
 	}
 	serial := oggSerial(callID(4182))
-	a, err := encodeOggOpus(newEnc, serial, 8000, pcm)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := encodeOggOpus(newEnc, serial, 8000, pcm)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(a, b) {
-		t.Fatal("two encodings of one recording differ")
+	// At 8 kHz, and at the 16 kHz trunk-recorder v5 writes (ADR 0046).
+	for _, rate := range []int{8000, 16000} {
+		a, err := encodeOggOpus(newEnc, serial, rate, pcm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := encodeOggOpus(newEnc, serial, rate, pcm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(a, b) {
+			t.Fatalf("%d Hz: two encodings of one recording differ", rate)
+		}
 	}
 	if serial == oggSerial(callID(4183)) {
 		t.Error("two calls share an Ogg serial")
