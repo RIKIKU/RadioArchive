@@ -381,9 +381,7 @@
 		margin-top: var(--space-2xl);
 	}
 	.on-list summary {
-		min-height: var(--target);
-		display: flex;
-		align-items: center;
+		padding: var(--space-sm) 0;
 		cursor: pointer;
 		font-weight: var(--weight-strong);
 	}

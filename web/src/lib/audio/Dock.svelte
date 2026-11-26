@@ -176,7 +176,7 @@
 			{#if c}
 				<span class="wide-only"><ShareButton callId={c.callId} label={c.talkgroup.name} icon compact /><AddToBasket callId={c.callId} label={c.talkgroup.name} icon compact /></span>
 				<span class="phone-only dock-more">
-					<MoreActions label="More actions: {c.talkgroup.name}" text="More">
+					<MoreActions label="More actions: {c.talkgroup.name}" text="Actions">
 						<button type="button" onclick={() => shareCall(c.callId)}><Icon svg={dockIcons.share} />Share link</button>
 						<button type="button" aria-pressed={basket.has(c.callId)} onclick={() => basketCall(c.callId)}
 							><Icon svg={dockIcons.basket} />{basket.has(c.callId) ? 'Take out of basket' : 'Add to basket'}</button
@@ -379,9 +379,11 @@
 			flex: 1 1 0;
 			min-width: 0;
 		}
-		.dock-more :global(.more-actions) {
+		.dock-more :global(.more-actions),
+		.dock-more :global(.has-tip) {
 			display: flex;
 			flex: 1 1 0;
+			min-width: 0;
 		}
 		/* The dock is at the foot of the screen: the menu opens upwards. */
 		.dock-more :global(.more-actions .panel.end) {
