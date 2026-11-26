@@ -151,10 +151,14 @@
 				<span class="queued">{queuedText}</span>
 				{#if behind}<span class="sep" aria-hidden="true">·</span><button type="button" class="ghost catch-up" onclick={() => player.jumpToLive()}>Catch up<span class="visually-hidden"> to live</span></button>{/if}
 				{#if player.hold}<span class="hold-on"><Icon svg={dockIcons.hold} />Hold on: {player.hold.talkgroup.name} only</span>{/if}
+				{#if player.stepsBack}<span class="said" role="status">Back {player.stepsBack} {player.stepsBack === 1 ? 'call' : 'calls'}…</span>{/if}
 				{#if said}<span class="said" role="status">{said}</span>{/if}
 			</p>
 		</div>
 		<div class="controls" role="group" aria-label="Player controls">
+			<button type="button" class="secondary" disabled={!player.canPrevious} onclick={() => player.previous()}
+				><span class="flip"><Icon name="skip" /></span><span class="label">Previous</span></button
+			>
 			{#if player.paused}
 				<button type="button" class="secondary" onclick={() => player.resume()}><Icon name="play" /><span class="label">Resume</span></button>
 			{:else}
@@ -164,12 +168,6 @@
 			<button type="button" class="secondary" aria-pressed={!!player.hold} disabled={!c && !player.hold} onclick={() => player.setHold(!player.hold)}
 				><Icon svg={dockIcons.hold} /><span class="label">Hold</span></button
 			>
-			{#if !c && player.last}
-				{@const l = player.last}
-				<button type="button" class="secondary" aria-label="Play again: {l.talkgroup.name}" onclick={() => player.playAgain(l)}
-					><Icon svg={dockIcons.again} /><span class="label"><span class="long">Play again</span><span class="short" aria-hidden="true">Again</span></span></button
-				>
-			{/if}
 			<button type="button" class="secondary" onclick={() => player.stop()}
 				><Icon svg={dockIcons.stop} /><span class="label"><span class="long">Stop listening</span><span class="short" aria-hidden="true">Stop</span></span></button
 			>
@@ -328,6 +326,11 @@
 	}
 	.sep {
 		color: var(--muted);
+	}
+	/* Previous: the skip icon, facing the other way. */
+	.flip {
+		display: inline-flex;
+		transform: scaleX(-1);
 	}
 	.said {
 		color: var(--fg);

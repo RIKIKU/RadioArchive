@@ -61,6 +61,8 @@ interface Call {
 	recording?: string;
 	/** Asked for again (Play again): plays before everything else. */
 	first?: boolean;
+	/** Played by Previous, from the history (seq): never added to it again. */
+	back?: number;
 	/** Frames heard before its turn. */
 	packets: { seq: number; data: Uint8Array }[];
 	stream?: OpusStream;
@@ -96,6 +98,10 @@ const LEAD = 0.15;
 const RECORDING_TRIES = 5;
 /** How long a call that has left is remembered, so its later events and frames are ignored. */
 const FORGET_AFTER_MS = 10 * 60_000;
+/** Proof of concept (Previous): how many calls heard this session are kept to go back through. */
+const HISTORY = 50;
+/** Presses of Previous closer together than this count as steps of one move: audio changes once, after the last. */
+const PREVIOUS_SETTLE_MS = 400;
 
 const recordingURL = (id: string) => `/api/v1/calls/${encodeURIComponent(id)}/recording`;
 
@@ -155,6 +161,20 @@ export class Player {
 
 	/** Live listening was paused by a replay, not by the listener: it resumes when the replay is over (ADR 0023). */
 	#pausedForReplay = false;
+
+	// Previous (proof of concept): the calls that started playing this
+	// session, in the order they played, the last HISTORY of them. Going back
+	// plays one from its recording, then the ones after it in order, then
+	// the queue again, as a music player does.
+	#history: { seq: number; info: CallInfo }[] = [];
+	#seq = 0;
+	/** The history entry Previous is on (its seq), until the history's end is reached again. */
+	#cursor: number | undefined;
+	#settle: ReturnType<typeof setTimeout> | undefined;
+	/** Whether there's an earlier call for Previous to go to. */
+	canPrevious = $state(false);
+	/** How many steps back the presses still settling have asked for. */
+	stepsBack = $state(0);
 
 	constructor(opts: PlayerOptions = {}) {
 		this.#opts = opts;
@@ -220,6 +240,8 @@ export class Player {
 	/** Stops listening: the feed closes and the audio stops. */
 	stop() {
 		attachFeed(undefined);
+		this.#forgetPrevious();
+		this.canPrevious = false;
 		this.#feed?.stop();
 		this.#feed = undefined;
 		clearInterval(this.#meterTimer);
@@ -251,6 +273,7 @@ export class Player {
 		this.#leave(c, 'skipped');
 		this.#current = undefined;
 		this.playing = undefined;
+		this.#advance(c);
 		this.#pump();
 	}
 
@@ -261,6 +284,7 @@ export class Player {
 	 */
 	jumpToLive() {
 		if (this.phase !== 'listening') return;
+		this.#forgetPrevious();
 		for (const c of this.#queue) this.#leave(c, 'cleared');
 		this.#queue = [];
 		const c = this.#current;
@@ -358,6 +382,105 @@ export class Player {
 		c.first = true;
 		this.#queue.push(c);
 		this.#pump();
+	}
+
+	/**
+	 * Previous (proof of concept): goes to the call before the one playing,
+	 * in the order this session heard them, or, with nothing playing, to the
+	 * last one heard. Each press is one step back; presses close together
+	 * settle into one move, so the audio changes once. Then the calls after
+	 * it play in order, from their recordings, then the calls that queued
+	 * meanwhile, oldest first, until it has caught up and live carries on by
+	 * itself. Nothing is skipped and no live call cuts in: what Previous
+	 * plays goes first of all (as Play again did). Catch up (Jump to live)
+	 * is the one shortcut. While hold is on, it steps through hold's
+	 * talkgroup's calls only.
+	 */
+	previous() {
+		if (this.phase !== 'listening') return;
+		const steps = this.#steps();
+		const i = this.#here(steps) - 1;
+		if (i < 0) return;
+		this.#cursor = steps[i].seq;
+		this.stepsBack++;
+		clearTimeout(this.#settle);
+		this.#settle = setTimeout(() => this.#goBack(), PREVIOUS_SETTLE_MS);
+		this.#count();
+	}
+
+	/** The history Previous may go through: hold's talkgroup's calls only, while hold is on. */
+	#steps() {
+		const held = this.hold?.key;
+		return held ? this.#history.filter((h) => heldThrough(h.info, held)) : this.#history;
+	}
+
+	/** Where in steps Previous counts back from: the entry it's on, the call playing, or past the end. */
+	#here(steps: { seq: number; info: CallInfo }[]): number {
+		const at = this.#cursor;
+		if (at !== undefined) {
+			const i = steps.findIndex((h) => h.seq >= at);
+			return i < 0 ? steps.length : i;
+		}
+		const c = this.#current;
+		if (c) {
+			const i = steps.findLastIndex((h) => h.info.callId === c.info.callId);
+			if (i >= 0) return i;
+		}
+		return steps.length;
+	}
+
+	/** The presses have settled: what's playing stops, and the call Previous is on plays. */
+	#goBack() {
+		this.#settle = undefined;
+		this.stepsBack = 0;
+		const at = this.#cursor;
+		if (at === undefined || this.phase !== 'listening') return;
+		const c = this.#current;
+		if (c) {
+			this.#leave(c, 'skipped');
+			this.#current = undefined;
+			this.playing = undefined;
+		}
+		for (const q of this.#queue) if (q.back !== undefined) this.#silence(q);
+		this.#queue = this.#queue.filter((q) => q.back === undefined);
+		this.#queueEntry(at);
+		if (this.paused) void this.resume();
+		this.#pump();
+	}
+
+	/** After a call Previous played: the next one in the history, or the queue again at its end. */
+	#advance(c: Call) {
+		if (c.back === undefined || this.#settle) return;
+		const steps = this.#steps();
+		const next = steps.find((h) => h.seq > c.back!);
+		this.#cursor = next?.seq;
+		if (next) this.#queueEntry(next.seq);
+	}
+
+	#queueEntry(seq: number) {
+		const h = this.#history.find((x) => x.seq === seq);
+		if (!h) {
+			this.#cursor = undefined;
+			return;
+		}
+		const c = this.#newCall({ ...h.info, source: 'recording', delayMinutes: undefined }, true, recordingURL(h.info.callId));
+		c.first = true;
+		c.back = seq;
+		this.#queue.push(c);
+	}
+
+	/** A call has started playing: it joins the history Previous goes back through. */
+	#remember(info: CallInfo) {
+		this.#history.push({ seq: ++this.#seq, info });
+		if (this.#history.length > HISTORY) this.#history.shift();
+	}
+
+	/** Previous, settling or not, is left behind: Jump to live and Stop. */
+	#forgetPrevious() {
+		clearTimeout(this.#settle);
+		this.#settle = undefined;
+		this.#cursor = undefined;
+		this.stepsBack = 0;
 	}
 
 	#newCall(info: CallInfo, ended: boolean, recording?: string): Call {
@@ -469,6 +592,7 @@ export class Player {
 		this.queued = this.#queue.length;
 		const held = this.hold?.key;
 		this.heldBack = held ? this.#queue.filter((c) => !heldThrough(c.info, held)).length : 0;
+		this.canPrevious = this.phase === 'listening' && this.#here(this.#steps()) > 0;
 	}
 
 	/** Starts the next call if nothing is playing. */
@@ -485,8 +609,9 @@ export class Player {
 			return;
 		}
 		const [c] = this.#queue.splice(i, 1);
-		this.#count();
 		this.#current = c;
+		if (c.back === undefined) this.#remember(c.info);
+		this.#count();
 		if (c.ended && !c.recording) {
 			// Ended by its turn: its recording plays (R43).
 			c.recording = recordingURL(c.info.callId);
@@ -596,6 +721,7 @@ export class Player {
 		if (c.frames > 0) this.last = { ...c.info };
 		this.#current = undefined;
 		this.playing = undefined;
+		this.#advance(c);
 		this.#pump();
 	}
 
