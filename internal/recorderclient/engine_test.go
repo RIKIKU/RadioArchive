@@ -2,6 +2,7 @@ package recorderclient
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -242,16 +243,58 @@ func audio(t *testing.T, seq uint32, callNum int64, rate uint16, samples int) []
 	return b
 }
 
-func TestEngineRefusesNon8kAudio(t *testing.T) {
-	r := newRig()
-	// recorderproto accepts 16 kHz (analog), but v1 is P25 only.
-	r.e.handle(audio(t, 0, 1, 16000, 320))
-	r.e.handle(audio(t, 1, 1, 16000, 320))
-	if n := r.m.Get(MetricMalformed, "reason", "sample_rate"); n != 2 {
-		t.Errorf("malformed{sample_rate} = %d, want 2", n)
-	}
-	if len(r.live.out) != 0 || len(r.e.calls) != 0 {
-		t.Errorf("16 kHz audio started a call: %v", r.live.out)
+// rateEncoder is a fake encoder that, like libopus, takes 20 ms at its own
+// rate, and records the frames it was given.
+type rateEncoder struct {
+	rate   int
+	frames *[]int
+}
+
+func (e *rateEncoder) FrameSamples() int { return e.rate / 50 }
+func (e *rateEncoder) Lookahead() int    { return e.rate / 400 }
+func (e *rateEncoder) Encode(pcm []int16) ([]byte, error) {
+	*e.frames = append(*e.frames, len(pcm))
+	return []byte{0x08}, nil
+}
+func (*rateEncoder) Close() {}
+
+// Live audio is encoded at the rate its datagrams carry, in 20 ms frames
+// at that rate, so neither 8 nor 16 kHz plays at the wrong speed (ADR 0046).
+func TestEngineLiveRates(t *testing.T) {
+	for _, tt := range []struct {
+		rate  uint16
+		frame int
+	}{{8000, 160}, {16000, 320}} {
+		t.Run(fmt.Sprint(tt.rate), func(t *testing.T) {
+			r := newRig()
+			var rates, frames []int
+			r.e.newEnc = func(rate int) (Encoder, error) {
+				rates = append(rates, rate)
+				return &rateEncoder{rate: rate, frames: &frames}, nil
+			}
+			n := int(tt.rate) / 1000 * 30 // 30 ms: one frame and half of the next
+			r.e.handle(audio(t, 0, 1, tt.rate, n))
+			r.e.handle(audio(t, 1, 1, tt.rate, n)) // 60 ms in all: three frames
+			if !slices.Equal(rates, []int{int(tt.rate)}) {
+				t.Errorf("encoders made at %v Hz, want one at %d", rates, tt.rate)
+			}
+			if !slices.Equal(frames, []int{tt.frame, tt.frame, tt.frame}) {
+				t.Errorf("frames of %v samples, want three of %d (20 ms)", frames, tt.frame)
+			}
+			if got := len(r.live.out); got != 1+3 {
+				t.Errorf("%d messages, want call_start and three frames", got)
+			}
+			// The same call at another rate is dropped: its PCM would play
+			// at the wrong speed through this call's encoder.
+			other := uint16(24000 - int(tt.rate)) // 16000 for 8000, 8000 for 16000
+			r.e.handle(audio(t, 2, 1, other, 2*n))
+			if n := r.m.Get(MetricMalformed, "reason", "sample_rate"); n != 1 {
+				t.Errorf("malformed{sample_rate} = %d, want 1", n)
+			}
+			if len(frames) != 3 {
+				t.Errorf("%d frames after audio at %d Hz, want still 3", len(frames), other)
+			}
+		})
 	}
 }
 

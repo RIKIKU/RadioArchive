@@ -9,9 +9,40 @@ import (
 	"sort"
 )
 
+// RecordingRate is the rate trunk-recorder v5.2.1 writes every call's WAV
+// at, whatever its recorders gave: the call concluder renders the
+// transmissions through ffmpeg with `-ar 16000` (call_concluder.cc), so a
+// P25 call's live audio is 8 kHz and its recording 16 kHz (ADR 0046).
+const RecordingRate = 16000
+
+// upsample takes 16-bit little-endian mono PCM from rate up to to, a whole
+// multiple of it, by linear interpolation: near enough to ffmpeg's
+// resampler for made-up tones, and the length in seconds stays the same.
+func upsample(pcm []byte, rate, to int) []byte {
+	k := to / rate
+	if k <= 1 || to%rate != 0 {
+		return pcm
+	}
+	le := binary.LittleEndian
+	n := len(pcm) / 2
+	out := make([]byte, 0, 2*k*n)
+	for i := range n {
+		a := int(int16(le.Uint16(pcm[2*i:])))
+		b := a
+		if i+1 < n {
+			b = int(int16(le.Uint16(pcm[2*i+2:])))
+		}
+		for j := range k {
+			out = le.AppendUint16(out, uint16(int16(a+(b-a)*j/k)))
+		}
+	}
+	return out
+}
+
 // Recordings returns the WAV file trunk-recorder would have written for
 // each call that ends with a filename: the call's scripted audio, in time
-// order, as 16-bit mono PCM. They're keyed by the call_end's filename.
+// order, as 16-bit mono PCM at RecordingRate. They're keyed by the
+// call_end's filename.
 //
 // trunk-recorder writes the file before call_end (ADR 0002), so a test
 // writes these (WriteRecordings) before it replays the scenario.
@@ -54,7 +85,7 @@ func Recordings(s *Scenario, fixtures fs.FS) (map[string][]byte, error) {
 		if rate == 0 {
 			rate = FixtureRate
 		}
-		out[file] = WAV(rate, pcm)
+		out[file] = WAV(RecordingRate, upsample(pcm, rate, RecordingRate))
 	}
 	return out, nil
 }

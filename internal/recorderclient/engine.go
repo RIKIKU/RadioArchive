@@ -13,11 +13,16 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/version"
 )
 
-// SampleRate is the only PCM rate the v1 client takes: P25's 8 kHz. The
-// protocol carries the rate (and recorderproto accepts analog's 16 kHz) so
-// analog can come later without a protocol change; until then other rates
-// are dropped like malformed input (owner, issue #31).
-const SampleRate = 8000
+// SampleRates are the PCM rates the client takes, live and recorded, and it
+// encodes each at its own rate (ADR 0046). trunk-recorder's P25 recorders
+// hand the plugin 8 kHz, so live audio from a P25 system is 8 kHz, but
+// trunk-recorder v5 renders every call's WAV through ffmpeg at 16 kHz
+// (call_concluder.cc, `-ar 16000`). Opus takes both rates natively, and
+// R4's narrowband settings make the same kind of stream from either. Any
+// other rate is dropped like malformed input.
+var SampleRates = []int{8000, 16000}
+
+func supportedRate(rate int) bool { return slices.Contains(SampleRates, rate) }
 
 // Timings from ADR 0002.
 const (
@@ -77,6 +82,7 @@ type call struct {
 	lastPacket time.Time
 	lastAudio  time.Time
 
+	rate     int // the live PCM's rate, from the call's first audio
 	enc      Encoder
 	encErr   bool
 	buf      []int16
@@ -229,12 +235,22 @@ func (c *call) patchedList() []int32 {
 }
 
 func (e *engine) audio(a *rp.Audio) {
-	if a.SampleRate != SampleRate {
-		e.malformed("sample_rate", "unsupported in v1 (P25 only)")
+	rate := int(a.SampleRate)
+	if !supportedRate(rate) {
+		e.malformed("sample_rate", "unsupported")
 		return
 	}
 	c := e.find(a.Identity, a.Talkgroup, a.Freq, a.TDMASlot, nil)
 	if c == nil {
+		return
+	}
+	// One encoder per call, at its first audio's rate. A recorder doesn't
+	// change rate mid-call; if a datagram says it did, its PCM would play
+	// at the wrong speed, so it's dropped.
+	if c.rate == 0 {
+		c.rate = rate
+	} else if rate != c.rate {
+		e.malformed("sample_rate", "changed mid-call")
 		return
 	}
 	now := e.now()
@@ -293,10 +309,11 @@ func (e *engine) start(c *call) {
 	c.pending = nil
 }
 
-// encode sends a frame for every 20 ms of PCM buffered.
+// encode sends a frame for every 20 ms of PCM buffered: 160 samples at
+// 8 kHz, 320 at 16 kHz.
 func (e *engine) encode(c *call, pcm []byte) {
 	if c.enc == nil && !c.encErr {
-		enc, err := e.newEnc(SampleRate)
+		enc, err := e.newEnc(c.rate)
 		if err != nil {
 			c.encErr = true
 			e.log.Error("can't create an Opus encoder; the call's live audio is lost", "error", err)

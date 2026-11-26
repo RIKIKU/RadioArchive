@@ -3,28 +3,39 @@
 package opus
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
 
+// R4's settings at both rates the recorder client takes (ADR 0046): 8 kHz
+// from P25's live audio, 16 kHz from trunk-recorder v5's WAVs. Narrowband
+// is forced, so both give the same kind of stream.
 func TestEncoderR4(t *testing.T) {
-	e, err := NewEncoder(8000)
+	for _, rate := range []int{8000, 16000} {
+		t.Run(fmt.Sprint(rate), func(t *testing.T) { testEncoderR4(t, rate) })
+	}
+}
+
+func testEncoderR4(t *testing.T, rate int) {
+	e, err := NewEncoder(rate)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer e.Close()
-	if e.FrameSamples() != 160 {
-		t.Fatalf("frame = %d samples, want 160 (20 ms at 8 kHz)", e.FrameSamples())
+	n := rate / 50
+	if e.FrameSamples() != n {
+		t.Fatalf("frame = %d samples, want %d (20 ms at %d Hz)", e.FrameSamples(), n, rate)
 	}
 	if e.Lookahead() <= 0 {
 		t.Errorf("lookahead = %d, want > 0", e.Lookahead())
 	}
-	pcm := make([]int16, 160)
+	pcm := make([]int16, n)
 	total := 0
 	const frames = 100 // 2 s
 	for i := range frames {
 		for j := range pcm {
-			pcm[j] = int16(8000 * math.Sin(2*math.Pi*440*float64(i*160+j)/8000))
+			pcm[j] = int16(8000 * math.Sin(2*math.Pi*440*float64(i*n+j)/float64(rate)))
 		}
 		p, err := e.Encode(pcm)
 		if err != nil {

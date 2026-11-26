@@ -68,11 +68,13 @@ func run(log *slog.Logger) error {
 	defer stop()
 
 	// Fail at start, not at the first call, in a build without libopus.
-	probe, err := opus.NewEncoder(recorderclient.SampleRate)
-	if err != nil {
-		return err
+	for _, rate := range recorderclient.SampleRates {
+		probe, err := opus.NewEncoder(rate)
+		if err != nil {
+			return err
+		}
+		probe.Close()
 	}
-	probe.Close()
 
 	key, err := clientKey()
 	if err != nil {

@@ -231,20 +231,38 @@ func (u *uploader) process(ctx context.Context, e *entry) outcome {
 }
 
 func (u *uploader) encode(r Recording) ([]byte, error) {
-	f, err := os.Open(r.WAV)
+	rate, pcm, err := ReadRecording(r.WAV)
+	if errors.Is(err, ErrSampleRate) {
+		u.m.Inc(MetricMalformed, "reason", "sample_rate")
+	}
 	if err != nil {
 		return nil, err
+	}
+	// Encoded at the WAV's own rate, never resampled (ADR 0046).
+	return encodeOggOpus(u.newEnc, oggSerial(r.Meta.CallID), rate, pcm)
+}
+
+// ErrSampleRate is ReadRecording's error for a WAV at a rate the client
+// doesn't take (SampleRates).
+var ErrSampleRate = errors.New("unsupported sample rate")
+
+// ReadRecording reads trunk-recorder's WAV at path as the uploader does:
+// 16-bit mono PCM at one of SampleRates. The plugin's CI test reads the
+// real trunk-recorder's recordings with it.
+func ReadRecording(path string) (rate int, pcm []int16, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, nil, err
 	}
 	defer f.Close()
-	rate, pcm, err := readWAV(f)
+	rate, pcm, err = readWAV(f)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
-	if rate != SampleRate {
-		u.m.Inc(MetricMalformed, "reason", "sample_rate")
-		return nil, fmt.Errorf("recording is %d Hz; v1 takes %d Hz (P25) only", rate, SampleRate)
+	if !supportedRate(rate) {
+		return 0, nil, fmt.Errorf("recording is %d Hz; the client takes %v Hz: %w", rate, SampleRates, ErrSampleRate)
 	}
-	return encodeOggOpus(u.newEnc, oggSerial(r.Meta.CallID), rate, pcm)
+	return rate, pcm, nil
 }
 
 // oggSerial is the recording's Ogg stream serial number, derived from the

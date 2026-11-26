@@ -34,6 +34,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RIKIKU/RadioArchive/internal/recorderclient"
 	"github.com/RIKIKU/RadioArchive/internal/recorderproto"
 )
 
@@ -85,7 +86,7 @@ func TestPluginAgainstP25Fixture(t *testing.T) {
 		if !strings.HasPrefix(e.Filename, "/app/media/ex/") {
 			t.Fatalf("call %d: call_end filename %q", e.CallNum, e.Filename)
 		}
-		wav := checkRecording(t, dir, e)
+		wav := checkRecording(t, dir, calls[i], e)
 		compareCallJSON(t, fmt.Sprintf("call %d", e.CallNum), strings.TrimSuffix(wav, ".wav")+".json", e)
 	}
 }
@@ -112,7 +113,7 @@ func TestPluginHandoffWithAudioArchiveOff(t *testing.T) {
 		if !strings.HasPrefix(e.Filename, "/app/media/handoff/"+shortName+"_") {
 			t.Fatalf("%s: call_end filename %q, want a link in handoffDir", label, e.Filename)
 		}
-		wav := checkRecording(t, dir, e)
+		wav := checkRecording(t, dir, calls[i], e)
 		// Nothing but trunk-recorder could have removed its own name, so one
 		// link left means trunk-recorder deleted its file, as audioArchive
 		// off says, and the link kept the data.
@@ -278,8 +279,12 @@ func checkRun(t *testing.T, msgs []recorderproto.Message) []*call {
 }
 
 // checkRecording checks that the WAV call_end names exists, under the test's
-// directory, and returns its path there.
-func checkRecording(t *testing.T, dir string, e *recorderproto.CallEnd) string {
+// directory, and returns its path there. The recorder client reads it as it
+// would for an upload: trunk-recorder v5.2.1 renders every call's WAV at
+// 16 kHz with ffmpeg, while the live audio of a P25 call is 8 kHz (ADR
+// 0046), and both must hold the same length of audio, so that neither
+// plays at the wrong speed.
+func checkRecording(t *testing.T, dir string, c *call, e *recorderproto.CallEnd) string {
 	t.Helper()
 	if !strings.HasSuffix(e.Filename, fmt.Sprintf("-call_%d.wav", e.CallNum)) {
 		t.Fatalf("call %d: call_end filename %q", e.CallNum, e.Filename)
@@ -287,6 +292,24 @@ func checkRecording(t *testing.T, dir string, e *recorderproto.CallEnd) string {
 	wav := filepath.Join(dir, "media", strings.TrimPrefix(e.Filename, "/app/media/"))
 	if st, err := os.Stat(wav); err != nil || st.Size() <= 44 {
 		t.Errorf("call %d: the recording %s: %v", e.CallNum, wav, err)
+		return wav
+	}
+	rate, pcm, err := recorderclient.ReadRecording(wav)
+	if err != nil {
+		t.Errorf("call %d: the recorder client can't read the recording: %v", e.CallNum, err)
+		return wav
+	}
+	if rate != 16000 {
+		t.Errorf("call %d: the recording is %d Hz, want trunk-recorder v5's 16000", e.CallNum, rate)
+	}
+	live := 0
+	for _, n := range c.samples {
+		live += n
+	}
+	liveS, wavS := float64(live)/8000, float64(len(pcm))/float64(rate)
+	t.Logf("call %d: %.2f s of live audio at 8 kHz, a %.2f s recording at %d Hz", e.CallNum, liveS, wavS, rate)
+	if math.Abs(wavS-liveS) > 0.1*liveS+0.25 {
+		t.Errorf("call %d: the recording lasts %.2f s, the live audio %.2f s", e.CallNum, wavS, liveS)
 	}
 	return wav
 }
