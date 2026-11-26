@@ -365,7 +365,9 @@
 	.wide-only :global(.done) {
 		position: absolute;
 		bottom: calc(100% + var(--space-2xs));
-		left: 0;
+		/* Lined up with the button's end: Add to basket is the row's last,
+		   at the dock's edge, and its words are wider than it. */
+		right: 0;
 		padding: var(--badge-pad-y) var(--badge-pad-x);
 		border-radius: var(--radius-badge);
 		background: var(--surface-2);
