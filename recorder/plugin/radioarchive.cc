@@ -8,6 +8,10 @@
 // v1 supports P25 trunked systems only (SPEC.md 6.1). Other systems are
 // logged once at startup and ignored.
 //
+// With "handoffDir" set (ADR 0045), call_end hard-links each call's WAV into
+// that directory and names the link in call_end instead, so a recorder shared
+// with another uploader can keep "audioArchive": false.
+//
 // Built against trunk-recorder v5.2.1 (recorder/plugin/Dockerfile pins it).
 // trunk-recorder references below are to that release.
 
@@ -19,14 +23,17 @@
 #include <boost/log/trivial.hpp>
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -83,6 +90,25 @@ uint32_t hz(double freq) {
   return freq <= 0 ? 0 : uint32_t(std::llround(freq));
 }
 
+std::string base_name(const std::string &path) {
+  const size_t slash = path.find_last_of('/');
+  return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+// Whether two paths are on different mounts, which link(2) refuses with
+// EXDEV even within one filesystem (two bind mounts of it, say). False when
+// it can't tell.
+bool different_mounts(const std::string &a, const std::string &b) {
+#ifdef STATX_MNT_ID
+  struct statx sa {}, sb {};
+  if (statx(AT_FDCWD, a.c_str(), 0, STATX_MNT_ID, &sa) != 0 || statx(AT_FDCWD, b.c_str(), 0, STATX_MNT_ID, &sb) != 0) return false;
+  if (!(sa.stx_mask & STATX_MNT_ID) || !(sb.stx_mask & STATX_MNT_ID)) return false;
+  return sa.stx_mnt_id != sb.stx_mnt_id;
+#else
+  return false;
+#endif
+}
+
 struct SystemInfo {
   std::string short_name;
   std::string type;
@@ -115,11 +141,25 @@ class RadioArchivePlugin : public Plugin_Api {
       port = kDefaultPort;
     }
     port_ = uint16_t(port);
+
+    std::string dir;
+    if (config_data.contains("handoffDir") && config_data["handoffDir"].is_string()) {
+      dir = config_data["handoffDir"].get<std::string>();
+    } else if (config_data.contains("handoffDir") && !config_data["handoffDir"].is_null()) {
+      BOOST_LOG_TRIVIAL(error) << kLog << "handoffDir must be a string; ignored";
+    }
+    while (dir.size() > 1 && dir.back() == '/') dir.pop_back();
+    if (!dir.empty() && dir.front() != '/') {
+      BOOST_LOG_TRIVIAL(error) << kLog << "handoffDir \"" << dir << "\" isn't an absolute path; ignored, so call_end names trunk-recorder's own files";
+      dir.clear();
+    }
+    handoff_dir_ = dir;
     return 0;
   }
 
   int init(Config *config, std::vector<Source *> sources, std::vector<System *> systems) override {
     Plugin_Api::init(config, sources, systems);
+    if (config) capture_dir_ = config->capture_dir;
     if (config && !config->enable_audio_streaming) {
       BOOST_LOG_TRIVIAL(error) << kLog << "audioStreaming is off in trunk-recorder's config, so no live audio will reach the recorder client";
     }
@@ -152,6 +192,7 @@ class RadioArchivePlugin : public Plugin_Api {
     dest_.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     dest_.sin_port = htons(port_);
     BOOST_LOG_TRIVIAL(info) << kLog << "plugin " << RADIOARCHIVE_PLUGIN_VERSION << " sending to 127.0.0.1:" << port_ << ", boot_id " << boot_id_;
+    check_handoff_dir();
     return 0;
   }
 
@@ -238,7 +279,8 @@ class RadioArchivePlugin : public Plugin_Api {
 
   // Runs in a call concluder worker once trunk-recorder has written the WAV
   // (call_concluder.cc:900-959). A non-zero return makes trunk-recorder retry,
-  // so this always returns 0.
+  // so this always returns 0. Other plugins' call_end run in the same thread,
+  // so it never blocks: the hand-off is one link(2).
   int call_end(Call_Data_t info) override {
     const SystemInfo *sys = system_of(info.sys_num);
     if (!sys || !sys->supported) return 0;
@@ -280,7 +322,7 @@ class RadioArchivePlugin : public Plugin_Api {
         {"freq", hz(info.freq)},
         {"tdma_slot", slot_of(info.phase2_tdma, info.tdma_slot)},
         {"patched_talkgroups", others(info.patched_talkgroups, info.talkgroup)},
-        {"filename", info.filename},
+        {"filename", handoff(info.filename, *sys)},
         {"transmissions", transmissions},
     };
     std::string payload = j.dump();
@@ -340,13 +382,57 @@ class RadioArchivePlugin : public Plugin_Api {
       } else {
         info.supported = true;
         BOOST_LOG_TRIVIAL(info) << kLog << "[" << info.short_name << "] sys_num " << n << " (p25): sending its calls";
-        if (!s->get_audio_archive()) {
+        if (!s->get_audio_archive() && handoff_dir_.empty()) {
           BOOST_LOG_TRIVIAL(warning) << kLog << "[" << info.short_name
                                      << "] audioArchive is off, so trunk-recorder deletes each recording as soon as call_end returns, before the recorder client can read it";
         }
       }
       systems_[n] = info;
     }
+  }
+
+  // At start: say whether handoffDir looks usable. Each call_end tries the
+  // link anyway, so a directory created later still works.
+  void check_handoff_dir() {
+    if (handoff_dir_.empty()) return;
+    struct stat st {};
+    if (stat(handoff_dir_.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+      BOOST_LOG_TRIVIAL(error) << kLog << "handoffDir " << handoff_dir_ << " isn't a directory ("
+                               << std::strerror(errno) << "); until it is, call_end names trunk-recorder's own files";
+      return;
+    }
+    if (!capture_dir_.empty() && different_mounts(handoff_dir_, capture_dir_)) {
+      BOOST_LOG_TRIVIAL(error) << kLog << "handoffDir " << handoff_dir_ << " is on a different mount from captureDir " << capture_dir_
+                               << ", so recordings can't be hard-linked into it; call_end names trunk-recorder's own files";
+      return;
+    }
+    BOOST_LOG_TRIVIAL(info) << kLog << "hard-linking each recording into " << handoff_dir_ << " for the recorder client";
+  }
+
+  // In call_end, before it returns and trunk-recorder may delete the file:
+  // hard-links the recording into handoffDir under a name of its own and
+  // returns the link's path, or the original path when handoffDir isn't set
+  // or the link fails. Never copies and never waits.
+  std::string handoff(const std::string &file, const SystemInfo &sys) {
+    if (handoff_dir_.empty() || file.empty()) return file;
+    int err = 0;
+    for (int attempt = 0; attempt < 3; attempt++) {
+      char prefix[64];
+      std::snprintf(prefix, sizeof(prefix), "_%08x_%llu_", boot_id_,
+                    (unsigned long long)handoff_seq_.fetch_add(1, std::memory_order_relaxed));
+      const std::string link_path = handoff_dir_ + "/" + sys.short_name + prefix + base_name(file);
+      if (link(file.c_str(), link_path.c_str()) == 0) return link_path;
+      err = errno;
+      if (err != EEXIST) break;
+    }
+    const uint64_t failed = ++handoff_failures_;
+    const int64_t now = now_ms();
+    int64_t last = last_handoff_log_ms_.load();
+    if (now - last >= 60000 && last_handoff_log_ms_.compare_exchange_strong(last, now)) {
+      BOOST_LOG_TRIVIAL(warning) << kLog << "[" << sys.short_name << "] can't hard-link " << file << " into " << handoff_dir_ << " ("
+                                 << std::strerror(err) << "); sent trunk-recorder's own filename. " << failed << " failed links so far";
+    }
+    return file;
   }
 
   const SystemInfo *system_of(int sys_num) const {
@@ -428,6 +514,12 @@ class RadioArchivePlugin : public Plugin_Api {
   std::atomic<uint32_t> seq_{0};
   std::atomic<uint64_t> send_failures_{0};
   std::atomic<int64_t> last_failure_log_ms_{0};
+
+  std::string handoff_dir_;  // "" when off; set before start(), then only read
+  std::string capture_dir_;
+  std::atomic<uint64_t> handoff_seq_{0};
+  std::atomic<uint64_t> handoff_failures_{0};
+  std::atomic<int64_t> last_handoff_log_ms_{0};
 
   std::map<int, SystemInfo> systems_;
 

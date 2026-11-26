@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package plugintest runs the real trunk-recorder, with the recorder plugin,
 // against the synthetic P25 fixture (recorder/plugin/fixture/p25gen.cc) and
 // checks what the plugin sends over UDP against ADR 0002, decoding every
@@ -12,7 +14,7 @@
 //	  go test -count=1 -v ./recorder/plugin/plugintest
 //
 // The container uses the host's network, because the plugin only ever sends
-// to 127.0.0.1, so port 9850 on the host must be free.
+// to 127.0.0.1, so port 9850 on the host must be free. Linux only.
 package plugintest
 
 import (
@@ -28,6 +30,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -67,7 +70,94 @@ type call struct {
 	end           *recorderproto.CallEnd
 }
 
+// The fixture's config as it is: audioArchive on, recordings kept where
+// trunk-recorder wrote them.
 func TestPluginAgainstP25Fixture(t *testing.T) {
+	dir, msgs := runFixture(t, nil)
+	calls := checkRun(t, msgs)
+	for i, want := range wantCalls {
+		e := checkCall(t, calls[i], want)
+		if e == nil {
+			continue
+		}
+		// The recording named in call_end exists (audioArchive is on), and
+		// trunk-recorder's own call JSON beside it agrees with call_end.
+		if !strings.HasPrefix(e.Filename, "/app/media/ex/") {
+			t.Fatalf("call %d: call_end filename %q", e.CallNum, e.Filename)
+		}
+		wav := checkRecording(t, dir, e)
+		compareCallJSON(t, fmt.Sprintf("call %d", e.CallNum), strings.TrimSuffix(wav, ".wav")+".json", e)
+	}
+}
+
+// A recorder shared with another uploader (ADR 0045): audioArchive off, so
+// trunk-recorder deletes each recording once call_end returns, and the
+// plugin's handoffDir. Every recording must still be there, as the plugin's
+// hard link, and trunk-recorder's own name for it must be gone.
+func TestPluginHandoffWithAudioArchiveOff(t *testing.T) {
+	dir, msgs := runFixture(t, func(dir string, c map[string]any) {
+		if err := os.Mkdir(filepath.Join(dir, "media", "handoff"), 0o777); err != nil {
+			t.Fatal(err)
+		}
+		c["systems"].([]any)[0].(map[string]any)["audioArchive"] = false
+		c["plugins"].([]any)[0].(map[string]any)["handoffDir"] = "/app/media/handoff"
+	})
+	calls := checkRun(t, msgs)
+	for i, want := range wantCalls {
+		e := checkCall(t, calls[i], want)
+		if e == nil {
+			continue
+		}
+		label := fmt.Sprintf("call %d", e.CallNum)
+		if !strings.HasPrefix(e.Filename, "/app/media/handoff/"+shortName+"_") {
+			t.Fatalf("%s: call_end filename %q, want a link in handoffDir", label, e.Filename)
+		}
+		wav := checkRecording(t, dir, e)
+		// Nothing but trunk-recorder could have removed its own name, so one
+		// link left means trunk-recorder deleted its file, as audioArchive
+		// off says, and the link kept the data.
+		var st syscall.Stat_t
+		if err := syscall.Stat(wav, &st); err != nil || st.Nlink != 1 {
+			t.Errorf("%s: %s has %d links (%v), want 1", label, wav, st.Nlink, err)
+		}
+		// trunk-recorder's call JSON (callLog is on) is still its own, beside
+		// where its WAV was.
+		jsons, _ := filepath.Glob(filepath.Join(dir, "media", shortName, "*", "*", "*", fmt.Sprintf("*-call_%d.json", e.CallNum)))
+		if len(jsons) != 1 {
+			t.Errorf("%s: trunk-recorder's call JSON: found %v", label, jsons)
+		} else {
+			compareCallJSON(t, label, jsons[0], e)
+		}
+	}
+	// trunk-recorder deleted every WAV of its own.
+	var left []string
+	_ = filepath.WalkDir(filepath.Join(dir, "media", shortName), func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".wav") {
+			left = append(left, p)
+		}
+		return nil
+	})
+	if len(left) != 0 {
+		t.Errorf("trunk-recorder left its own WAVs with audioArchive off: %v", left)
+	}
+	links, _ := os.ReadDir(filepath.Join(dir, "media", "handoff"))
+	if len(links) != len(wantCalls) {
+		t.Errorf("handoffDir holds %d files, want %d", len(links), len(wantCalls))
+	}
+	// The plugin says it hands recordings over, and doesn't warn about
+	// audioArchive.
+	log, _ := os.ReadFile(filepath.Join(dir, "trunk-recorder.log"))
+	if !strings.Contains(string(log), "hard-linking each recording into /app/media/handoff") ||
+		strings.Contains(string(log), "audioArchive is off") || strings.Contains(string(log), "can't hard-link") {
+		t.Errorf("trunk-recorder's log doesn't show the hand-off working:\n%s", log)
+	}
+}
+
+// runFixture runs trunk-recorder with the plugin against the fixture and
+// returns the test's directory and every message the plugin sent. edit, if
+// given, changes the fixture's config.json before the run.
+func runFixture(t *testing.T, edit func(dir string, config map[string]any)) (string, []recorderproto.Message) {
+	t.Helper()
 	image := os.Getenv("RADIOARCHIVE_PLUGIN_IMAGE")
 	if image == "" {
 		t.Skip("RADIOARCHIVE_PLUGIN_IMAGE isn't set")
@@ -88,6 +178,24 @@ func TestPluginAgainstP25Fixture(t *testing.T) {
 	}
 	_, self, _, _ := runtime.Caller(0)
 	config := filepath.Join(filepath.Dir(self), "..", "fixture", "config.json")
+	if edit != nil {
+		b, err := os.ReadFile(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var c map[string]any
+		if err := json.Unmarshal(b, &c); err != nil {
+			t.Fatal(err)
+		}
+		edit(dir, c)
+		if b, err = json.MarshalIndent(c, "", "  "); err != nil {
+			t.Fatal(err)
+		}
+		config = filepath.Join(dir, "config.json")
+		if err := os.WriteFile(config, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
 	if err != nil {
@@ -154,16 +262,33 @@ func TestPluginAgainstP25Fixture(t *testing.T) {
 	if len(msgs) == 0 {
 		t.Fatal("the plugin sent nothing")
 	}
+	return dir, msgs
+}
 
+// checkRun checks what every run shares, and returns the calls in order.
+func checkRun(t *testing.T, msgs []recorderproto.Message) []*call {
+	t.Helper()
 	checkEnvelope(t, msgs)
 	calls, heartbeats := group(t, msgs)
 	checkHeartbeats(t, heartbeats)
 	if len(calls) != len(wantCalls) {
 		t.Fatalf("got %d calls, want %d: %+v", len(calls), len(wantCalls), calls)
 	}
-	for i, want := range wantCalls {
-		checkCall(t, dir, calls[i], want)
+	return calls
+}
+
+// checkRecording checks that the WAV call_end names exists, under the test's
+// directory, and returns its path there.
+func checkRecording(t *testing.T, dir string, e *recorderproto.CallEnd) string {
+	t.Helper()
+	if !strings.HasSuffix(e.Filename, fmt.Sprintf("-call_%d.wav", e.CallNum)) {
+		t.Fatalf("call %d: call_end filename %q", e.CallNum, e.Filename)
 	}
+	wav := filepath.Join(dir, "media", strings.TrimPrefix(e.Filename, "/app/media/"))
+	if st, err := os.Stat(wav); err != nil || st.Size() <= 44 {
+		t.Errorf("call %d: the recording %s: %v", e.CallNum, wav, err)
+	}
+	return wav
 }
 
 // One boot, and every sequence number from 0 with none missing.
@@ -255,7 +380,9 @@ func checkHeartbeats(t *testing.T, hbs []*recorderproto.Heartbeat) {
 	}
 }
 
-func checkCall(t *testing.T, dir string, c *call, want wantCall) {
+// checkCall checks one call's messages, and returns its call_end (nil if
+// there was none).
+func checkCall(t *testing.T, c *call, want wantCall) *recorderproto.CallEnd {
 	t.Helper()
 	label := fmt.Sprintf("call %d (talkgroup %d)", c.id.CallNum, want.talkgroup)
 	if c.id.ShortName != shortName || c.id.SysNum != 0 || c.id.StartTime < 1_700_000_000 {
@@ -308,7 +435,7 @@ func checkCall(t *testing.T, dir string, c *call, want wantCall) {
 	e := c.end
 	if e == nil {
 		t.Errorf("%s: no call_end", label)
-		return
+		return nil
 	}
 	if e.Talkgroup != want.talkgroup || e.Freq != voiceFreq || e.TDMASlot != -1 || !slices.Equal(nonNil(e.PatchedTalkgroups), want.patched) {
 		t.Errorf("%s: call_end %+v", label, e)
@@ -331,17 +458,8 @@ func checkCall(t *testing.T, dir string, c *call, want wantCall) {
 		t.Errorf("%s: call_end times %d-%d ms for a call started at %d s", label, e.StartTimeMS, e.StopTimeMS, c.id.StartTime)
 	}
 
-	// The recording named in call_end exists (audioArchive is on), and
-	// trunk-recorder's own call JSON beside it agrees with call_end.
-	if !strings.HasPrefix(e.Filename, "/app/media/") || !strings.HasSuffix(e.Filename, fmt.Sprintf("-call_%d.wav", c.id.CallNum)) {
-		t.Fatalf("%s: call_end filename %q", label, e.Filename)
-	}
-	wav := filepath.Join(dir, "media", strings.TrimPrefix(e.Filename, "/app/media/"))
-	if st, err := os.Stat(wav); err != nil || st.Size() <= 44 {
-		t.Errorf("%s: the recording %s: %v", label, wav, err)
-	}
-	compareCallJSON(t, label, strings.TrimSuffix(wav, ".wav")+".json", e)
 	t.Logf("%s: identity %+v, %d audio packets, transmissions %v, call_end %s", label, c.id, len(c.audio), units, filepath.Base(e.Filename))
+	return e
 }
 
 // trunk-recorder's call JSON (callLog), the same comparison made by hand on

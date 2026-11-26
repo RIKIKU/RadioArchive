@@ -145,6 +145,21 @@ Fill in `.env`: `SERVER_URL` (the radio's public address) and `CLIENT_KEY` (from
 
 Then `docker compose up -d`. The image is trunk-recorder's official image of the release it was built against, with the plugin added. The client shares trunk-recorder's network (the plugin sends only to 127.0.0.1) and its media folder, uploads each finished call, and deletes trunk-recorder's file once the server has it. While the server can't be reached it keeps recordings on disk, for up to `QUEUE_MAX_AGE` (24 hours).
 
+### For a recorder you share with another uploader
+
+If trunk-recorder already feeds another site through another uploader plugin, you can add RadioArchive without changing what that recorder does. Leave `audioArchive` as it is (usually `false`) and give the plugin a `handoffDir` ([ADR 0045](adr/0045-the-handoff-directory.md)):
+
+```json
+{ "name": "radioarchive", "library": "libradioarchive.so", "port": 9850, "handoffDir": "/app/media/radioarchive-handoff" }
+```
+
+At each call's end the plugin hard-links the finished WAV into `handoffDir` under a name of its own and tells the client that name. trunk-recorder deletes or keeps its own file as it always did, and the other uploader sees nothing new. The client deletes only its link, once the server has the recording.
+
+- `handoffDir` is an absolute path, as trunk-recorder sees it, **on the same mount as the recordings**: a hard link can't cross mounts, even two bind mounts of one disk. Put it inside the folder or volume that holds trunk-recorder's recordings (its `captureDir`, `/app/media` above, or trunk-recorder's working folder when `captureDir` isn't set). Create it before starting trunk-recorder, writable by trunk-recorder's user.
+- The client must see the links at the same path, and be able to delete them. It doesn't need the rest of trunk-recorder's folder: mount just the hand-off folder, read-write, at the same path in the client.
+- If a link fails, trunk-recorder's log says why (at most once a minute) and the plugin names trunk-recorder's own file, as without `handoffDir`. With `audioArchive` off that recording is lost to RadioArchive; nothing else changes.
+- A link is deleted only by the client. If the client is stopped for long, or misses a call's end, links stay. A daily `find <the hand-off folder> -type f -mmin +1500 -delete` (25 hours, just over `QUEUE_MAX_AGE`) clears them.
+
 ### Without Docker
 
 Each release also has the plugin (`libradioarchive-amd64.so`, `libradioarchive-arm64.so`) and the client (`radioarchive-client-amd64`, `radioarchive-client-arm64`), with `SHA256SUMS`:
@@ -154,7 +169,7 @@ sha256sum -c --ignore-missing SHA256SUMS
 gh attestation verify libradioarchive-arm64.so --repo RIKIKU/RadioArchive
 ```
 
-- The plugin goes in trunk-recorder's plugin folder (`/usr/local/lib/trunk-recorder/libradioarchive.so`); it must be built for the trunk-recorder release the release notes name.
+- The plugin goes in trunk-recorder's plugin folder (`/usr/local/lib/trunk-recorder/libradioarchive.so`); it must be built for the trunk-recorder release the release notes name. For a recorder you share with another uploader, see [above](#for-a-recorder-you-share-with-another-uploader).
 - The client needs `libopus0`. Run it under systemd as the user that owns trunk-recorder's media folder, with `SERVER_URL`, `CLIENT_KEY` (or `CLIENT_KEY_FILE`) and `QUEUE_DIR` set (`radioarchive-client` with no settings lists them).
 
 ### Upgrading a recorder

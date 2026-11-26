@@ -122,7 +122,7 @@ The payload is one UTF-8 JSON object, at most 8,176 bytes. Unknown fields are ig
 }
 ```
 
-`filename` is `Call_Data_t.filename`, the WAV trunk-recorder wrote. `transmissions` comes from `transmission_list`, so the recording's transmissions are right even when live `transmission` messages were lost.
+`filename` is `Call_Data_t.filename`, the WAV trunk-recorder wrote, or the plugin's hard link to it when `handoffDir` is set (ADR 0045). `transmissions` comes from `transmission_list`, so the recording's transmissions are right even when live `transmission` messages were lost.
 
 **`heartbeat` (0x04).** Sent from `system_rates`, about every 3 s.
 
@@ -307,7 +307,7 @@ Spec R3 said "one authenticated connection". A recording upload on the same WebS
 
 ## Consequences
 
-- **trunk-recorder must run with `audioStreaming: true` and `audioArchive: true`.** Without the first, no live audio. Without the second, trunk-recorder deletes the WAV as soon as `call_end` returns, before the client can read it. Our trunk-recorder image sets both. Nothing removes archived WAVs once uploaded, which is an open question below.
+- **trunk-recorder must run with `audioStreaming: true` and `audioArchive: true`.** Without the first, no live audio. Without the second, trunk-recorder deletes the WAV as soon as `call_end` returns, before the client can read it. Our trunk-recorder image sets both. Nothing removes archived WAVs once uploaded, which is an open question below. A recorder shared with another uploader keeps `audioArchive` off and sets the plugin's `handoffDir` instead (ADR 0045).
 - **`SPEC.md` R3** changes from "one authenticated connection" to "one client identity". ADR 0001's wording is refined the same way.
 - **Analog calls** arrive at 16 kHz, not 8 kHz. The protocol carries the rate, and the client accepts both.
 - **A lost `call_end`** means a missing recording, reported by R19's alert rather than recovered.
