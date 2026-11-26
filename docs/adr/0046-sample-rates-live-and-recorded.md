@@ -15,7 +15,7 @@ trunk-recorder v5.2.1 has two rates for one P25 call:
 - **Live audio, 8 kHz.** The plugin's `audio_stream` gets the P25 decoder's output, at `Recorder::get_wav_hz()`, which is 8,000 for P25 and DMR (`trunk-recorder/recorders/recorder.h:97`). Each transmission's own WAV is 8 kHz too (`trunk-recorder/recorders/p25_recorder_decode.cc:85`).
 - **The call's WAV, 16 kHz.** When the call ends, the call concluder renders the call's transmissions into the one WAV that `call_end` names, with ffmpeg, and always passes `-ar 16000` (`trunk-recorder/call_concluder/call_concluder.cc:405-417`, used at `:640-662`). No config option changes it.
 
-So the WAV holds the same audio as the live stream, resampled to 16 kHz, with nothing above 4 kHz. The audio-postprocess filters (`audio_postprocess`, `trunk-recorder/call_concluder/call_concluder.cc:345`) run in the same ffmpeg pass and don't change the rate.
+So the WAV holds the same audio as the live stream, resampled to 16 kHz, with nothing above 4 kHz. The audio-postprocess filters (`audio_postprocess`, `trunk-recorder/call_concluder/call_concluder.cc:345`) run in the same ffmpeg pass and don't change the rate. (That pass also runs `loudnorm`, on by default, so the WAV is louder than the live stream: ADR 0047.)
 
 CI's plugin test ran this same trunk-recorder, and its recordings were 16 kHz too. The test only checked that each WAV existed and was longer than a header, and the fake recorder wrote its WAVs at the live rate, 8 kHz, so no test ever put a real recording through the client's reader.
 
