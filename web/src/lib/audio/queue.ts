@@ -8,7 +8,8 @@
 //   listening set) goes before every call that isn't, in start-time order
 //   among priority calls. It never cuts off the call playing: the player
 //   asks only when nothing plays.
-// - A call asked for again (Play again) goes first of all.
+// - A call Previous plays again (ADR 0048) goes first of all, so no live
+//   call cuts in while it plays forward to catch up.
 // - With hold on, only calls heard on the held talkgroup play. Calls queued
 //   before hold was switched on stay queued and play once it's off (nothing
 //   is dropped automatically, R43); calls that start on other talkgroups
@@ -23,7 +24,7 @@ export interface QueuedCall {
 	system?: { id: number };
 	/** UTC, ISO 8601 with milliseconds, as call events carry it. */
 	startedAt: string;
-	/** Asked for again: plays before everything else. */
+	/** Played again by Previous: plays before everything else. */
 	first?: boolean;
 }
 
@@ -51,8 +52,8 @@ export function heldThrough(c: QueuedCall, held: TalkgroupKey | undefined): bool
 const earlier = (a: QueuedCall, b: QueuedCall) => (a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0);
 
 /**
- * The index of the call to play next, or -1 if none may: a call asked for
- * again, then priority calls by start time, then the rest by start time,
+ * The index of the call to play next, or -1 if none may: a call Previous
+ * plays, then priority calls by start time, then the rest by start time,
  * leaving out what hold holds back. Calls that started at the same moment
  * keep the order they came in.
  */

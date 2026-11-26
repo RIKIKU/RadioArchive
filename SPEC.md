@@ -181,7 +181,7 @@ Decided in [How does the web listener behave?](https://github.com/RIKIKU/RadioAr
   - Saved in the browser by default. A **share link** encodes the set (and priority marks) to copy it to another device or a bookmark. Opening one offers to replace the browser's set; hidden IDs in it are dropped silently (R33).
   - Optionally saved to the listener's account when signed in (R110), with priority marks and playback settings. First sign-in: if the profile has no set, the browser's is saved to it; if it has one, a one-time prompt offers to replace the browser's set with it. No merge.
   - **Hold** and talkgroups added for the session are never saved.
-- **R42. Choosing talkgroups.** Browse by group (switch on a whole group or single talkgroups) and search by name, label, ID or tag. Switching on a group adds its talkgroups as they are at that moment, not a live link to the group. The catalogue groups by system when there are several (R15).
+- **R42. Choosing talkgroups.** Tiles, one per group and one per tag, switch a whole group or tag on or off with one tap, and show whether it's all on, partly on or off (ADR 0048). All on and All off switch every talkgroup. Single talkgroups are found by search, by name, label, ID or tag. Switching on a group adds its talkgroups as they are at that moment, not a live link to the group. The catalogue groups by system when there are several (R15).
 - **R43. Overlapping live calls.**
   - One call plays at a time; the rest queue in order of start time.
   - A listener marks talkgroups as **priority**: a priority call moves to the front of the queue but never cuts off the call playing.
@@ -190,7 +190,8 @@ Decided in [How does the web listener behave?](https://github.com/RIKIKU/RadioAr
 - **R44. Controls.**
   - The page opens with a **Start listening** button (browsers need a user gesture). Nothing queues before it's pressed.
   - **Skip**: end the current call and move to the next.
-  - **Jump to live**: clear the queue.
+  - **Previous**: go back one call a press through the last 50 calls played, then play every call from there in order, then the calls that queued meanwhile, until caught up; live listening then carries on by itself. No live call cuts in. With hold on, only hold's talkgroup's calls (ADR 0048).
+  - **Catch up**, shown only when behind: clear the queue and go back to live.
   - **Pause** keeps queuing; resume carries on through the queue.
   - **Hold**: hear only the playing call's talkgroup until switched off. Shown clearly; it doesn't change the saved set.
   - Switching away from the radio to PagerArchive (same tab) stops the audio.
@@ -337,7 +338,7 @@ All checks use the **test fixture**: system `EX` ("Example network", ID 1) with 
 - **A5. Live feed filtered.** **Given** listener A's set is {1001} and B's {1002}, **when** calls arrive on 1001 and 1002, **then** A receives only 1001's events and frames, B only 1002's.
 - **A6. Delay.** **Given** the full stack in Playwright with the fake recorder, **when** the plugin sends a call's first PCM packet, **then** the browser decodes its first frame within 2 s (p95 over 50 calls).
 - **A7. Browser playback.** In Chrome, Firefox and WebKit: a live call plays through WebCodecs; with `AudioDecoder` removed, it plays through the WASM fallback.
-- **A8. Queue and priority.** **Given** a listener with {1001, 1002}, 1002 marked priority, and a call playing on 1001, **when** a call starts on 1001 and then on 1002, **then** the 1001 call keeps playing, the 1002 call plays next, then the queued 1001 call (from its recording if it has ended). **Skip** moves to the next; **Jump to live** empties the queue; **Pause** keeps queuing.
+- **A8. Queue and priority.** **Given** a listener with {1001, 1002}, 1002 marked priority, and a call playing on 1001, **when** a call starts on 1001 and then on 1002, **then** the 1001 call keeps playing, the 1002 call plays next, then the queued 1001 call (from its recording if it has ended). **Skip** moves to the next; **Catch up**, shown only while calls are queued or the call playing is behind, empties the queue; **Pause** keeps queuing.
 - **A9. Hold.** **Given** a call on 1001 playing with hold on, **when** calls arrive on 1002, **then** they aren't queued while hold is on, and the saved set is unchanged.
 - **A10. The gate.** **Given** talkgroup 1003 (hidden) has 3 recordings, **when** every public endpoint and the live feed are exercised (catalogue, search, recent calls, unit search, call details, call link, preview, single download, zip, QUERY call list, live events and frames), **then** no response contains `1003`, "Admin" or its audio, and its call links return the same response as a deleted call's.
 - **A11. Hiding mid-call.** **Given** a listener hearing a live call on 1001 and a second 1001 call queued, **when** an admin hides 1001, **then** within 1 s the audio stops, the queued call is withdrawn, and recent calls no longer list 1001. **When** it's made public again, **then** its recordings are listed again.
@@ -368,6 +369,9 @@ All checks use the **test fixture**: system `EX` ("Example network", ID 1) with 
 - **A36. Accessibility.** Every page passes axe-core in both looks and both themes, at 375 px and 1280 px; every form shows the Required tag on required fields.
 - **A37. Resource budget.** **Given** the full stack with 50 live sockets and 5 calls at once for 1 h, **then** the API uses ≤ 256 MB and RadioArchive's containers (Authentik excluded) ≤ 512 MB; the recorder client on an arm64 Pi 4 ≤ 128 MB.
 - **A38. Server stays static.** CI builds the API on distroless `static` with cgo off, and fails otherwise.
+- **A39. Tiles.** **Given** a listener with {1001}, **then** group North's and tag dispatch's tiles show all on (`aria-pressed` true) and the box says "1 of 2 talkgroups on". **When** North's tile is tapped, **then** it's off and the live feed hears nothing; **when** All on is pressed, **then** both talkgroups are on. **Given** a group of 3 talkgroups with 1 on, **then** its tile shows "1 of 3 on" and `aria-pressed` mixed, and a tap switches all 3 on. With 1,200 talkgroups, All on shows within 2 s. A single talkgroup is switched on only through the search.
+- **A40. Previous.** **Given** calls A, B, C heard and D playing, **when** Previous is pressed 3 times quickly, **then** the dock says "Back 3 calls…", D stops once, and A, B, C, D and then the call E that started meanwhile play in that order, with no live call cutting in, after which a new call plays live. D, still on air at its turn, plays whole from its start and carries on live. **Given** hold on 1001, **then** Previous passes over 1002's calls. Previous is disabled at the first call heard.
+- **A41. Catch up.** **Given** no call queued and the call playing live, **then** Catch up isn't shown. **Given** Previous playing a call from its recording, **when** Catch up is pressed, **then** that call stops, nothing more of Previous's plays, and the next call plays live.
 
 ## 9. End-to-end verification
 

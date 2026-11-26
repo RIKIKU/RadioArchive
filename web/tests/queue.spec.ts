@@ -45,7 +45,7 @@ test('@live A8: a priority call plays next without cutting off the call playing;
 	await expect(queued(page)).toHaveText('No calls queued');
 });
 
-test('@live A8: Skip moves to the next call, Jump to live empties the queue, Pause keeps queuing', async ({ page }) => {
+test('@live A8: Skip moves to the next call, Catch up empties the queue, Pause keeps queuing', async ({ page }) => {
 	test.setTimeout(2 * 60_000);
 	await listen(page);
 
@@ -65,7 +65,9 @@ test('@live A8: Skip moves to the next call, Jump to live empties the queue, Pau
 	await playedFrom(page, 5212, 'live');
 	expect((await heard(page)).played.some((p) => p.call_id === skipped.call_id), 'the skipped call never finishes').toBe(false);
 
-	// Jump to live.
+	// Catch up: offered only while behind, here with calls queued (ADR 0048).
+	const catchUp = dock(page).getByRole('button', { name: 'Catch up to live' });
+	await expect(catchUp).toHaveCount(0);
 	sending = sendCalls([
 		{ unit: 5221, atMs: 200, pcm: seconds(6) },
 		{ unit: 5222, atMs: 800, pcm: [tone] },
@@ -73,8 +75,10 @@ test('@live A8: Skip moves to the next call, Jump to live empties the queue, Pau
 	]);
 	await firstOf(page, 5221, 'live');
 	await expect(queued(page)).toHaveText('2 queued', { timeout: 10_000 });
-	await dock(page).getByRole('button', { name: 'Jump to live' }).click();
+	await expect(dock(page).locator('.queue')).toContainText(/2 queued\s*·\s*Catch up/);
+	await catchUp.click();
 	await expect(queued(page)).toHaveText('No calls queued');
+	await expect(catchUp).toHaveCount(0);
 	await expect.poll(async () => (await heard(page)).ended.filter((e) => e.how === 'cleared').length).toBe(2);
 	// The call playing is live, so it plays on.
 	await sending;

@@ -6,6 +6,8 @@ status: accepted (2026-11-25, by the owner)
 
 Date: 2026-11-24
 
+Amended by ADR 0048: Jump to live is now **Catch up**, shown only when behind; **Play again** is replaced by **Previous**; and the dock's controls are laid out as that ADR says.
+
 The player (#58's, ADR 0011) grows into the listener's queue. It lives in ArchiveUx 0.3.0's frame **dock**, on every page, from **Start listening** on. It keeps every call it has been sent, queued or playing, in the browser and nowhere else. Priority marks and hold are read only there: the live feed hears the same listening set whatever they are. A call that is still live at its turn plays from its start, from the frames heard while it waited, and goes on live behind the radio. One that has ended by its turn plays from its recording. Pause suspends the page's audio output, so a call playing keeps its place and calls keep queuing. Alert sounds are synthesised in the page. The recorder notice sits above the dock in the frame's notice place. These are the implementer's choices where `SPEC.md` R15, R22, R43-R45, R48 and R81, and section 13 ("the alert sounds … are the implementer's choice"), leave room (spec "How to use this spec", item 6). Built in [Queue, priority, controls and now playing in the dock](https://github.com/RIKIKU/RadioArchive/issues/60).
 
 ## Summary

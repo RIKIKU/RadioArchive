@@ -8,16 +8,18 @@
 //   priority call goes first, but never cuts off the call playing.
 // - A queued call that's still live at its turn plays from its start, from
 //   the frames heard while it waited, and goes on live: "behind by N s"
-//   until Jump to live. One that has ended by its turn plays from its
+//   until Catch up. One that has ended by its turn plays from its
 //   recording.
 // - Nothing is dropped automatically. A withdrawn call (R31) leaves the
 //   queue, and stops at once if it's playing.
 //
-// The controls (R44): nothing queues before Start listening; Skip ends the
-// call playing; Jump to live clears the queue and brings the call playing to
-// the live edge; Pause holds the output and keeps queuing, and Resume
-// carries on through the queue; Hold hears only the playing call's
-// talkgroup until it's switched off, and never touches the saved set.
+// The controls (R44; ADR 0048): nothing queues before Start listening;
+// Previous goes back through the calls heard, one call a press, then plays
+// forward from there until it has caught up; Skip ends the call playing;
+// Catch up clears the queue and brings the call playing to the live edge;
+// Pause holds the output and keeps queuing, and Resume carries on through
+// the queue; Hold hears only the playing call's talkgroup until it's
+// switched off, and never touches the saved set.
 //
 // For the browser tests, and anything else that wants to know, the player
 // announces on the window:
@@ -25,7 +27,8 @@
 //   radioarchive:first-frame  {call_id, unit, path, source, at}       a call's first decoded frame (at: Unix ms)
 //   radioarchive:played       {call_id, path, source, frames, peak}   a call has finished playing
 //   radioarchive:ended        {call_id, how, at}                      a call stopped or left the queue unplayed:
-//                                                                     how is skipped, cleared (Jump to live) or withdrawn
+//                                                                     how is skipped, cleared (Catch up) or withdrawn
+//   radioarchive:previous     {call_id, steps}                        Previous's presses have settled on a call
 //   radioarchive:alert        {call_id, alert}                        a talkgroup's alert sound played (R22)
 
 import { attachFeed } from '#lib/live/listening-set.ts';
@@ -59,8 +62,10 @@ interface Call {
 	info: CallInfo;
 	ended: boolean;
 	recording?: string;
-	/** Asked for again (Play again): plays before everything else. */
+	/** Played by Previous: plays before everything else. */
 	first?: boolean;
+	/** Played by Previous, from the history (its seq): never added to it again. */
+	back?: number;
 	/** Frames heard before its turn. */
 	packets: { seq: number; data: Uint8Array }[];
 	stream?: OpusStream;
@@ -92,15 +97,33 @@ export interface PlayerOptions {
 
 /** How far ahead of now the first frame of a run is scheduled: room for the network's jitter. */
 const LEAD = 0.15;
-/** How many times a recording is asked for, a second apart, before it's skipped. */
+/** How many times a recording is asked for, a second apart, before what was heard of the call plays instead. */
 const RECORDING_TRIES = 5;
 /** How long a call that has left is remembered, so its later events and frames are ignored. */
 const FORGET_AFTER_MS = 10 * 60_000;
+/** How many of the calls heard are kept for Previous to go back through. */
+const HISTORY = 50;
+/** Presses of Previous closer together than this count as steps of one move: audio changes once, after the last. */
+const PREVIOUS_SETTLE_MS = 400;
 
 const recordingURL = (id: string) => `/api/v1/calls/${encodeURIComponent(id)}/recording`;
 
 function announce(name: string, detail: object) {
 	window.dispatchEvent(new CustomEvent(name, { detail }));
+}
+
+/** A call that started playing, kept for Previous. */
+interface Heard {
+	seq: number;
+	info: CallInfo;
+	/**
+	 * Every frame of it the feed sent, kept while it's in the history: what
+	 * plays when Previous reaches it while it's still on air, and if its
+	 * recording isn't in when Previous plays it after it has ended.
+	 */
+	frames: { seq: number; data: Uint8Array }[];
+	/** Its call_end has come, or listening stopped before it did. */
+	ended: boolean;
 }
 
 /** A call's info as the queue rules read it. */
@@ -129,7 +152,7 @@ export class Player {
 	notices: Record<NoticeKind, boolean> = $state({ recorders: false, radio_full: false, too_many_live: false });
 	/** The server's message for the too_many_live notice, naming the limit (ADR 0039). */
 	liveLimit = $state('');
-	/** The last call heard to its end, to play again from its recording. */
+	/** The last call heard to its end, named in the dock while nothing plays. */
 	last: CallInfo | undefined = $state();
 	/** Why listening couldn't start, if it couldn't. */
 	failure = $state('');
@@ -155,6 +178,21 @@ export class Player {
 
 	/** Live listening was paused by a replay, not by the listener: it resumes when the replay is over (ADR 0023). */
 	#pausedForReplay = false;
+
+	// Previous (ADR 0048): the calls that started playing, in the order they
+	// played, the last HISTORY of them. Going back plays one again, then the
+	// ones after it in order, then the queue again, as a music player does.
+	#history: Heard[] = [];
+	/** Those still on air, by ID: their frames and call_end still come. */
+	#onAir = new Map<string, Heard>();
+	#seq = 0;
+	/** The history entry Previous is on (its seq), until the history's end is reached again. */
+	#cursor: number | undefined;
+	#settle: ReturnType<typeof setTimeout> | undefined;
+	/** Whether there's an earlier call for Previous to go to. */
+	canPrevious = $state(false);
+	/** How many steps back the presses still settling have asked for. */
+	stepsBack = $state(0);
 
 	constructor(opts: PlayerOptions = {}) {
 		this.#opts = opts;
@@ -220,6 +258,13 @@ export class Player {
 	/** Stops listening: the feed closes and the audio stops. */
 	stop() {
 		attachFeed(undefined);
+		this.#forgetPrevious();
+		this.canPrevious = false;
+		// The history is kept for the next Start listening, but nothing more
+		// of its calls will come: one still on air plays from its recording,
+		// else from what was heard of it.
+		for (const h of this.#onAir.values()) h.ended = true;
+		this.#onAir.clear();
 		this.#feed?.stop();
 		this.#feed = undefined;
 		clearInterval(this.#meterTimer);
@@ -251,16 +296,18 @@ export class Player {
 		this.#leave(c, 'skipped');
 		this.#current = undefined;
 		this.playing = undefined;
+		this.#advance(c);
 		this.#pump();
 	}
 
 	/**
-	 * Jump to live (R44): clears the queue. A live call playing behind
-	 * carries on from the live edge; a recording playing stops. Paused, it
-	 * resumes.
+	 * Catch up (R44; ADR 0048, Jump to live in ADR 0012): clears the queue,
+	 * and leaves Previous's calls. A live call playing behind carries on
+	 * from the live edge; a recording playing stops. Paused, it resumes.
 	 */
-	jumpToLive() {
+	catchUp() {
 		if (this.phase !== 'listening') return;
+		this.#forgetPrevious();
 		for (const c of this.#queue) this.#leave(c, 'cleared');
 		this.#queue = [];
 		const c = this.#current;
@@ -351,13 +398,141 @@ export class Player {
 		void this.pause();
 	}
 
-	/** Plays a finished call again, from its recording (R20), after the one playing. */
-	playAgain(info: CallInfo) {
+	/**
+	 * Previous (R44; ADR 0048): goes to the call before the one playing, in
+	 * the order they played, or, with nothing playing, to the last one
+	 * heard. It never restarts the call playing. Each press is one step
+	 * back; presses closer together than PREVIOUS_SETTLE_MS are counted
+	 * (stepsBack) and settle into one move, so the audio changes once. Then
+	 * the calls after it play in order, then the calls that queued
+	 * meanwhile, as the queue orders them, until it has caught up and live
+	 * carries on by itself. Nothing is skipped and no live call cuts in:
+	 * what Previous plays goes first of all. Catch up is the one shortcut.
+	 * While hold is on, it steps through hold's talkgroup's calls only.
+	 *
+	 * A call it reaches plays from its recording once it has ended. One
+	 * still on air plays from its start, from the frames heard, and carries
+	 * on live behind the radio, as a queued call still live at its turn
+	 * does (ADR 0012). A recording that isn't in after RECORDING_TRIES
+	 * plays from the frames heard instead.
+	 */
+	previous() {
 		if (this.phase !== 'listening') return;
-		const c = this.#newCall({ ...info, source: 'recording', delayMinutes: undefined }, true, recordingURL(info.callId));
-		c.first = true;
-		this.#queue.push(c);
+		const steps = this.#steps();
+		const i = this.#here(steps) - 1;
+		if (i < 0) return;
+		this.#cursor = steps[i].seq;
+		this.stepsBack++;
+		clearTimeout(this.#settle);
+		this.#settle = setTimeout(() => this.#goBack(), PREVIOUS_SETTLE_MS);
+		this.#count();
+	}
+
+	/** The history Previous may go through: hold's talkgroup's calls only, while hold is on. */
+	#steps() {
+		const held = this.hold?.key;
+		return held ? this.#history.filter((h) => heldThrough(h.info, held)) : this.#history;
+	}
+
+	/** Where in steps Previous counts back from: the entry it's on, the call playing, or past the end. */
+	#here(steps: Heard[]): number {
+		const at = this.#cursor;
+		if (at !== undefined) {
+			const i = steps.findIndex((h) => h.seq >= at);
+			return i < 0 ? steps.length : i;
+		}
+		const c = this.#current;
+		if (c) {
+			const i = steps.findLastIndex((h) => h.info.callId === c.info.callId);
+			if (i >= 0) return i;
+		}
+		return steps.length;
+	}
+
+	/** The presses have settled: what's playing stops, and the call Previous is on plays. */
+	#goBack() {
+		this.#settle = undefined;
+		const steps = this.stepsBack;
+		this.stepsBack = 0;
+		const at = this.#cursor;
+		if (at === undefined || this.phase !== 'listening') return;
+		const c = this.#current;
+		if (c) {
+			this.#leave(c, 'skipped');
+			this.#current = undefined;
+			this.playing = undefined;
+		}
+		for (const q of this.#queue) if (q.back !== undefined) this.#drop(q);
+		this.#queue = this.#queue.filter((q) => q.back === undefined);
+		const h = this.#queueEntry(at);
+		if (h) announce('radioarchive:previous', { call_id: h.info.callId, steps });
+		if (this.paused) void this.resume();
 		this.#pump();
+	}
+
+	/**
+	 * After a call Previous played: the next one in the history, or the
+	 * queue again at its end. Not while presses are settling (they decide),
+	 * nor after Catch up, which left Previous's calls.
+	 */
+	#advance(c: Call) {
+		if (c.back === undefined || this.#settle || this.#cursor === undefined) return;
+		const steps = this.#steps();
+		const next = steps.find((h) => h.seq > c.back!);
+		this.#cursor = next?.seq;
+		if (next) this.#queueEntry(next.seq);
+	}
+
+	/**
+	 * Queues a history entry to play first of all. Ended, it plays from its
+	 * recording, or from the frames heard if the recording isn't in. Still
+	 * on air, it plays from the frames heard and carries on live: it takes
+	 * the call's later frames and events again.
+	 */
+	#queueEntry(seq: number): Heard | undefined {
+		const h = this.#history.find((x) => x.seq === seq);
+		if (!h) {
+			this.#cursor = undefined;
+			return undefined;
+		}
+		const id = h.info.callId;
+		const c = h.ended
+			? this.#newCall({ ...h.info, source: 'recording', delayMinutes: undefined }, true, recordingURL(id))
+			: this.#newCall({ ...h.info, source: 'live', delayMinutes: undefined }, false);
+		c.packets = h.frames.slice();
+		c.first = true;
+		c.back = seq;
+		if (!h.ended) {
+			this.#calls.set(id, c);
+			this.#gone.delete(id);
+		}
+		this.#queue.push(c);
+		return h;
+	}
+
+	/** A call has started playing: it joins the history Previous goes back through, with the frames heard so far. */
+	#remember(c: Call) {
+		const h: Heard = { seq: ++this.#seq, info: { ...c.info }, frames: c.packets.slice(), ended: c.ended };
+		this.#history.push(h);
+		if (!h.ended) this.#onAir.set(c.info.callId, h);
+		if (this.#history.length > HISTORY) {
+			const old = this.#history.shift()!;
+			if (this.#onAir.get(old.info.callId) === old) this.#onAir.delete(old.info.callId);
+		}
+	}
+
+	/** A withdrawn call (R31) leaves the history: Previous never plays it. */
+	#unremember(id: string) {
+		this.#history = this.#history.filter((h) => h.info.callId !== id);
+		this.#onAir.delete(id);
+	}
+
+	/** Previous, settling or not, is left behind: Catch up and Stop. */
+	#forgetPrevious() {
+		clearTimeout(this.#settle);
+		this.#settle = undefined;
+		this.#cursor = undefined;
+		this.stepsBack = 0;
 	}
 
 	#newCall(info: CallInfo, ended: boolean, recording?: string): Call {
@@ -404,6 +579,7 @@ export class Player {
 	}
 
 	#event(e: CallEvent) {
+		this.#heardOnAir(e);
 		if (this.#gone.has(e.call_id)) return;
 		const c = this.#calls.get(e.call_id);
 		switch (e.type) {
@@ -437,10 +613,35 @@ export class Player {
 		}
 	}
 
+	/** What's heard of a call kept for Previous that's still on air: its unit and its end. */
+	#heardOnAir(e: CallEvent) {
+		const h = this.#onAir.get(e.call_id);
+		if (!h) return;
+		if (e.type === 'transmission') h.info.unit = e.unit;
+		if (e.type !== 'call_end') return;
+		h.ended = true;
+		h.info.durationMs = e.duration_ms;
+		h.info.patched = e.patched_talkgroups ?? h.info.patched;
+		this.#onAir.delete(e.call_id);
+	}
+
 	#withdraw(id: string) {
+		// Gone from Previous's history too, and any of its calls Previous has queued or is playing.
+		this.#unremember(id);
+		const again = (q: Call) => q.back !== undefined && q.info.callId === id;
+		for (const q of this.#queue) if (again(q)) this.#leave(q, 'withdrawn');
+		this.#queue = this.#queue.filter((q) => !again(q));
+		const playing = this.#current;
+		if (playing && again(playing)) {
+			this.#leave(playing, 'withdrawn');
+			this.#current = undefined;
+			this.playing = undefined;
+			this.#advance(playing);
+		}
 		const c = this.#calls.get(id);
 		if (!c) {
 			this.#forget(id);
+			this.#pump();
 			return;
 		}
 		this.#leave(c, 'withdrawn');
@@ -453,10 +654,14 @@ export class Player {
 	}
 
 	#frame(id: string, seq: number, data: Uint8Array) {
+		const h = this.#onAir.get(id);
 		const c = this.#calls.get(id);
+		if (!h && (!c || c.done)) return;
+		const frame = data.slice();
+		h?.frames.push({ seq, data: frame });
 		if (!c || c.done) return;
-		if (c.stream) c.stream.decode(data, seq);
-		else c.packets.push({ seq, data: data.slice() });
+		if (c.stream) c.stream.decode(frame, seq);
+		else c.packets.push({ seq, data: frame });
 	}
 
 	#alert(c: Call) {
@@ -469,6 +674,7 @@ export class Player {
 		this.queued = this.#queue.length;
 		const held = this.hold?.key;
 		this.heldBack = held ? this.#queue.filter((c) => !heldThrough(c.info, held)).length : 0;
+		this.canPrevious = this.phase === 'listening' && this.#here(this.#steps()) > 0;
 	}
 
 	/** Starts the next call if nothing is playing. */
@@ -485,8 +691,9 @@ export class Player {
 			return;
 		}
 		const [c] = this.#queue.splice(i, 1);
-		this.#count();
 		this.#current = c;
+		if (c.back === undefined) this.#remember(c);
+		this.#count();
 		if (c.ended && !c.recording) {
 			// Ended by its turn: its recording plays (R43).
 			c.recording = recordingURL(c.info.callId);
@@ -512,7 +719,9 @@ export class Player {
 		let packets: Uint8Array[] = [];
 		// A call that has just ended may not have its recording in yet: it
 		// comes on its own connection. One that's still unavailable after a
-		// few seconds (withdrawn, R31) is skipped.
+		// few seconds plays from the frames heard, if any (a call the recorder
+		// lost, or one Previous reached just after it ended), else it's
+		// skipped (withdrawn, R31).
 		for (let i = 0; i < RECORDING_TRIES && c === this.#current; i++) {
 			try {
 				const r = await fetch(c.recording!);
@@ -532,7 +741,7 @@ export class Player {
 			c.packets = [];
 			packets.forEach((p, i) => c.stream!.decode(p, i));
 		} else if (c.packets.length) {
-			// No recording (a call the recorder lost): what was heard of it live.
+			// No recording: what was heard of it live.
 			c.info.source = 'live';
 			this.playing = { ...c.info };
 			for (const p of c.packets) c.stream!.decode(p.data, p.seq);
@@ -588,25 +797,36 @@ export class Player {
 	#done(c: Call) {
 		c.done = true;
 		c.stream?.close();
-		if (!c.first) {
-			this.#calls.delete(c.info.callId);
-			this.#forget(c.info.callId);
-		}
+		this.#release(c);
 		announce('radioarchive:played', { call_id: c.info.callId, path: this.path, source: c.info.source, frames: c.frames, peak: c.peak });
 		if (c.frames > 0) this.last = { ...c.info };
 		this.#current = undefined;
 		this.playing = undefined;
+		this.#advance(c);
 		this.#pump();
 	}
 
 	/** A call stops, or leaves the queue, unplayed: skipped, cleared or withdrawn. */
 	#leave(c: Call, how: 'skipped' | 'cleared' | 'withdrawn') {
 		this.#silence(c);
-		if (!c.first) {
-			this.#calls.delete(c.info.callId);
-			this.#forget(c.info.callId);
-		}
+		this.#release(c);
 		announce('radioarchive:ended', { call_id: c.info.callId, how, at: Date.now() });
+	}
+
+	/** One of Previous's calls is put aside unplayed, when Previous goes back again. */
+	#drop(c: Call) {
+		this.#silence(c);
+		this.#release(c);
+	}
+
+	/**
+	 * A call has left: what comes of it later is ignored, except what
+	 * Previous's history still takes of a call on air (#heardOnAir).
+	 */
+	#release(c: Call) {
+		const id = c.info.callId;
+		if (this.#calls.get(id) === c) this.#calls.delete(id);
+		this.#forget(id);
 	}
 
 	/** Remembers that a call has left, so what comes of it later is ignored. */

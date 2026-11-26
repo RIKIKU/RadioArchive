@@ -102,7 +102,16 @@ export class ListeningState {
 	/** Puts talkgroups in the set as they are now (a group's, R42), keeping
 	 * any already there, and takes them out of the session's additions. */
 	add(...ts: Talkgroup[]) {
-		const fresh = ts.filter((t, i) => !this.inSet(t) && ts.findIndex((u) => keyOf(u) === keyOf(t)) === i);
+		// By key, so switching on a whole system's talkgroups at once
+		// (All on) stays quick.
+		const have = new Set(this.saved.map(keyOf));
+		const fresh: Talkgroup[] = [];
+		for (const t of ts) {
+			const k = keyOf(t);
+			if (have.has(k)) continue;
+			have.add(k);
+			fresh.push(t);
+		}
 		if (fresh.length) {
 			this.saved = [...this.saved, ...fresh.map((t) => entryOf(t))];
 			this.#saveSet();

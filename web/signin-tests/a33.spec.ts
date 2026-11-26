@@ -152,6 +152,7 @@ test('A33: an account with {1002} on a browser with {1001}: one prompt, and noth
 	await prompt.getByRole('button', { name: "Use my account's set" }).click();
 	await expect(prompt).toHaveCount(0);
 	expect(ids(await savedSet(page))).toEqual([1002]);
+	await page.getByText(/^Talkgroups on \(/).click();
 	await expect(page.getByRole('list', { name: 'Your listening set' }).getByRole('listitem')).toHaveCount(1);
 	expect(ids((await account(page)).profile!.talkgroups)).toEqual([1002]);
 	// Once: the next page doesn't ask again.

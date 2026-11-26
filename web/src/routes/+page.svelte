@@ -1,8 +1,12 @@
 <script lang="ts">
 	// The Listen page (R84): the listener, with the listening set.
 	//
-	// - The set and the picker (R41, R42), with priority marks (R43), saved
-	//   in this browser (ADR 0008).
+	// - The set (R41, R42), saved in this browser (ADR 0008), as tiles: a
+	//   box with how many talkgroups are on, All on, All off and what's on,
+	//   then a tile per group and per tag (ADR 0048). Single talkgroups are
+	//   found by the search. The talkgroups on, with their priority marks
+	//   (R43), Remove and the share link, fold away at the foot of the page,
+	//   drawn only when opened.
 	// - A share link (R41): /?set=… carries the set and its marks; opening
 	//   one offers to replace this browser's set. What isn't public any more
 	//   is dropped without a word (R33).
@@ -17,6 +21,7 @@
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
 	import Picker from '#lib/listening/Picker.svelte';
+	import Tiles from '#lib/listening/Tiles.svelte';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import {
 		SHARE_PARAM,
@@ -151,6 +156,10 @@
 	});
 
 	const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+
+	// The talkgroups on, folded away: with every talkgroup on there are over
+	// a thousand rows, so they're drawn only when opened.
+	let setOpen = $state(false);
 </script>
 
 <svelte:head><title>Listen · RadioArchive</title></svelte:head>
@@ -196,9 +205,38 @@
 	<p class="error" role="alert">{limited ?? "Couldn't load the talkgroups."}</p>
 	<button type="button" class="secondary" onclick={loadCatalogue}>Try again</button>
 {:else if ix}
+	{#if added.length}
+		<section aria-labelledby="session-heading">
+			<h2 id="session-heading">Added for this session</h2>
+			<p class="hint">Until you close this tab. Keep one to add it to your listening set.</p>
+			<ul class="rows" aria-label="Added for this session">
+				{#each added as r (`${r.talkgroup.system ?? 0}.${r.talkgroup.id}`)}
+					<li class="row">
+						<span class="name">{r.talkgroup.name}</span>
+						{#if r.talkgroup.label && r.talkgroup.label !== r.talkgroup.name}<span class="meta">{r.talkgroup.label}</span>{/if}
+						<span class="row-actions">
+							<button type="button" class="secondary" aria-label="Keep {r.talkgroup.name}" onclick={() => listening.keep(r.talkgroup)}>Keep</button>
+						</span>
+					</li>
+				{/each}
+			</ul>
+		</section>
+	{/if}
+
 	<section aria-labelledby="set-heading">
 		<h2 id="set-heading">Your listening set</h2>
-		{#if set.length}
+		<Tiles {ix} {listening} />
+	</section>
+
+	<section aria-labelledby="find-heading">
+		<h2 id="find-heading">Find a talkgroup</h2>
+		<Picker {ix} {listening} />
+	</section>
+
+	{#if set.length}
+		<details class="on-list" bind:open={setOpen}>
+			<summary>Talkgroups on ({set.length.toLocaleString('en-AU')}): priority, remove and share</summary>
+			{#if setOpen}
 			<ul class="rows" aria-label="Your listening set">
 				{#each set as r (`${r.talkgroup.system ?? 0}.${r.talkgroup.id}`)}
 					<li class="row">
@@ -223,33 +261,9 @@
 				<button type="button" class="secondary" onclick={copy}>Copy share link</button>
 				<p class="status copied" role="status">{copied === 'copied' ? 'Link copied.' : copied === 'failed' ? "Couldn't copy it. Copy the link from the box." : ''}</p>
 			</div>
-		{:else}
-			<p class="status">Your listening set is empty. Choose talkgroups below.</p>
-		{/if}
-	</section>
-
-	{#if added.length}
-		<section aria-labelledby="session-heading">
-			<h2 id="session-heading">Added for this session</h2>
-			<p class="hint">Until you close this tab. Keep one to add it to your listening set.</p>
-			<ul class="rows" aria-label="Added for this session">
-				{#each added as r (`${r.talkgroup.system ?? 0}.${r.talkgroup.id}`)}
-					<li class="row">
-						<span class="name">{r.talkgroup.name}</span>
-						{#if r.talkgroup.label && r.talkgroup.label !== r.talkgroup.name}<span class="meta">{r.talkgroup.label}</span>{/if}
-						<span class="row-actions">
-							<button type="button" class="secondary" aria-label="Keep {r.talkgroup.name}" onclick={() => listening.keep(r.talkgroup)}>Keep</button>
-						</span>
-					</li>
-				{/each}
-			</ul>
-		</section>
+			{/if}
+		</details>
 	{/if}
-
-	<section aria-labelledby="choose-heading">
-		<h2 id="choose-heading">Choose talkgroups</h2>
-		<Picker {ix} {listening} />
-	</section>
 {/if}
 
 <style>
@@ -336,5 +350,17 @@
 	}
 	.copied:empty {
 		padding: 0;
+	}
+	.on-list {
+		margin-top: var(--space-2xl);
+	}
+	/* A list item still, so it keeps its disclosure mark. */
+	.on-list summary {
+		padding: var(--space-sm) 0;
+		cursor: pointer;
+		font-weight: var(--weight-strong);
+	}
+	.on-list[open] summary {
+		margin-bottom: var(--space-sm);
 	}
 </style>
