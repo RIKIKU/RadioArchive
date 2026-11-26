@@ -168,6 +168,45 @@ test('a date and time range, picked in the calendar on the deployment clock', as
 	expect(await ids(page)).toEqual([c.id]);
 });
 
+test('a tap on a time opens the browser\'s time picker; the keyboard still types it', async ({ page }) => {
+	// ArchiveUx 0.5.1: a pointer's click calls showPicker(); focus and keys don't.
+	// The browser's own picker can't be seen from a test, so showPicker counts.
+	await page.addInitScript(() => {
+		const w = window as unknown as { pickers: string[] };
+		w.pickers = [];
+		HTMLInputElement.prototype.showPicker = function (this: HTMLInputElement) {
+			w.pickers.push(this.labels?.[0]?.textContent ?? '');
+		};
+	});
+	const pickers = () => page.evaluate(() => (window as unknown as { pickers: string[] }).pickers);
+	await withSet(page);
+	await page.goto('/recent');
+	await openFilters(page);
+	await page.getByRole('button', { name: 'Dates' }).click();
+	let calendar = page.getByRole('dialog', { name: 'Choose dates' });
+	// No day yet: the times are disabled, and a tap opens nothing.
+	await expect(calendar.getByLabel('From time')).toBeDisabled();
+	await calendar.getByLabel('From time').click({ force: true });
+	expect(await pickers()).toEqual([]);
+	await calendar.getByRole('button', { name: 'Done' }).click();
+
+	await page.goto('/recent?from=2026-11-20');
+	await openFilters(page);
+	await page.getByRole('button', { name: /^Dates/ }).click();
+	calendar = page.getByRole('dialog', { name: 'Choose dates' });
+	await calendar.getByLabel('From time').click();
+	await calendar.getByLabel('To time').click();
+	expect(await pickers()).toEqual(['From time', 'To time']);
+	// From the keyboard: focus and Enter open nothing, and Enter still closes the calendar.
+	// (Tab moves between a time's own segments in some browsers, so the test focuses each.)
+	await calendar.getByLabel('From time').focus();
+	await calendar.getByLabel('To time').focus();
+	await expect(calendar.getByLabel('To time')).toBeFocused();
+	await page.keyboard.press('Enter');
+	await expect(calendar).toBeHidden();
+	expect(await pickers()).toEqual(['From time', 'To time']);
+});
+
 test('A22, browser half: a 32-day range shows the error naming the 31-day limit under the form', async ({ page }) => {
 	await withSet(page);
 	await page.goto('/recent?from=2026-10-01&to=2026-11-01');
