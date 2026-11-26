@@ -311,7 +311,46 @@ func checkRecording(t *testing.T, dir string, c *call, e *recorderproto.CallEnd)
 	if math.Abs(wavS-liveS) > 0.1*liveS+0.25 {
 		t.Errorf("call %d: the recording lasts %.2f s, the live audio %.2f s", e.CallNum, wavS, liveS)
 	}
+	checkLoudness(t, c, e.CallNum, rate, pcm)
 	return wav
+}
+
+// heldDown is a recording loudness, in LUFS, well under any real call's (-17
+// to -22.5 LUFS): loudnorm held it down to its peak.
+const heldDown = -24.0
+
+// checkLoudness checks that the call's live audio, levelled as the recorder
+// client levels it, plays about as loud as its recording. trunk-recorder v5
+// renders the recording with ffmpeg's loudnorm (to -16 LUFS by default) but
+// streams the decoder's own level to the plugin, which for the fixture's
+// first call is 6 LU quieter (ADR 0047).
+//
+// loudnorm also keeps a call's true peak under -0.1 dBTP. When one click
+// stands far over a quiet call, as at the start of the fixture's second
+// call, it gives the whole call only the gain the click allows and the
+// recording stays quiet; the live leveller limits each frame instead, so
+// such a call is only logged.
+func checkLoudness(t *testing.T, c *call, callNum int64, rate int, rec []int16) {
+	t.Helper()
+	var live []int16
+	for _, a := range c.audio {
+		for i := 0; i+1 < len(a.PCM); i += 2 {
+			live = append(live, int16(binary.LittleEndian.Uint16(a.PCM[i:])))
+		}
+	}
+	raw := recorderclient.Loudness(live, 8000)
+	levelled := recorderclient.Loudness(recorderclient.LevelLive(live, 8000), 8000)
+	recorded := recorderclient.Loudness(rec, rate)
+	t.Logf("call %d: live audio %.1f LUFS as the plugin sends it, %.1f LUFS levelled; the recording %.1f LUFS",
+		callNum, raw, levelled, recorded)
+	if recorded < heldDown {
+		t.Logf("call %d: loudnorm held the recording down to its peak; not compared", callNum)
+		return
+	}
+	if math.Abs(levelled-recorded) > 3 {
+		t.Errorf("call %d: live audio levelled to %.1f LUFS, but the recording is %.1f LUFS: they'd play at different loudness",
+			callNum, levelled, recorded)
+	}
 }
 
 // One boot, and every sequence number from 0 with none missing.

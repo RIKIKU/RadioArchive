@@ -97,7 +97,7 @@ v1 supports P25 systems only; analog systems are ignored (owner, 2026-11-24).
   - uses **one client identity**, its own **client key** (R10), for its live WebSocket and its recording uploads (ADR 0002);
   - relays the plugin's heartbeat;
   - de-duplicates the copies trunk-recorder sends of a patched call, so each call is sent once (R16).
-- **R4. Encoding.** 12 kbit/s VBR, narrowband, `OPUS_APPLICATION_VOIP`, 20 ms frames, for both live frames and recordings, each encoded at its own PCM rate, 8 or 16 kHz, never resampled (ADR 0046). Recordings are Ogg/Opus with no comment padding.
+- **R4. Encoding.** 12 kbit/s VBR, narrowband, `OPUS_APPLICATION_VOIP`, 20 ms frames, for both live frames and recordings, each encoded at its own PCM rate, 8 or 16 kHz, never resampled (ADR 0046). Recordings are Ogg/Opus with no comment padding. Live audio is levelled to the recordings' loudness before it's encoded, because trunk-recorder loudness-normalises only the recordings (ADR 0047).
 - **R5. Disk-backed queue.** While the server can't be reached, the client keeps a **queue of unsent recordings on disk**. Each entry points at trunk-recorder's own file and is removed only after the server acknowledges the upload. On reconnect the oldest go first. Entries older than `QUEUE_MAX_AGE` (default 24 h) are dropped and counted. Live audio missed during an outage is lost: frames that arrive too late to be live are dropped, and the recording still arrives.
 - **R6. Versions.** The server accepts recorder clients up to **one minor version** behind its own. An older client is refused with an error naming both versions, and counted in a metric.
 

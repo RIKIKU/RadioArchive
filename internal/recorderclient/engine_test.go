@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -241,6 +242,53 @@ func audio(t *testing.T, seq uint32, callNum int64, rate uint16, samples int) []
 		t.Fatal(err)
 	}
 	return b
+}
+
+// pcmEncoder is a fake encoder that keeps the PCM it was given.
+type pcmEncoder struct {
+	rate int
+	pcm  *[]int16
+}
+
+func (e *pcmEncoder) FrameSamples() int { return e.rate / 50 }
+func (e *pcmEncoder) Lookahead() int    { return e.rate / 400 }
+func (e *pcmEncoder) Encode(pcm []int16) ([]byte, error) {
+	*e.pcm = append(*e.pcm, pcm...)
+	return []byte{0x08}, nil
+}
+func (*pcmEncoder) Close() {}
+
+// Live audio is encoded at the loudness trunk-recorder gives the call's
+// recording, not at the decoder's own, quieter level (ADR 0047).
+func TestEngineLevelsLiveAudio(t *testing.T) {
+	for _, rate := range SampleRates {
+		t.Run(fmt.Sprint(rate), func(t *testing.T) {
+			r := newRig()
+			var got []int16
+			r.e.newEnc = func(rate int) (Encoder, error) { return &pcmEncoder{rate: rate, pcm: &got}, nil }
+			in := speech(rate, 8, -35, 3)
+			const chunk = 320 // the plugin's datagrams don't fall on frame boundaries
+			for seq, off := 0, 0; off < len(in); seq, off = seq+1, off+chunk {
+				pcm := in[off:min(off+chunk, len(in))]
+				b := make([]byte, 2*len(pcm))
+				for i, v := range pcm {
+					b[2*i], b[2*i+1] = byte(v), byte(uint16(v)>>8)
+				}
+				d, err := rp.EncodeAudio(1, uint32(seq), rp.Audio{
+					Identity:  rp.Identity{SysNum: 0, CallNum: 1, StartTime: 1764000000, ShortName: "ex"},
+					Talkgroup: 1001, Unit: 7, Freq: 851000000, SampleRate: uint16(rate), TDMASlot: -1, PCM: b,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.e.handle(d)
+			}
+			before, after := Loudness(in, rate), Loudness(got, rate)
+			if math.Abs(after-LiveLoudness) > 2 {
+				t.Errorf("live audio at %.1f LUFS encoded at %.1f LUFS, want %.0f±2", before, after, LiveLoudness)
+			}
+		})
+	}
 }
 
 // rateEncoder is a fake encoder that, like libopus, takes 20 ms at its own

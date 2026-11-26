@@ -84,6 +84,7 @@ type call struct {
 
 	rate     int // the live PCM's rate, from the call's first audio
 	enc      Encoder
+	lev      *leveler // brings the live audio to the recordings' loudness (ADR 0047)
 	encErr   bool
 	buf      []int16
 	frameSeq uint32
@@ -320,6 +321,7 @@ func (e *engine) encode(c *call, pcm []byte) {
 			return
 		}
 		c.enc = enc
+		c.lev = newLeveler(c.rate)
 	}
 	if c.enc == nil {
 		return
@@ -334,6 +336,7 @@ func (e *engine) frames(c *call) {
 	n := c.enc.FrameSamples()
 	sent := 0
 	for len(c.buf)-sent >= n {
+		c.lev.level(c.buf[sent : sent+n])
 		pkt, err := c.enc.Encode(c.buf[sent : sent+n])
 		sent += n
 		if err != nil {
