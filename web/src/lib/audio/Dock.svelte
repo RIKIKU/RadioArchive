@@ -378,9 +378,13 @@
 	/* Not room for every control's name beside its icon in one row: each
 	   shows a short name under its icon, and they share the row. Stop's
 	   whole name is still read out. */
-	@container dock-controls (width < 60rem) {
+	/* The row with names beside the icons is about 60rem wide (with
+	   Resume), so a desktop of 1,280 px beside the side menu has the short
+	   names; the margin covers each browser's fonts. */
+	@container dock-controls (width < 64rem) {
 		.controls {
 			flex-wrap: nowrap;
+			gap: var(--space-2xs);
 		}
 		.controls > button,
 		.wide-only :global(button),

@@ -209,6 +209,12 @@ async function barChecks(page: Page, shots: string) {
 	// A narrower desktop: short names under the icons, still one row.
 	await page.setViewportSize({ width: 1024, height: 768 });
 	expect(await rows(), 'one row at 1,024 px').toBe(1);
+	// A wide one: names beside the icons, in one row with Resume's longer name.
+	await page.setViewportSize({ width: 1600, height: 900 });
+	await controls.getByRole('button', { name: 'Pause' }).click();
+	await expect(controls.getByRole('button', { name: 'Resume' })).toBeVisible();
+	expect(await rows(), 'one row at 1,600 px').toBe(1);
+	await controls.getByRole('button', { name: 'Resume' }).click();
 
 	// A phone: short names under the icons; Share and Add to basket in Actions.
 	await page.setViewportSize({ width: 375, height: 812 });
