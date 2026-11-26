@@ -24,13 +24,47 @@
 	// its name beside its controls and the rest under both, then
 	// live listening, its status in a line above its controls. On a desktop
 	// the two sit side by side, as before (the wrapper isn't drawn there).
-	import { Icon, LiveBadge } from 'archiveux/components';
+	//
+	// Proof of concept (poc/listening-set): Jump to live shows only when
+	// behind, as "Catch up" in words beside the queue; on a phone each
+	// control's short name shows under its icon, and Share and Add to
+	// basket sit in a More menu.
+	import { Icon, LiveBadge, MoreActions } from 'archiveux/components';
+	import { LIVE_WITHIN } from 'archiveux/live.js';
 	import type { Player, CallInfo } from './player.svelte.ts';
 	import { dockIcons } from './icons.ts';
 	import ShareButton from '#lib/share/ShareButton.svelte';
 	import AddToBasket from '#lib/basket/AddToBasket.svelte';
+	import { callLink, copyText } from '#lib/share/link.ts';
+	import { basketState } from '#lib/basket/state.svelte.ts';
 
 	let { player }: { player: Player } = $props();
+
+	const basket = basketState();
+	// Behind the radio: calls waiting, or a live call playing further back
+	// than Live allows. A delayed talkgroup's call is behind on purpose.
+	const behind = $derived(player.queued > 0 || (!!player.playing && !player.playing.delayMinutes && player.position.behind > LIVE_WITHIN));
+
+	// What the More menu's actions did, beside the queue (the menu closes).
+	let said = $state('');
+	let saidTimer: ReturnType<typeof setTimeout> | undefined;
+	function say(text: string) {
+		clearTimeout(saidTimer);
+		said = text;
+		saidTimer = setTimeout(() => (said = ''), 4000);
+	}
+	async function shareCall(id: string) {
+		say((await copyText(callLink(id))) ? 'Link copied' : "Couldn't copy the link");
+	}
+	function basketCall(id: string) {
+		if (basket.has(id)) {
+			basket.remove(id);
+			say('Taken out of the basket');
+		} else {
+			basket.add(id);
+			say(basket.has(id) ? 'Added to the basket' : 'The basket is full');
+		}
+	}
 
 	const c = $derived(player.playing);
 	const r = $derived(player.replay.call);
@@ -115,7 +149,9 @@
 			{/if}
 			<p class="meta queue">
 				<span class="queued">{queuedText}</span>
+				{#if behind}<span class="sep" aria-hidden="true">·</span><button type="button" class="ghost catch-up" onclick={() => player.jumpToLive()}>Catch up<span class="visually-hidden"> to live</span></button>{/if}
 				{#if player.hold}<span class="hold-on"><Icon svg={dockIcons.hold} />Hold on: {player.hold.talkgroup.name} only</span>{/if}
+				{#if said}<span class="said" role="status">{said}</span>{/if}
 			</p>
 		</div>
 		<div class="controls" role="group" aria-label="Player controls">
@@ -125,18 +161,29 @@
 				<button type="button" class="secondary" onclick={() => player.pause()}><Icon name="pause" /><span class="label">Pause</span></button>
 			{/if}
 			<button type="button" class="secondary" disabled={!c} onclick={() => player.skip()}><Icon name="skip" /><span class="label">Skip</span></button>
-			<button type="button" class="secondary" onclick={() => player.jumpToLive()}><Icon svg={dockIcons.live} /><span class="label">Jump to live</span></button>
 			<button type="button" class="secondary" aria-pressed={!!player.hold} disabled={!c && !player.hold} onclick={() => player.setHold(!player.hold)}
 				><Icon svg={dockIcons.hold} /><span class="label">Hold</span></button
 			>
 			{#if !c && player.last}
 				{@const l = player.last}
 				<button type="button" class="secondary" aria-label="Play again: {l.talkgroup.name}" onclick={() => player.playAgain(l)}
-					><Icon svg={dockIcons.again} /><span class="label">Play again</span></button
+					><Icon svg={dockIcons.again} /><span class="label"><span class="long">Play again</span><span class="short" aria-hidden="true">Again</span></span></button
 				>
 			{/if}
-			<button type="button" class="secondary" onclick={() => player.stop()}><Icon svg={dockIcons.stop} /><span class="label">Stop listening</span></button>
-			{#if c}<ShareButton callId={c.callId} label={c.talkgroup.name} icon compact /><AddToBasket callId={c.callId} label={c.talkgroup.name} icon compact />{/if}
+			<button type="button" class="secondary" onclick={() => player.stop()}
+				><Icon svg={dockIcons.stop} /><span class="label"><span class="long">Stop listening</span><span class="short" aria-hidden="true">Stop</span></span></button
+			>
+			{#if c}
+				<span class="wide-only"><ShareButton callId={c.callId} label={c.talkgroup.name} icon compact /><AddToBasket callId={c.callId} label={c.talkgroup.name} icon compact /></span>
+				<span class="phone-only dock-more">
+					<MoreActions label="More actions: {c.talkgroup.name}" text="More">
+						<button type="button" onclick={() => shareCall(c.callId)}><Icon svg={dockIcons.share} />Share link</button>
+						<button type="button" aria-pressed={basket.has(c.callId)} onclick={() => basketCall(c.callId)}
+							><Icon svg={dockIcons.basket} />{basket.has(c.callId) ? 'Take out of basket' : 'Add to basket'}</button
+						>
+					</MoreActions>
+				</span>
+			{/if}
 		</div>
 	</div>
 {/if}
@@ -270,17 +317,84 @@
 		border-color: var(--accent);
 		color: var(--accent-soft-fg);
 	}
-	/* Phones: the controls show their icons; their names are still read out. */
+	/* Catch up: words, by the queue count, only when behind. */
+	.catch-up {
+		min-height: var(--target);
+		padding: 0 var(--space-xs);
+		color: var(--accent);
+		font-family: var(--font-ui);
+		font-size: var(--text-sm);
+		text-decoration: underline;
+	}
+	.sep {
+		color: var(--muted);
+	}
+	.said {
+		color: var(--fg);
+	}
+	.wide-only {
+		display: contents;
+	}
+	.phone-only,
+	.short {
+		display: none;
+	}
+	/* Phones: each control's short name under its icon. */
 	@media (max-width: 47.99rem) {
 		.controls {
 			flex: 1 1 100%;
 			justify-content: space-between;
 		}
-		.controls button {
+		.player .controls {
+			flex-wrap: nowrap;
+		}
+		.player .controls > button,
+		.dock-more :global(button.toggle) {
+			flex: 1 1 0;
+			flex-direction: column;
+			gap: var(--space-3xs);
+			min-width: 0;
+			width: auto;
+			padding: var(--space-2xs) var(--space-3xs);
+			font-size: var(--text-xxs);
+			font-weight: var(--weight-normal);
+		}
+		.player .long {
+			position: absolute;
+			width: var(--hidden-size);
+			height: var(--hidden-size);
+			margin: calc(-1 * var(--hidden-size));
+			overflow: hidden;
+			clip: rect(0, 0, 0, 0);
+			white-space: nowrap;
+		}
+		.player .short {
+			display: inline;
+		}
+		.wide-only {
+			display: none;
+		}
+		.phone-only {
+			display: flex;
+			flex: 1 1 0;
+			min-width: 0;
+		}
+		.dock-more :global(.more-actions) {
+			display: flex;
+			flex: 1 1 0;
+		}
+		/* The dock is at the foot of the screen: the menu opens upwards. */
+		.dock-more :global(.more-actions .panel.end) {
+			top: auto;
+			bottom: 100%;
+			margin-top: 0;
+			margin-bottom: var(--space-2xs);
+		}
+		.replay .controls button {
 			width: var(--target);
 			padding: 0;
 		}
-		.controls .label {
+		.replay .controls .label {
 			position: absolute;
 			width: var(--hidden-size);
 			height: var(--hidden-size);

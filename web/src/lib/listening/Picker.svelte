@@ -8,7 +8,9 @@
 	import { search, type Index, type Talkgroup } from './set.ts';
 	import type { ListeningState } from './state.svelte.ts';
 
-	let { ix, listening }: { ix: Index; listening: ListeningState } = $props();
+	// browse: false shows the search alone, with no groups under it (the
+	// tiles layout at /listen-poc has its own).
+	let { ix, listening, browse = true }: { ix: Index; listening: ListeningState; browse?: boolean } = $props();
 
 	let query = $state('');
 	let open: Record<string, boolean> = $state({});
@@ -82,7 +84,7 @@
 				{#each found as t (`${t.system ?? 0}.${t.id}`)}{@render row(t)}{/each}
 			</ul>
 		{/if}
-	{:else}
+	{:else if browse}
 		{#each sections as s (s.id)}
 			{#if s.system}<h3 class="system">{s.system}</h3>{/if}
 			<ul class="rows" aria-label={s.system ? `Groups in ${s.system}` : 'Groups'}>
@@ -159,9 +161,14 @@
 	.group {
 		border-bottom: var(--border-width) solid var(--border);
 	}
+	/* A long group name wraps inside its own button; Add all stays beside it. */
 	.group > .head {
+		flex-wrap: nowrap;
 		border-bottom: 0;
 		justify-content: space-between;
+	}
+	.group > .head > .secondary {
+		flex: none;
 	}
 	.pick {
 		display: flex;
@@ -193,7 +200,8 @@
 		font-weight: var(--weight-normal);
 	}
 	.open {
-		flex: 1 1 auto;
+		flex: 1 1 0;
+		min-width: 0;
 		justify-content: flex-start;
 		flex-wrap: wrap;
 		gap: var(--space-2xs) var(--space-md);

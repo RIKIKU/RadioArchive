@@ -17,6 +17,7 @@
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
 	import Picker from '#lib/listening/Picker.svelte';
+	import Tiles from '#lib/listening/Tiles.svelte';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import {
 		SHARE_PARAM,
@@ -151,7 +152,59 @@
 	});
 
 	const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+
+	// Proof of concept: the tiles layout, at /listen-poc (or /?layout=tiles),
+	// beside this page's own for comparing. The same set, links and player.
+	const tiles = $derived(page.url.pathname.replace(/\/+$/, '') === '/listen-poc' || page.url.searchParams.get('layout') === 'tiles');
+	let setOpen = $state(false);
 </script>
+
+{#snippet setList()}
+	<ul class="rows" aria-label="Your listening set">
+		{#each set as r (`${r.talkgroup.system ?? 0}.${r.talkgroup.id}`)}
+			<li class="row">
+				<span class="name">{r.talkgroup.name}</span>
+				{#if r.talkgroup.label && r.talkgroup.label !== r.talkgroup.name}<span class="meta">{r.talkgroup.label}</span>{/if}
+				<span class="row-actions">
+					<label class="prio">
+						<input type="checkbox" checked={r.priority} aria-label="Priority: {r.talkgroup.name}" onchange={(e) => listening.setPriority(r.talkgroup, e.currentTarget.checked)} />
+						Priority
+					</label>
+					<button type="button" class="ghost" aria-label="Remove {r.talkgroup.name}" onclick={() => listening.remove(r.talkgroup)}>Remove</button>
+				</span>
+			</li>
+		{/each}
+	</ul>
+	<div class="share">
+		<div class="field">
+			<label for="share-link">Share link</label>
+			<input id="share-link" type="text" readonly value={shareLink} aria-describedby="share-hint" onfocus={(e) => e.currentTarget.select()} />
+			<p class="field-hint" id="share-hint">Opens this set, with its priority marks, on another device or from a bookmark.</p>
+		</div>
+		<button type="button" class="secondary" onclick={copy}>Copy share link</button>
+		<p class="status copied" role="status">{copied === 'copied' ? 'Link copied.' : copied === 'failed' ? "Couldn't copy it. Copy the link from the box." : ''}</p>
+	</div>
+{/snippet}
+
+{#snippet sessionAdded()}
+	{#if added.length}
+		<section aria-labelledby="session-heading">
+			<h2 id="session-heading">Added for this session</h2>
+			<p class="hint">Until you close this tab. Keep one to add it to your listening set.</p>
+			<ul class="rows" aria-label="Added for this session">
+				{#each added as r (`${r.talkgroup.system ?? 0}.${r.talkgroup.id}`)}
+					<li class="row">
+						<span class="name">{r.talkgroup.name}</span>
+						{#if r.talkgroup.label && r.talkgroup.label !== r.talkgroup.name}<span class="meta">{r.talkgroup.label}</span>{/if}
+						<span class="row-actions">
+							<button type="button" class="secondary" aria-label="Keep {r.talkgroup.name}" onclick={() => listening.keep(r.talkgroup)}>Keep</button>
+						</span>
+					</li>
+				{/each}
+			</ul>
+		</section>
+	{/if}
+{/snippet}
 
 <svelte:head><title>Listen · RadioArchive</title></svelte:head>
 
@@ -195,56 +248,37 @@
 {:else if loading === 'failed'}
 	<p class="error" role="alert">{limited ?? "Couldn't load the talkgroups."}</p>
 	<button type="button" class="secondary" onclick={loadCatalogue}>Try again</button>
+{:else if ix && tiles}
+	<p class="hint trial">Trial layout. <a href="/">The current Listen page</a> has the same listening set.</p>
+	<section class="first" aria-labelledby="set-heading">
+		<h2 id="set-heading" class="visually-hidden">Your listening set</h2>
+		<Tiles {ix} {listening} />
+	</section>
+
+	<section aria-labelledby="find-heading">
+		<h2 id="find-heading">Find a talkgroup</h2>
+		<Picker {ix} {listening} browse={false} />
+	</section>
+
+	{@render sessionAdded()}
+
+	{#if set.length}
+		<details class="on-list" bind:open={setOpen}>
+			<summary>Talkgroups on ({set.length.toLocaleString('en-AU')}): priority, remove and share</summary>
+			{#if setOpen}{@render setList()}{/if}
+		</details>
+	{/if}
 {:else if ix}
 	<section aria-labelledby="set-heading">
 		<h2 id="set-heading">Your listening set</h2>
 		{#if set.length}
-			<ul class="rows" aria-label="Your listening set">
-				{#each set as r (`${r.talkgroup.system ?? 0}.${r.talkgroup.id}`)}
-					<li class="row">
-						<span class="name">{r.talkgroup.name}</span>
-						{#if r.talkgroup.label && r.talkgroup.label !== r.talkgroup.name}<span class="meta">{r.talkgroup.label}</span>{/if}
-						<span class="row-actions">
-							<label class="prio">
-								<input type="checkbox" checked={r.priority} aria-label="Priority: {r.talkgroup.name}" onchange={(e) => listening.setPriority(r.talkgroup, e.currentTarget.checked)} />
-								Priority
-							</label>
-							<button type="button" class="ghost" aria-label="Remove {r.talkgroup.name}" onclick={() => listening.remove(r.talkgroup)}>Remove</button>
-						</span>
-					</li>
-				{/each}
-			</ul>
-			<div class="share">
-				<div class="field">
-					<label for="share-link">Share link</label>
-					<input id="share-link" type="text" readonly value={shareLink} aria-describedby="share-hint" onfocus={(e) => e.currentTarget.select()} />
-					<p class="field-hint" id="share-hint">Opens this set, with its priority marks, on another device or from a bookmark.</p>
-				</div>
-				<button type="button" class="secondary" onclick={copy}>Copy share link</button>
-				<p class="status copied" role="status">{copied === 'copied' ? 'Link copied.' : copied === 'failed' ? "Couldn't copy it. Copy the link from the box." : ''}</p>
-			</div>
+			{@render setList()}
 		{:else}
 			<p class="status">Your listening set is empty. Choose talkgroups below.</p>
 		{/if}
 	</section>
 
-	{#if added.length}
-		<section aria-labelledby="session-heading">
-			<h2 id="session-heading">Added for this session</h2>
-			<p class="hint">Until you close this tab. Keep one to add it to your listening set.</p>
-			<ul class="rows" aria-label="Added for this session">
-				{#each added as r (`${r.talkgroup.system ?? 0}.${r.talkgroup.id}`)}
-					<li class="row">
-						<span class="name">{r.talkgroup.name}</span>
-						{#if r.talkgroup.label && r.talkgroup.label !== r.talkgroup.name}<span class="meta">{r.talkgroup.label}</span>{/if}
-						<span class="row-actions">
-							<button type="button" class="secondary" aria-label="Keep {r.talkgroup.name}" onclick={() => listening.keep(r.talkgroup)}>Keep</button>
-						</span>
-					</li>
-				{/each}
-			</ul>
-		</section>
-	{/if}
+	{@render sessionAdded()}
 
 	<section aria-labelledby="choose-heading">
 		<h2 id="choose-heading">Choose talkgroups</h2>
@@ -336,5 +370,21 @@
 	}
 	.copied:empty {
 		padding: 0;
+	}
+	.trial {
+		margin: 0;
+	}
+	section.first {
+		margin-top: var(--space-lg);
+	}
+	.on-list {
+		margin-top: var(--space-2xl);
+	}
+	.on-list summary {
+		min-height: var(--target);
+		display: flex;
+		align-items: center;
+		cursor: pointer;
+		font-weight: var(--weight-strong);
 	}
 </style>
