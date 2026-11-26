@@ -177,7 +177,8 @@ test('signed in, changes are saved to the account; hold and session additions ne
 	await signUp(page, request, baseURL!, address('changes'));
 	await expect.poll(async () => (await account(page)).profile?.talkgroups, { timeout: 15_000 }).toEqual([{ id: 1001 }]);
 
-	// A priority mark and the look are saved.
+	// A priority mark (in the talkgroups on, folded away: ADR 0048) and the look are saved.
+	await page.getByText(/^Talkgroups on \(/).click();
 	await page.getByRole('checkbox', { name: 'Priority: Dispatch North' }).check();
 	await openMenu(page);
 	await page.getByRole('combobox', { name: 'Look' }).selectOption('console');
