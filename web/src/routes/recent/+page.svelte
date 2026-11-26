@@ -466,7 +466,7 @@
 	}
 	/* Under its option, lined up with the option's words. */
 	.choice-error {
-		margin: 0 0 var(--space-xs) calc(1em + var(--space-xs));
+		margin: 0 0 var(--space-xs) var(--space-lg);
 	}
 	.pick + .choice-error {
 		margin: var(--space-xs) 0 0;
