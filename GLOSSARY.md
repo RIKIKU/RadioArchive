@@ -191,7 +191,7 @@ One of three ways the server notices a recorder has stopped: disconnected (its c
 _Avoid_: Alarm, health check, status
 
 **Recorder notice**:
-What every listener sees once a recorder has been disconnected or deaf for a while: "Some talkgroups aren't being received right now". It names no recorder or talkgroup, and quiet never raises it.
+What every listener sees once a recorder has been disconnected or deaf for a while: "Some talkgroups aren't being received right now". It names no recorder or talkgroup, and quiet never raises it. A listener can put it away, and it goes by itself after 10 s; it shows again at the next outage.
 _Avoid_: Outage banner, recorder alert
 
 **Attachment**:

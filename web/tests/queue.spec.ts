@@ -198,7 +198,8 @@ test("@live A27: the recorder notice shows while a recorder is deaf, and clears 
 		await expect(page.getByText(NOTICE)).toBeVisible({ timeout: 20_000 });
 		// Above the dock, and naming nothing: no recorder, system or talkgroup.
 		const notice = page.locator('.notice-place');
-		await expect(notice).toHaveText(NOTICE);
+		await expect(notice.locator('p')).toHaveText(NOTICE);
+		await expect(notice.getByRole('button')).toHaveAccessibleName(`Dismiss: ${NOTICE}`);
 		const [n, d] = [await notice.boundingBox(), await dock(page).boundingBox()];
 		expect(n!.y + n!.height).toBeLessThanOrEqual(d!.y);
 	} finally {

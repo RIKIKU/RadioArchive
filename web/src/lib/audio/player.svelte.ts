@@ -93,6 +93,8 @@ export interface PlayerOptions {
 	isPriority?(t: TalkgroupKey): boolean;
 	/** Whether alert sounds are on in the playback settings (R48). */
 	alerts?(): boolean;
+	/** The server has said a feed notice is off (FeedHandlers.noticeOff; ADR 0050). */
+	noticeOff?(kind: NoticeKind): void;
 }
 
 /** How far ahead of now the first frame of a run is scheduled: room for the network's jitter. */
@@ -249,7 +251,8 @@ export class Player {
 			notice: (kind, on, message) => {
 				if (kind === 'too_many_live' && on && message) this.liveLimit = message;
 				if (this.notices[kind] !== on) this.notices = { ...this.notices, [kind]: on };
-			}
+			},
+			noticeOff: (kind) => this.#opts.noticeOff?.(kind)
 		});
 		this.#feed = feed;
 		feed.start(attachFeed(feed));
