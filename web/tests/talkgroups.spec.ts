@@ -110,32 +110,49 @@ function longNames(): Row[] {
 }
 
 /**
- * Words in the Tag and Groups cells broken across lines (#165): each word
- * of each cell, measured where it's drawn; a word on two lines has its
- * pieces at two heights.
+ * Words broken across lines (#165) in the headers and the Label, Tag and
+ * Groups cells: each word measured where it's drawn; a word on two lines
+ * has its pieces at two heights.
  */
 async function brokenWords(page: Page): Promise<string[]> {
-	return page.locator('main table tbody').evaluate((tbody) => {
-		const columns = [...tbody.closest('table')!.querySelectorAll('thead th')].map((th) => th.textContent!.trim());
+	return page.locator('main table').evaluate((table) => {
+		const heads = [...table.querySelectorAll('thead th')];
+		const columns = heads.map((th) => th.textContent!.trim());
 		const out: string[] = [];
-		for (const tr of tbody.querySelectorAll('tr')) {
-			for (const name of ['Tag', 'Groups']) {
-				const cell = tr.children[columns.indexOf(name)];
-				const value = cell.querySelector('.value') ?? cell;
-				const walk = document.createTreeWalker(value, NodeFilter.SHOW_TEXT);
-				for (let n = walk.nextNode(); n; n = walk.nextNode()) {
-					for (const m of n.textContent!.matchAll(/[^\s,]+/g)) {
-						const r = document.createRange();
-						r.setStart(n, m.index);
-						r.setEnd(n, m.index + m[0].length);
-						const tops = new Set([...r.getClientRects()].filter((x) => x.width > 0).map((x) => Math.round(x.top)));
-						if (tops.size > 1) out.push(`${name}: ${m[0]}`);
-					}
+		const check = (where: string, el: Element) => {
+			const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+			for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+				for (const m of n.textContent!.matchAll(/[^\s,]+/g)) {
+					const r = document.createRange();
+					r.setStart(n, m.index);
+					r.setEnd(n, m.index + m[0].length);
+					const tops = new Set([...r.getClientRects()].filter((x) => x.width > 0).map((x) => Math.round(x.top)));
+					if (tops.size > 1) out.push(`${where}: ${m[0]}`);
 				}
+			}
+		};
+		for (const th of heads) check('header', th);
+		for (const tr of table.querySelectorAll('tbody tr')) {
+			for (const name of ['Label', 'Tag', 'Groups']) {
+				const cell = tr.children[columns.indexOf(name)];
+				check(name, cell.querySelector('.value') ?? cell);
 			}
 		}
 		return out;
 	});
+}
+
+/** Each row's Edit and More actions are on the screen, not clipped at the page's edge (#113). */
+async function actionsOnScreen(page: Page) {
+	const off = await page.locator('main table tbody').evaluate((tbody) =>
+		[...tbody.querySelectorAll<HTMLElement>('td.actions button')]
+			.filter((b) => {
+				const r = b.getBoundingClientRect();
+				return r.width > 0 && (r.left < 0 || r.right > document.documentElement.clientWidth);
+			})
+			.map((b) => b.getAttribute('aria-label') ?? b.innerText)
+	);
+	expect(off).toEqual([]);
 }
 
 const rowsOf = (page: Page) => page.locator('main table tbody tr');
@@ -468,6 +485,7 @@ for (const look of looks)
 				await axe(page, width);
 				// A tag's and the groups' names break only at their spaces (#165).
 				expect(await brokenWords(page)).toEqual([]);
+				await actionsOnScreen(page);
 				await shot(page, `table-${tag}`);
 
 				// A row open for editing, with the server's refusal under its field.
@@ -523,8 +541,6 @@ for (const width of [1440, 1920])
 		await page.goto('/admin/talkgroups');
 		await expect(row(page, 4003)).toBeVisible();
 		expect(await brokenWords(page)).toEqual([]);
-		// The rows' own actions are still on the page, not clipped at its edge.
-		const edit = await page.getByRole('button', { name: 'Edit 4003 Ambulance Victoria Patient Transport Statewide' }).boundingBox();
-		expect(edit!.x + edit!.width).toBeLessThanOrEqual(width);
+		await actionsOnScreen(page);
 		expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
 	});

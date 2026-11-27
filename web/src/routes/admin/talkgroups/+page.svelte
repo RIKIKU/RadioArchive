@@ -108,7 +108,7 @@
 	const columns: Column[] = $derived([
 		{ key: 'id', label: 'TG', sortable: true, primary: true, custom: true, value: (r) => r.id },
 		...(several ? [{ key: 'system', label: 'System', sortable: true, value: (r: TableRow) => systemOf(r.system_id)?.label ?? String(r.system_id) }] : []),
-		{ key: 'label', label: 'Label', sortable: true },
+		{ key: 'label', label: 'Label', sortable: true, custom: true },
 		{ key: 'name', label: 'Name', sortable: true },
 		{ key: 'tag', label: 'Tag', sortable: true, custom: true },
 		{ key: 'groups', label: 'Groups', sortable: true, custom: true, value: (r) => r.groups.join(', ') },
@@ -306,8 +306,8 @@
 		{#snippet cell(t: TableRow, c: Column)}
 			{#if c.key === 'id'}
 				{t.id}
-			{:else if c.key === 'tag' || c.key === 'groups'}
-				<span class="words" class:groups={c.key === 'groups'}>{c.key === 'tag' ? (t.tag ?? '') : t.groups.join(', ')}</span>
+			{:else if c.key === 'label' || c.key === 'tag' || c.key === 'groups'}
+				<span class="words" class:groups={c.key === 'groups'}>{c.key === 'groups' ? t.groups.join(', ') : c.key === 'label' ? t.label : (t.tag ?? '')}</span>
 			{:else if c.key === 'state'}
 				<span class="badges">
 					<StateBadge state={t.state === 'public' ? 'ok' : 'neutral'} text={stateWords[t.state]} />
@@ -412,12 +412,13 @@
 		color: var(--muted);
 		font-size: var(--text-sm);
 	}
-	/* A tag's and the groups' names break only at their spaces (#165): the
-	   table's cells may break anywhere, so a long name in a crowded table
-	   came out as "Untagge|d". Each column is never narrower than its longest
-	   word. Only a single word longer than a field (a tag) or a wide field
-	   (the groups) still breaks, so the table never pushes the page wider
-	   (#113). */
+	/* A label, a tag and the groups' names break only at their spaces
+	   (#165): the table's cells may break anywhere, so a long name in a
+	   crowded table came out as "Untagge|d". Each column is never narrower
+	   than its longest word. Only a single word longer than a field (a label
+	   or a tag) or a wide field (the groups) still breaks, so the table never
+	   pushes the page wider (#113). Names stay as they were: they're long,
+	   and their column gives up its room first. */
 	.words {
 		display: inline-block;
 		max-inline-size: var(--field-narrow);
@@ -428,9 +429,10 @@
 	}
 	/* The room for them comes from the headers, which the table keeps on one
 	   line: here "Last heard" and "Calls (30 days)" may take two, at their
-	   spaces, when the table is short of room. */
+	   spaces only, when the table is short of room. */
 	.table-edge :global(thead th) {
 		white-space: normal;
+		overflow-wrap: normal;
 	}
 	.badges {
 		display: inline-flex;
