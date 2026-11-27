@@ -1,0 +1,16 @@
+{
+  "boot_id": 305419899,
+  "epoch_ms": 1764000400000,
+  "calls": {
+    "dropped": {"sys_num": 0, "call_num": 21, "start_time": 1764000400, "short_name": "ex", "talkgroup": 1001, "freq": 851012500},
+    "recorded": {"sys_num": 0, "call_num": 22, "start_time": 1764000401, "short_name": "ex", "talkgroup": 1001, "freq": 851025000}
+  },
+  "events": [
+    {"at_ms": 0, "type": "transmission", "call": "dropped", "unit": 5001},
+    {"at_ms": 0, "type": "audio", "call": "dropped", "unit": 5001, "pcm": "noise-bursts-500ms.pcm"},
+    {"at_ms": 1000, "type": "transmission", "call": "recorded", "unit": 5002},
+    {"at_ms": 1000, "type": "audio", "call": "recorded", "unit": 5002, "pcm": "noise-bursts-500ms.pcm"},
+    {"at_ms": 1200, "type": "call_withdraw", "call": "dropped", "reason": "no_transmissions"},
+    {"at_ms": 1600, "type": "call_end", "call": "recorded", "filename": "/app/media/ex/1001-1764000401_851025000.0-call_22.wav"}
+  ]
+}

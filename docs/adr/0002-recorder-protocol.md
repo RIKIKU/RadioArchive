@@ -17,7 +17,7 @@ trunk-recorder references are to the pinned release, [v5.2.1](https://github.com
 | **Plugin → client transport** | UDP to `127.0.0.1`, one datagram = one message, never more than 8,192 bytes. No fragmentation, no reassembly |
 | **Envelope** | 16-byte binary header: magic, protocol version, message type, boot ID, sequence number, payload length. Little-endian |
 | **Audio** | Binary payload: call identity, `shortName`, talkgroup, unit, frequency, TDMA slot, sample rate, then raw PCM (signed 16-bit little-endian, mono) |
-| **Control** | JSON payload in the same envelope: `transmission`, `call_end`, `heartbeat` |
+| **Control** | JSON payload in the same envelope: `transmission`, `call_end`, `heartbeat`, and `call_withdraw` since ADR 0053 |
 | **Loss** | Best effort. Large `SO_RCVBUF`, gaps counted from sequence numbers, no retransmission. The recording fills in what live audio missed |
 | **Client → server, live** | One WebSocket, `/api/v1/recorder/live`. Binary messages are Opus frames, text messages are JSON events and heartbeats |
 | **Client → server, recordings** | `POST /api/v1/recorder/recordings` over HTTPS, multipart (metadata JSON + Ogg/Opus). Idempotent by call identity, acknowledged with the server's SHA-256 of the file |
@@ -54,7 +54,7 @@ Every datagram starts with this header. All integers are **little-endian**.
 |---|---|---|---|
 | 0 | 2 | `magic` | `0x52 0x41` (ASCII `RA`) |
 | 2 | 1 | `version` | Protocol version, `1` |
-| 3 | 1 | `type` | `0x01` audio, `0x02` transmission, `0x03` call_end, `0x04` heartbeat |
+| 3 | 1 | `type` | `0x01` audio, `0x02` transmission, `0x03` call_end, `0x04` heartbeat, `0x05` call_withdraw (ADR 0053) |
 | 4 | 4 | `boot_id` | uint32, random, chosen when the plugin starts |
 | 8 | 4 | `seq` | uint32, one counter for every message the plugin sends, starting at 0, wrapping at 2³² |
 | 12 | 2 | `length` | uint16, payload length in bytes. `16 + length` must equal the datagram size |
@@ -138,6 +138,19 @@ The payload is one UTF-8 JSON object, at most 8,176 bytes. Unknown fields are ig
 
 `decode_rate` is control-channel messages per second over the last interval (`message_count / timeDiff`). `system_type` is trunk-recorder's (`p25`, `smartnet`, `conventional`, …) so the server can ignore the rate of a conventional system, which has no control channel (R14).
 
+**`call_withdraw` (0x05).** Added by ADR 0053 (plugin 0.2.0). Sent from `calls_active` when trunk-recorder has concluded a recorded call without a recording, so no `call_end` will come.
+
+```json
+{
+  "sys_num": 0, "call_num": 4183, "start_time": 1764000020, "short_name": "ex",
+  "talkgroup": 1003,
+  "time_ms": 1764000026500,
+  "reason": "no_transmissions"
+}
+```
+
+`reason` is `no_transmissions`, `too_short`, `superseded` or `encrypted`.
+
 ### What the client does with plugin messages
 
 - **Receive buffer.** The client asks for a large `SO_RCVBUF` (4 MB; the container sets `net.core.rmem_max` to allow it) and logs the size it actually got.
@@ -147,6 +160,7 @@ The payload is one UTF-8 JSON object, at most 8,176 bytes. Unknown fields are ig
 - **Supported sample rates** are 8,000 and 16,000 Hz. The Opus encoder for a call is created at the rate of its first packet, and libopus encodes narrowband from either.
 - **A new call** begins with the first audio packet or `transmission` for an identity the client hasn't seen. The client never needs a separate "call start" from the plugin.
 - **A lost `call_end`** isn't recovered: the call's recording never uploads, and the server's R19 alert (recording missing 10 minutes after the call ended) reports it. The client also ends a call's live audio after 30 s with no packets, without uploading anything.
+- **`call_withdraw`** ends the call's live audio, uploads nothing, and sends the server `call_end` with `"withdrawn": true` (ADR 0053).
 
 ## Patched calls (R16)
 
@@ -219,7 +233,7 @@ Frames carry only the identity. Talkgroup, `short_name` and the rest come from t
  "stop_time_ms": 1764000009870, "patched_talkgroups": [1002]}
 ```
 
-`call_end` ends the live call. The recording follows by upload.
+`call_end` ends the live call. The recording follows by upload. With `"withdrawn": true` (ADR 0053), none will: trunk-recorder concluded the call without one, and the server withdraws it.
 
 ```json
 {"type": "heartbeat", "client_version": "0.4.1", "time_ms": 1764000005000,

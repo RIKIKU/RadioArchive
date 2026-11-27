@@ -72,6 +72,7 @@ func TestRoundTrip(t *testing.T) {
 		rp.CallEnd{Identity: id, Talkgroup: 1001, StartTimeMS: 1, StopTimeMS: 2, Filename: "/a.wav", PatchedTalkgroups: []int32{},
 			Transmissions: []rp.CallEndTransmission{{Unit: 5001, StartTimeMS: 1, StopTimeMS: 2}}},
 		rp.Heartbeat{TimeMS: 3, PluginVersion: "0.1.0", Systems: []rp.SystemRate{{SysNum: 0, ShortName: "ex", SystemType: "p25", DecodeRate: 0}}},
+		rp.CallWithdraw{Identity: id, Talkgroup: 30583, TimeMS: 4, Reason: rp.WithdrawNoTransmissions},
 	}
 	for i, v := range ctrl {
 		b, err := rp.EncodeControl(9, uint32(i), v)
@@ -90,6 +91,8 @@ func TestRoundTrip(t *testing.T) {
 			got = *m.CallEnd
 		case m.Heartbeat != nil:
 			got = *m.Heartbeat
+		case m.CallWithdraw != nil:
+			got = *m.CallWithdraw
 		}
 		if !reflect.DeepEqual(got, v) {
 			t.Fatalf("%T\n got %+v\nwant %+v", v, got, v)
@@ -127,6 +130,7 @@ func TestMalformed(t *testing.T) {
 		{"missing identity", "identity", header(rp.TypeTransmission, []byte(`{"sys_num":0,"call_num":1,"short_name":"ex"}`))},
 		{"empty short_name", "identity", header(rp.TypeCallEnd, []byte(`{"sys_num":0,"call_num":1,"start_time":1,"short_name":""}`))},
 		{"wrong field type", "json", header(rp.TypeHeartbeat, []byte(`{"systems":"x"}`))},
+		{"withdraw missing identity", "identity", header(rp.TypeCallWithdraw, []byte(`{"sys_num":0,"call_num":1,"short_name":"ex"}`))},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -176,7 +180,7 @@ func FuzzDecode(f *testing.F) {
 	f.Add(header(rp.TypeHeartbeat, []byte(`{}`)))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		m, err := rp.Decode(b)
-		if err == nil && m.Audio == nil && m.Transmission == nil && m.CallEnd == nil && m.Heartbeat == nil {
+		if err == nil && m.Audio == nil && m.Transmission == nil && m.CallEnd == nil && m.Heartbeat == nil && m.CallWithdraw == nil {
 			t.Fatal("no error and no payload")
 		}
 	})

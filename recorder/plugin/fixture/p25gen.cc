@@ -30,6 +30,10 @@
 //         up when it concludes a call, not when it was made
 //         (call_concluder.cc:1079)
 //   16.0  call 2, talkgroup 1002 (patched with 1001): unit 5101, 16.2-18.4
+//   22.0  call 3, talkgroup 1003: granted to unit 5201 until 23.5, but the
+//         voice channel stays silent, so trunk-recorder records no
+//         transmissions and drops the call when it concludes it (~26.5)
+//         without a call_end: the plugin withdraws it (ADR 0053)
 //   28.0  end; trunk-recorder exits about 10 s later, when it notices the
 //         source has stopped
 //
@@ -77,6 +81,7 @@ constexpr int kSps = int(kSampleRate / kSymbolRate);  // 50 samples per symbol
 struct Tx {
   uint32_t unit;
   double start, end;  // seconds; voice frames are sent from start until end
+  bool voice = true;  // false: granted, but nothing on the voice channel
 };
 
 struct CallPlan {
@@ -88,6 +93,7 @@ struct CallPlan {
 const std::vector<CallPlan> kCalls = {
     {1001, 3.0, {{5001, 3.3, 6.2}, {5123, 6.9, 9.1}}},
     {1002, 16.0, {{5101, 16.2, 18.4}}},
+    {1003, 22.0, {{5201, 22.3, 23.5, false}}},
 };
 constexpr double kPatchFrom = 15.0;
 constexpr uint16_t kPatchSG = 1002, kPatchMember = 1001;
@@ -456,6 +462,7 @@ int main(int argc, char **argv) {
   double tone = 440;
   for (const CallPlan &call : kCalls) {
     for (const Tx &tx : call.txs) {
+      if (!tx.voice) continue;
       Voice voice(tone);
       tone += 220;
       size_t at = size_t(tx.start * kSymbolRate);

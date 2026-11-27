@@ -21,6 +21,7 @@ constexpr uint8_t kTypeAudio = 0x01;
 constexpr uint8_t kTypeTransmission = 0x02;
 constexpr uint8_t kTypeCallEnd = 0x03;
 constexpr uint8_t kTypeHeartbeat = 0x04;
+constexpr uint8_t kTypeCallWithdraw = 0x05;  // ADR 0053
 
 constexpr size_t kHeaderSize = 16;
 constexpr size_t kMaxDatagram = 8192;
@@ -88,8 +89,8 @@ inline std::vector<uint8_t> audio(uint32_t boot_id, uint32_t seq, const AudioHea
   return b;
 }
 
-// One control datagram (transmission, call_end or heartbeat) with a JSON
-// payload. Empty if the payload is over 8,176 bytes.
+// One control datagram (transmission, call_end, heartbeat or call_withdraw)
+// with a JSON payload. Empty if the payload is over 8,176 bytes.
 inline std::vector<uint8_t> control(uint8_t type, uint32_t boot_id, uint32_t seq, const std::string &json) {
   std::vector<uint8_t> b;
   if (json.size() > kMaxPayload) return b;

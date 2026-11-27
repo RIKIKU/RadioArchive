@@ -36,6 +36,9 @@ const (
 	TypeTransmission uint8 = 0x02
 	TypeCallEnd      uint8 = 0x03
 	TypeHeartbeat    uint8 = 0x04
+	// TypeCallWithdraw (ADR 0053) is new in plugin 0.2.0. A client from
+	// before it drops it as an unknown type, as ADR 0002 says.
+	TypeCallWithdraw uint8 = 0x05
 )
 
 // Audio payload limits.
@@ -109,6 +112,24 @@ type CallEnd struct {
 	Transmissions     []CallEndTransmission `json:"transmissions"`
 }
 
+// Reasons a call is withdrawn: how trunk-recorder dropped it when it
+// concluded it (ADR 0053).
+const (
+	WithdrawNoTransmissions = "no_transmissions"
+	WithdrawTooShort        = "too_short"
+	WithdrawSuperseded      = "superseded"
+	WithdrawEncrypted       = "encrypted"
+)
+
+// CallWithdraw says trunk-recorder concluded a call without a recording, so
+// no call_end will come for it (ADR 0053).
+type CallWithdraw struct {
+	Identity
+	Talkgroup int32  `json:"talkgroup"`
+	TimeMS    int64  `json:"time_ms"`
+	Reason    string `json:"reason"`
+}
+
 // SystemRate is one system's control-channel decode rate.
 type SystemRate struct {
 	SysNum     uint16  `json:"sys_num"`
@@ -131,6 +152,7 @@ type Message struct {
 	Transmission *Transmission
 	CallEnd      *CallEnd
 	Heartbeat    *Heartbeat
+	CallWithdraw *CallWithdraw
 }
 
 // DecodeError says why a datagram was rejected. Reason is a short, fixed
@@ -205,7 +227,7 @@ func EncodeAudio(bootID, seq uint32, a Audio) ([]byte, error) {
 }
 
 // EncodeControl returns one control datagram with v (a *Transmission,
-// *CallEnd or *Heartbeat, or the value) as its JSON payload.
+// *CallEnd, *Heartbeat or *CallWithdraw, or the value) as its JSON payload.
 func EncodeControl(bootID, seq uint32, v any) ([]byte, error) {
 	var typ uint8
 	switch v.(type) {
@@ -215,6 +237,8 @@ func EncodeControl(bootID, seq uint32, v any) ([]byte, error) {
 		typ = TypeCallEnd
 	case Heartbeat, *Heartbeat:
 		typ = TypeHeartbeat
+	case CallWithdraw, *CallWithdraw:
+		typ = TypeCallWithdraw
 	default:
 		return nil, fmt.Errorf("recorderproto: %T is not a control message", v)
 	}
@@ -282,6 +306,13 @@ func Decode(b []byte) (Message, error) {
 		err := decodeJSON(p, &hb, false)
 		if err == nil {
 			m.Heartbeat = &hb
+		}
+		return m, err
+	case TypeCallWithdraw:
+		var w CallWithdraw
+		err := decodeJSON(p, &w, true)
+		if err == nil {
+			m.CallWithdraw = &w
 		}
 		return m, err
 	default:
@@ -356,6 +387,8 @@ func decodeJSON(p []byte, v any, call bool) error {
 		case *Transmission:
 			id = &x.Identity
 		case *CallEnd:
+			id = &x.Identity
+		case *CallWithdraw:
 			id = &x.Identity
 		}
 		if id != nil && !validShortName(id.ShortName) {

@@ -56,10 +56,14 @@ type wantCall struct {
 	txs       []wantTx
 }
 
+// The calls trunk-recorder records. The fixture's third call, after them, is
+// granted but silent, and is withdrawn (checkWithdrawn).
 var wantCalls = []wantCall{
 	{talkgroup: 1001, patched: []int32{}, txs: []wantTx{{5001, 2.9}, {5123, 2.2}}},
 	{talkgroup: 1002, patched: []int32{1001}, txs: []wantTx{{5101, 2.2}}},
 }
+
+const silentTalkgroup, silentUnit = 1003, 5201
 
 // call collects one call's messages, in the order they arrived.
 type call struct {
@@ -69,6 +73,7 @@ type call struct {
 	samples       map[uint32]int
 	transmissions []*recorderproto.Transmission
 	end           *recorderproto.CallEnd
+	withdraw      *recorderproto.CallWithdraw
 }
 
 // The fixture's config as it is: audioArchive on, recordings kept where
@@ -89,6 +94,7 @@ func TestPluginAgainstP25Fixture(t *testing.T) {
 		wav := checkRecording(t, dir, calls[i], e)
 		compareCallJSON(t, fmt.Sprintf("call %d", e.CallNum), strings.TrimSuffix(wav, ".wav")+".json", e)
 	}
+	checkWithdrawn(t, dir, calls[len(wantCalls)])
 }
 
 // A recorder shared with another uploader (ADR 0045): audioArchive off, so
@@ -141,6 +147,7 @@ func TestPluginHandoffWithAudioArchiveOff(t *testing.T) {
 	if len(left) != 0 {
 		t.Errorf("trunk-recorder left its own WAVs with audioArchive off: %v", left)
 	}
+	checkWithdrawn(t, dir, calls[len(wantCalls)])
 	links, _ := os.ReadDir(filepath.Join(dir, "media", "handoff"))
 	if len(links) != len(wantCalls) {
 		t.Errorf("handoffDir holds %d files, want %d", len(links), len(wantCalls))
@@ -272,10 +279,44 @@ func checkRun(t *testing.T, msgs []recorderproto.Message) []*call {
 	checkEnvelope(t, msgs)
 	calls, heartbeats := group(t, msgs)
 	checkHeartbeats(t, heartbeats)
-	if len(calls) != len(wantCalls) {
-		t.Fatalf("got %d calls, want %d: %+v", len(calls), len(wantCalls), calls)
+	if len(calls) != len(wantCalls)+1 {
+		t.Fatalf("got %d calls, want %d: %+v", len(calls), len(wantCalls)+1, calls)
 	}
 	return calls
+}
+
+// checkWithdrawn checks the fixture's silent call (issue #185, ADR 0053):
+// trunk-recorder records no transmissions, so it drops the call when it
+// concludes it, without a recording or call_end, and the plugin withdraws
+// it instead.
+func checkWithdrawn(t *testing.T, dir string, c *call) {
+	t.Helper()
+	label := fmt.Sprintf("call %d (talkgroup %d, silent)", c.id.CallNum, silentTalkgroup)
+	if c.id.ShortName != shortName || c.id.SysNum != 0 || c.id.StartTime < 1_700_000_000 {
+		t.Errorf("%s: identity %+v", label, c.id)
+	}
+	if c.end != nil {
+		t.Errorf("%s: call_end %+v for a call with no transmissions", label, c.end)
+	}
+	if len(c.audio) != 0 {
+		t.Errorf("%s: %d audio packets from a silent channel", label, len(c.audio))
+	}
+	if want := []string{fmt.Sprintf("tx:%d", silentUnit), "withdraw"}; !slices.Equal(c.order, want) {
+		t.Errorf("%s: messages in the order %v, want %v", label, c.order, want)
+	}
+	w := c.withdraw
+	if w == nil {
+		t.Errorf("%s: no call_withdraw", label)
+		return
+	}
+	if w.Talkgroup != silentTalkgroup || w.Reason != recorderproto.WithdrawNoTransmissions || w.TimeMS/1000 < c.id.StartTime {
+		t.Errorf("%s: call_withdraw %+v", label, w)
+	}
+	log, _ := os.ReadFile(filepath.Join(dir, "trunk-recorder.log"))
+	if !strings.Contains(string(log), "No Transmissions were recorded!") ||
+		!strings.Contains(string(log), fmt.Sprintf("call %d on talkgroup %d was concluded without a recording (no_transmissions)", c.id.CallNum, silentTalkgroup)) {
+		t.Errorf("%s: trunk-recorder's log doesn't show the call dropped and withdrawn", label)
+	}
 }
 
 // checkRecording checks that the WAV call_end names exists, under the test's
@@ -408,6 +449,13 @@ func group(t *testing.T, msgs []recorderproto.Message) ([]*call, []*recorderprot
 			}
 			c.end = m.CallEnd
 			note(c, "end")
+		case m.CallWithdraw != nil:
+			c := find(m.CallWithdraw.Identity)
+			if c.withdraw != nil || c.end != nil {
+				t.Errorf("call %+v: call_withdraw after call_end or another call_withdraw", c.id)
+			}
+			c.withdraw = m.CallWithdraw
+			note(c, "withdraw")
 		case m.Heartbeat != nil:
 			heartbeats = append(heartbeats, m.Heartbeat)
 		}
@@ -423,7 +471,7 @@ func checkHeartbeats(t *testing.T, hbs []*recorderproto.Heartbeat) {
 	}
 	decoding := 0
 	for _, hb := range hbs {
-		if hb.PluginVersion != "0.1.0" {
+		if hb.PluginVersion != "0.2.0" {
 			t.Errorf("heartbeat plugin_version %q", hb.PluginVersion)
 		}
 		if len(hb.Systems) != 1 || hb.Systems[0].ShortName != shortName || hb.Systems[0].SystemType != "p25" || hb.Systems[0].SysNum != 0 {

@@ -9,7 +9,7 @@
 # gives build/libradioarchive.so. recorder/plugin/Dockerfile builds it against
 # the pinned release.
 cmake_minimum_required(VERSION 3.16)
-project(radioarchive_plugin LANGUAGES CXX VERSION 0.1.0)
+project(radioarchive_plugin LANGUAGES CXX VERSION 0.2.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

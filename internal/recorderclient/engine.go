@@ -170,6 +170,8 @@ func (e *engine) handle(b []byte) {
 		e.transmission(msg.Transmission)
 	case msg.CallEnd != nil:
 		e.callEnd(msg.CallEnd)
+	case msg.CallWithdraw != nil:
+		e.callWithdraw(msg.CallWithdraw)
 	case msg.Heartbeat != nil:
 		e.plugin, e.pluginBoot, e.pluginAt = msg.Heartbeat, msg.Header.BootID, e.now()
 	}
@@ -408,6 +410,39 @@ func (e *engine) callEnd(ce *rp.CallEnd) {
 			OffsetMS: max(0, t.StartTimeMS-ce.StartTimeMS), DurationMS: max(0, t.StopTimeMS-t.StartTimeMS)})
 	}
 	e.up.Enqueue(Recording{Meta: meta, WAV: ce.Filename, Queued: e.now()})
+}
+
+// callWithdraw ends a call trunk-recorder concluded without a recording
+// (ADR 0053): nothing is uploaded, and the server is told to withdraw it.
+// A call the client no longer holds (its live audio ended after 30 s idle,
+// or the client restarted) is still sent: the server may hold it, ended
+// and waiting for a recording, and withdraws it by its identity.
+func (e *engine) callWithdraw(w *rp.CallWithdraw) {
+	if _, ok := e.copies[w.Identity]; ok {
+		delete(e.copies, w.Identity) // a patch copy: nothing of it was sent
+		return
+	}
+	e.m.Inc(MetricWithdrawn, "reason", w.Reason)
+	stop := w.TimeMS
+	var patched []int32
+	if c := e.calls[w.Identity]; c != nil {
+		started := c.started
+		if !c.lastPacket.IsZero() {
+			stop = c.lastPacket.UnixMilli()
+		}
+		patched = c.patchedList()
+		e.finish(c)
+		if !started {
+			return // the server never heard of it
+		}
+	}
+	if patched == nil {
+		patched = []int32{}
+	}
+	id := cp.CallID{SysNum: w.SysNum, CallNum: w.CallNum, StartTime: w.StartTime}
+	e.live.SendText(cp.CallEnd{Type: cp.TypeCallEnd, CallID: id, StopTimeMS: stop, PatchedTalkgroups: patched, Withdrawn: true})
+	e.log.Info("trunk-recorder concluded a call without a recording; withdrawing it",
+		"sys_num", w.SysNum, "call_num", w.CallNum, "talkgroup", w.Talkgroup, "reason", w.Reason)
 }
 
 // tick ends the live audio of calls that have gone quiet (without an

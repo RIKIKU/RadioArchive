@@ -69,6 +69,7 @@ type Counters struct {
 	UnknownTypes     atomic.Uint64 // unknown text type or binary kind
 	ProtocolCloses   atomic.Uint64 // sockets closed with 1007 or 1008 for bad input
 	Revoked          atomic.Uint64 // sockets closed because their key was rotated or retired
+	Withdrawn        atomic.Uint64 // calls deleted because trunk-recorder concluded them without a recording (ADR 0053)
 	FramesRefused    atomic.Uint64 // frames of live calls refused by R12, R17 or R18
 	ClientsTooOld    atomic.Uint64 // live sockets and uploads refused with client_too_old (R6)
 	ClientsOutOfDate atomic.Uint64 // live sockets opened by a client one minor version behind (R6)

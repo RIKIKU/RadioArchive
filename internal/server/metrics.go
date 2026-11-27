@@ -95,6 +95,7 @@ func (rs *Recorders) Collect(ctx context.Context, w *telemetry.Writer) {
 		"frames_unstarted": c.FramesUnstarted.Load(), "unknown_types": c.UnknownTypes.Load(),
 		"protocol_closes": c.ProtocolCloses.Load(), "revoked": c.Revoked.Load(),
 		"bad_heartbeats": rs.Sig.BadHeartbeats.Load(), "signal_check_failed": rs.Sig.CheckFailed.Load(),
+		"calls_withdrawn": c.Withdrawn.Load(),
 	} {
 		w.Set(telemetry.RecorderErrors, float64(n), kind)
 	}

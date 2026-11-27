@@ -42,8 +42,10 @@ RUN cd /tr/trunk-recorder \
 
 FROM toolchain AS build
 COPY --from=source /image-include /usr/local/include/trunk-recorder
-COPY CMakeLists.txt wire.h radioarchive.cc /src/
-RUN cmake -S /src -B /build \
+COPY CMakeLists.txt wire.h conclusion.h conclusion_test.cc radioarchive.cc /src/
+# The plugin's own unit test (ADR 0053) runs first, so a failure fails the build.
+RUN g++ -std=c++17 -Wall -Wextra -o /tmp/conclusion_test /src/conclusion_test.cc && /tmp/conclusion_test \
+ && cmake -S /src -B /build \
  && cmake --build /build -j"$(nproc)" \
  && strip --strip-unneeded /build/libradioarchive.so
 

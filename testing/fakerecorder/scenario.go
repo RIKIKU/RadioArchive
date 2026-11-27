@@ -42,12 +42,13 @@ type Call struct {
 
 // Event types.
 const (
-	EventTransmission = "transmission" // a unit starts talking on a call
-	EventAudio        = "audio"        // a fixture file sent as the call's PCM, paced in real time
-	EventCallEnd      = "call_end"     // the recording is written
-	EventHeartbeat    = "heartbeat"    // system_rates
-	EventGap          = "gap"          // Count sequence numbers skipped, as if lost
-	EventMalformed    = "malformed"    // Hex sent as a raw datagram
+	EventTransmission = "transmission"  // a unit starts talking on a call
+	EventAudio        = "audio"         // a fixture file sent as the call's PCM, paced in real time
+	EventCallEnd      = "call_end"      // the recording is written
+	EventCallWithdraw = "call_withdraw" // concluded without a recording (ADR 0053)
+	EventHeartbeat    = "heartbeat"     // system_rates
+	EventGap          = "gap"           // Count sequence numbers skipped, as if lost
+	EventMalformed    = "malformed"     // Hex sent as a raw datagram
 )
 
 // Event is one step of a scenario.
@@ -65,6 +66,8 @@ type Event struct {
 	ChunkSamples int    `json:"chunk_samples,omitempty"` // default 800 (100 ms at 8 kHz)
 	// call_end
 	Filename string `json:"filename,omitempty"`
+	// call_withdraw
+	Reason string `json:"reason,omitempty"`
 	// heartbeat
 	Systems []rp.SystemRate `json:"systems,omitempty"`
 	// gap
@@ -97,7 +100,7 @@ func LoadScenario(r io.Reader) (*Scenario, error) {
 			return nil, fmt.Errorf("fakerecorder: event %d: negative at_ms", i)
 		}
 		switch e.Type {
-		case EventTransmission, EventAudio, EventCallEnd:
+		case EventTransmission, EventAudio, EventCallEnd, EventCallWithdraw:
 			if _, ok := s.Calls[e.Call]; !ok {
 				return nil, fmt.Errorf("fakerecorder: event %d (%s): unknown call %q", i, e.Type, e.Call)
 			}
@@ -216,6 +219,13 @@ func Plan(s *Scenario, fixtures fs.FS) ([]Send, error) {
 				PatchedTalkgroups: nonNil(union(cs.patched, e.PatchedTalkgroups)),
 				Filename:          e.Filename, Transmissions: nonNilTx(txs)}
 			ps = append(ps, pending{at: e.AtMS, order: order, build: control(s.BootID, ce), call: e.Call})
+		case EventCallWithdraw:
+			reason := e.Reason
+			if reason == "" {
+				reason = rp.WithdrawNoTransmissions
+			}
+			w := rp.CallWithdraw{Identity: id, Talkgroup: c.Talkgroup, TimeMS: s.EpochMS + e.AtMS, Reason: reason}
+			ps = append(ps, pending{at: e.AtMS, order: order, build: control(s.BootID, w), call: e.Call})
 		case EventHeartbeat:
 			hb := rp.Heartbeat{TimeMS: s.EpochMS + e.AtMS, PluginVersion: "fake", Systems: e.Systems}
 			if hb.Systems == nil {
