@@ -14,6 +14,8 @@
 //   before hold was switched on stay queued and play once it's off (nothing
 //   is dropped automatically, R43); calls that start on other talkgroups
 //   while it's on aren't queued at all (A9).
+// - Turning a talkgroup off takes its calls out of the queue (ADR 0054):
+//   heardBy says whether the set still hears a call.
 
 /** What the rules need to know of a call. */
 export interface QueuedCall {
@@ -46,6 +48,24 @@ export function heldThrough(c: QueuedCall, held: TalkgroupKey | undefined): bool
 	if (!held) return true;
 	if (held.system !== undefined && c.system && c.system.id !== held.system) return false;
 	return talkgroupsOf(c).some((t) => t.id === held.id);
+}
+
+/**
+ * Whether a talkgroup is in a set as the live feed is sent it (ADR 0007):
+ * an entry with no system names that ID in any system, and a talkgroup
+ * with no system is the one system's.
+ */
+export function keyIn(t: TalkgroupKey, set: readonly TalkgroupKey[]): boolean {
+	return set.some((k) => k.id === t.id && (k.system === undefined || t.system === undefined || k.system === t.system));
+}
+
+/**
+ * Whether the set hears a call: any talkgroup of its patch is in it, as
+ * the live feed decides what to send (A4). A call none of whose
+ * talkgroups is in it any more leaves the queue (ADR 0054).
+ */
+export function heardBy(c: QueuedCall, set: readonly TalkgroupKey[]): boolean {
+	return talkgroupsOf(c).some((t) => keyIn(t, set));
 }
 
 /** Start time, then the order they came in. */

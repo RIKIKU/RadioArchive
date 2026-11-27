@@ -12,6 +12,8 @@
 	import { AccountMenu, BottomBar, Frame, Menu } from 'archiveux/components';
 	import { onDestroy, onMount } from 'svelte';
 	import { Player } from '#lib/audio/player.svelte.ts';
+	import { Avoid } from '#lib/audio/avoid.svelte.ts';
+	import AvoidToast from '#lib/audio/AvoidToast.svelte';
 	import Dock from '#lib/audio/Dock.svelte';
 	import NowPlaying from '#lib/audio/NowPlaying.svelte';
 	import { providePlayer } from '#lib/audio/context.ts';
@@ -63,6 +65,9 @@
 		player.replay.stop();
 	});
 	providePlayer(player);
+	// Avoid (ADR 0054): the dock's button, and its toast with Undo in the
+	// notice place.
+	const avoid = new Avoid(player, listening);
 
 	function chooseAlerts(on: boolean) {
 		alerts = on;
@@ -168,7 +173,7 @@
 <Frame dockLabel="Player">
 	{#snippet menu()}<Menu {brand} current={page.url.pathname} {top} {groups} open={opened} ontoggle={(id, was) => (opened = { ...opened, [id]: !was })} />{/snippet}
 	{#snippet start()}<a class="brand" href="/">RadioArchive</a>{/snippet}
-	{#snippet dock()}<Dock {player} />{/snippet}
+	{#snippet dock()}<Dock {player} {avoid} />{/snippet}
 	{#snippet notices()}
 		<!-- The live feed's notices (R15, R81), above the dock, while they're
 		     on, each announced once as it comes. The recorder notice can be put
@@ -180,6 +185,8 @@
 			<!-- A refused socket (R71; ADR 0037, 0039): the feed tries again by itself. -->
 			{#if player.notices.radio_full}<p class="feed-notice limit">The radio is full right now. Trying again…</p>{/if}
 			{#if player.notices.too_many_live}<p class="feed-notice limit">{tryingAgain(player.liveLimit)}</p>{/if}
+			<!-- Avoid's toast (ADR 0054), a fresh one for each press. -->
+			{#if avoid.toast}{#key avoid.toast.n}<AvoidToast name={avoid.toast.name} onundo={() => avoid.undo()} ondismiss={() => avoid.dismiss()} />{/key}{/if}
 		</div>
 	{/snippet}
 	{#snippet account()}

@@ -31,6 +31,12 @@ function write(storage: () => Storage, key: string, entries: Entry[]) {
 	}
 }
 
+/** A talkgroup Avoid turned off (ADR 0054): its entry, priority mark and all, and where it was on. */
+export interface Avoided {
+	entry: Entry;
+	from: 'set' | 'session';
+}
+
 const local = () => localStorage;
 const session = () => sessionStorage;
 
@@ -160,6 +166,45 @@ export class ListeningState {
 			this.#saveSession();
 		}
 		return 'added';
+	}
+
+	/**
+	 * Turns one talkgroup off wherever it's on (Avoid, ADR 0054): out of the
+	 * set, as a chip's tap does, or out of the session's additions. Says
+	 * what it was, priority mark and all, for Undo; undefined if it was in
+	 * neither (a call heard only through a patch).
+	 */
+	turnOff(t: { system?: number; id: number }): Avoided | undefined {
+		const k = keyOf(t);
+		const inSet = this.saved.find((e) => keyOf(e) === k);
+		if (inSet) {
+			this.saved = this.saved.filter((e) => keyOf(e) !== k);
+			this.#saveSet();
+			return { entry: inSet, from: 'set' };
+		}
+		const added = this.session.find((e) => keyOf(e) === k);
+		if (!added) return undefined;
+		this.session = this.session.filter((e) => keyOf(e) !== k);
+		this.#saveSession();
+		return { entry: added, from: 'session' };
+	}
+
+	/** Undo of turnOff: the talkgroup is back where it was, with its priority mark. */
+	turnBackOn(a: Avoided) {
+		const k = keyOf(a.entry);
+		if (a.from === 'set') {
+			if (!this.saved.some((e) => keyOf(e) === k)) {
+				this.saved = [...this.saved, a.entry];
+				this.#saveSet();
+			}
+			if (this.session.some((e) => keyOf(e) === k)) {
+				this.session = this.session.filter((e) => keyOf(e) !== k);
+				this.#saveSession();
+			}
+		} else if (!this.saved.some((e) => keyOf(e) === k) && !this.session.some((e) => keyOf(e) === k)) {
+			this.session = [...this.session, a.entry];
+			this.#saveSession();
+		}
 	}
 
 	/** Keeps a talkgroup added for the session: it joins the set (R47). */

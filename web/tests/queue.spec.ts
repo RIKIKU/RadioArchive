@@ -10,7 +10,7 @@
 // scripts/ci/e2e-web.sh runs these with the playback tests, one at a time.
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { display, dock, firstOf, heard, listen, playedFrom, recorderDeaf, seconds, sendCalls, setTalkgroup, tone } from './live.ts';
+import { display, dock, firstOf, heard, listen, playedFrom, recorderDeaf, seconds, sendCalls, setTalkgroup, stopListening, tone } from './live.ts';
 
 const NOTICE = "Some talkgroups aren't being received right now.";
 const queued = (page: Page) => display(page).locator('.queued');
@@ -328,7 +328,7 @@ test('@live the dock playing, with a queue, with hold on and with the recorder n
 
 		heardAgain();
 		heardAgain = undefined;
-		await dock(page).getByRole('button', { name: 'Stop listening' }).click();
+		await stopListening(page);
 		await sending;
 	} finally {
 		heardAgain?.();

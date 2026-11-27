@@ -7,7 +7,7 @@
 // with the fixture's command. scripts/ci/e2e-web.sh runs these with the
 // playback tests, one at a time.
 import { test, expect, type Page } from '@playwright/test';
-import { audible, display, dock, env, heard, listen, playedFrom, seconds, sendCalls, setTalkgroup, waiting } from './live.ts';
+import { audible, display, dock, env, heard, listen, playedFrom, seconds, sendCalls, setTalkgroup, stopListening, waiting } from './live.ts';
 import { execFile } from 'node:child_process';
 import AxeBuilder from '@axe-core/playwright';
 
@@ -238,7 +238,7 @@ test('@live R46: play from here plays the call, then the later ones oldest first
 		expect(u.searchParams.get('from')).toBe(aStart);
 	}
 	expect(asked.slice(1).every((u) => u.searchParams.get('cursor'))).toBe(true);
-	await dock(page).getByRole('button', { name: 'Stop listening' }).click();
+	await stopListening(page);
 });
 
 test('@live R46: a call replays with live listening never started, and starting it stops the replay', async ({ page }) => {
