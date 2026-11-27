@@ -65,7 +65,7 @@
 	}}
 >
 	<p>Avoided <span class="tg">{name}</span><span class="sep" aria-hidden="true">·</span></p>
-	<button type="button" class="ghost undo" onclick={onundo}>Undo<span class="visually-hidden">{`: turn ${name} back on`}</span></button>
+	<button type="button" class="ghost undo" aria-label="Undo: turn {name} back on" onclick={onundo}>Undo</button>
 	{#key round}<span class="countdown" class:held style:animation-duration="{AVOID_SECONDS}s" aria-hidden="true"></span>{/key}
 </div>
 
