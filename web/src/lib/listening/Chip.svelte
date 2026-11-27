@@ -122,13 +122,12 @@
 		<span class="mark" aria-hidden="true"></span>
 		<span class="what">
 			<span class="name">{talkgroup.name}</span>
-			{#if label || note || !on}
-				<span class="meta">
-					{#if label}<span>{label}</span>{/if}
-					{#if !on}<span class="off">Off</span>{/if}
-					{#if note}<span>{note}</span>{/if}
-				</span>
-			{/if}
+			<!-- Many talkgroups share a name, so the label, or else the number, always shows. -->
+			<span class="meta">
+				<span>{label || `TG ${talkgroup.id}`}</span>
+				{#if !on}<span class="off">Off</span>{/if}
+				{#if note}<span>{note}</span>{/if}
+			</span>
 		</span>
 	</button>
 	<button type="button" class="star" aria-pressed={priority ? 'true' : 'false'} aria-label="Priority: {talkgroup.name}" title={priority ? 'Priority (click to take off)' : 'Make priority'} onclick={star}
@@ -169,8 +168,11 @@
 		background: transparent;
 		color: inherit;
 	}
-	.chip button:hover {
-		background: var(--hover);
+	/* Hover only where there's a pointer that hovers: a tap leaves it stuck on a phone. */
+	@media (hover: hover) {
+		.chip button:hover {
+			background: var(--hover);
+		}
 	}
 	.chip button:active {
 		background: transparent;
