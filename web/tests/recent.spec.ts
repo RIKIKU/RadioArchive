@@ -303,6 +303,117 @@ test('phones: a row is Play, the call and More actions on one line; More actions
 	await expect(a.add).toHaveAttribute('aria-pressed', 'true');
 });
 
+/**
+ * Whether each call's words have room (#173): every word of its title and
+ * details is drawn on one line, its title is at least a wide field wide,
+ * and its actions are all on the screen.
+ */
+async function callsHaveRoom(page: Page, what: string) {
+	// The page's own width: a phone's Desktop site is wider than its screen.
+	const width = await page.evaluate(() => innerWidth);
+	const got = await list(page).evaluate((ul) => {
+		const out: string[] = [];
+		// A wide field's width (ArchiveUx's --field-wide), as this look sets it.
+		const probe = document.createElement('div');
+		probe.style.width = 'var(--field-wide)';
+		ul.append(probe);
+		const wide = probe.getBoundingClientRect().width;
+		probe.remove();
+		for (const li of ul.querySelectorAll('li.row')) {
+			const box = li.querySelector('.what')!.getBoundingClientRect();
+			if (box.width < wide - 1) out.push(`${li.querySelector('.tg')!.textContent}: ${Math.round(box.width)} px for the call`);
+			for (const p of li.querySelectorAll('.name, .meta')) {
+				const walk = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+				for (let n = walk.nextNode(); n; n = walk.nextNode())
+					for (const m of n.textContent!.matchAll(/\S+/g)) {
+						const r = document.createRange();
+						r.setStart(n, m.index);
+						r.setEnd(n, m.index + m[0].length);
+						const tops = new Set([...r.getClientRects()].filter((x) => x.width > 0).map((x) => Math.round(x.top)));
+						if (tops.size > 1) out.push(`"${m[0]}" broken`);
+					}
+			}
+			for (const a of li.querySelectorAll<HTMLElement>('.actions > *')) {
+				const r = a.getBoundingClientRect();
+				if (r.width > 0 && (r.left < 0 || r.right > innerWidth)) out.push(`${a.innerText.trim()} off the screen`);
+			}
+		}
+		return [...new Set(out)];
+	});
+	expect(got, what).toEqual([]);
+	expect(await page.evaluate(() => document.documentElement.scrollWidth), `${what} scrolls sideways`).toBeLessThanOrEqual(width);
+}
+
+// Chrome's Desktop site on a phone (#173) lays the page out about 980 px
+// wide; every width from the phone layout's end up to a full desktop keeps
+// each call's title readable.
+for (const width of [768, 980, 1024, 1280])
+	test(`#173: at ${width} px each call's title and details have room beside or above its actions, in both looks`, async ({ page }, info) => {
+		test.setTimeout(3 * 60_000);
+		const shots = process.env.RA_SHOTS && info.project.name === 'chromium' ? process.env.RA_SHOTS : '';
+		await withSet(page, [{ id: 1001 }, { id: 1002 }]);
+		await page.setViewportSize({ width, height: 900 });
+		await page.goto('/recent');
+		await expect(rows(page)).toHaveCount(50);
+		await expect(rows(page).filter({ has: page.locator('.from-here') }).first().getByRole('button', { name: /^Play from here: / })).toBeVisible();
+		// The look sets the sizes; the theme only the colours, which axe
+		// checks in each theme of the harbour look (the full axe test below
+		// covers the rest at 375 and 1,280 px).
+		for (const [look, theme] of [['harbour', 'light'], ['harbour', 'dark'], ['console', 'light']]) {
+			await page.evaluate(
+				([l, t]) => {
+					const d = document.documentElement.dataset;
+					if (l === 'console') d.look = l;
+					else delete d.look;
+					d.theme = t;
+				},
+				[look, theme]
+			);
+			if (shots && look === 'harbour') {
+				await page.mouse.move(0, 0);
+				await page.screenshot({ path: `${shots}/recent-rows-${theme}-${width}.png` });
+			}
+			await callsHaveRoom(page, `${look} ${theme}, ${width} px`);
+			if (look === 'harbour') {
+				const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+				expect(results.violations, `${look} ${theme}, ${width} px`).toEqual([]);
+			}
+		}
+	});
+
+test("#173: a phone with Chrome's Desktop site: a desktop's page about 980 px wide, each call's title readable", async ({ browser, baseURL }, info) => {
+	// Firefox has no phone to emulate; Chromium's is the one the issue found.
+	test.skip(info.project.name === 'firefox', "Playwright's Firefox can't emulate a phone");
+	const shots = process.env.RA_SHOTS && info.project.name === 'chromium' ? process.env.RA_SHOTS : '';
+	// Desktop site: a desktop's user agent, and the page's viewport tag
+	// ignored, so the phone lays the page out at its default 980 px.
+	const context = await browser.newContext({
+		baseURL,
+		viewport: { width: 412, height: 915 },
+		deviceScaleFactor: 2.625,
+		isMobile: true,
+		hasTouch: true,
+		userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
+	});
+	const page = await context.newPage();
+	await page.route('**/*', async (route) => {
+		if (route.request().resourceType() !== 'document') return route.fallback();
+		const r = await route.fetch();
+		await route.fulfill({ response: r, body: (await r.text()).replace(/<meta name="viewport"[^>]*>/, '') });
+	});
+	await withSet(page, [{ id: 1001 }, { id: 1002 }]);
+	await page.goto('/recent');
+	await expect(rows(page)).toHaveCount(50);
+	expect(await page.evaluate(() => innerWidth)).toBeGreaterThanOrEqual(960);
+	await expect(rows(page).filter({ has: page.locator('.from-here') }).first().getByRole('button', { name: /^Play from here: / })).toBeVisible();
+	for (const theme of ['light', 'dark']) {
+		await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
+		if (shots) await page.screenshot({ path: `${shots}/recent-desktop-site-${theme}.png` });
+		await callsHaveRoom(page, `Desktop site, ${theme}`);
+	}
+	await context.close();
+});
+
 test("A17, browser half: Download on a row saves the stored file under R63's name", async ({ page }) => {
 	await withSet(page);
 	await page.goto('/recent?unit=2099');

@@ -268,9 +268,14 @@
 		padding: 0;
 		border-top: var(--border-width) solid var(--border);
 	}
-	/* ArchiveUx's page rows: plain, a divider below. */
+	/* ArchiveUx's page rows: plain, a divider below. Where the row's actions
+	   would leave the call less than a wide field's width (a desktop page
+	   about 1,000 px wide, as Chrome's Desktop site gives a phone), they go
+	   under the call, at the row's end, rather than squeezing its title into
+	   a few letters (#173). */
 	.row {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-xs) var(--space-md);
 		padding: var(--row-pad-y) var(--row-pad-end) var(--row-pad-y) var(--row-pad-x);
@@ -289,7 +294,7 @@
 		padding: 0;
 	}
 	.what {
-		flex: 1 1 auto;
+		flex: 1 1 var(--field-wide);
 		min-width: 0;
 	}
 	.what p {
@@ -341,7 +346,10 @@
 		display: flex;
 		flex: none;
 		flex-wrap: wrap;
+		justify-content: flex-end;
 		gap: var(--space-xs);
+		max-width: 100%;
+		margin-left: auto;
 	}
 	/* Desktops: no More actions; the actions sit in the row. */
 	.overflow {
