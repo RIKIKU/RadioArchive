@@ -12,6 +12,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { Player } from '#lib/audio/player.svelte.ts';
 	import Dock from '#lib/audio/Dock.svelte';
+	import NowPlaying from '#lib/audio/NowPlaying.svelte';
 	import { providePlayer } from '#lib/audio/context.ts';
 	import { keyOf } from '#lib/listening/set.ts';
 	import { page } from '$app/state';
@@ -201,6 +202,14 @@
 		</AccountMenu>
 	{/snippet}
 	{#snippet bottomBar()}<BottomBar entries={bar} {groups} current={page.url.pathname} />{/snippet}
+
+	<!-- Now playing at the top (POC): the whole display on the Listen page,
+	     idle when not listening; a slim line on the others while listening. -->
+	{#if page.url.pathname === '/'}
+		<NowPlaying {player} />
+	{:else if player.phase !== 'stopped'}
+		<NowPlaying {player} variant="slim" />
+	{/if}
 
 	{#if notice === 'signin-failed'}
 		<p class="alert" role="alert">Couldn't sign you in. Try again from the account menu. Listening works as before.</p>

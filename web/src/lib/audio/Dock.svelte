@@ -3,6 +3,11 @@
 	// ArchiveUx's frame dock: Start listening, then now playing and the
 	// controls.
 	//
+	// POC: live listening's now playing has moved to the top of the page
+	// (NowPlaying.svelte); the dock keeps its controls, and the line below
+	// them only while Catch up, Previous's count or an action's result
+	// shows. What follows describes main's dock.
+	//
 	// Now playing: the LED colour mark beside the talkgroup's name (never the
 	// only cue: the name is there), its group, the transmitting unit's alias
 	// or ID (updated per transmission), the system only when there are
@@ -32,7 +37,7 @@
 	// its name beside its controls and the rest under both, then
 	// live listening, its status in a line above its controls. On a desktop
 	// the two sit side by side, as before (the wrapper isn't drawn there).
-	import { Icon, LiveBadge, MoreActions } from 'archiveux/components';
+	import { Icon, MoreActions } from 'archiveux/components';
 	import { LIVE_WITHIN } from 'archiveux/live.js';
 	import type { Player, CallInfo } from './player.svelte.ts';
 	import { dockIcons } from './icons.ts';
@@ -131,48 +136,15 @@
 	</div>
 {:else}
 	<div class="player" data-decoder={player.path ?? ''} data-hold={player.hold ? 'on' : 'off'} data-paused={player.paused ? 'yes' : 'no'}>
-		<div class="now">
-			{#if c}
-				<div class="what" aria-live="polite">
-					<p class="np-name">
-						{#if c.talkgroup.led_colour}<span class="led" data-led={c.talkgroup.led_colour} aria-hidden="true"></span>{/if}
-						<span class="tg">{c.talkgroup.name}</span>{#if c.talkgroup.groups?.[0]}<span class="group">{c.talkgroup.groups[0]}</span>{/if}
-					</p>
-					<p class="meta np-unit">
-						<span class="unit">{unitOf(c)}</span>{#if c.system}<span class="sep" aria-hidden="true">·</span><span class="system">{c.system.name}</span>{/if}
-					</p>
-				</div>
-				<div class="where">
-					{#if c.delayMinutes}
-						<LiveBadge delay={c.delayMinutes} />
-					{:else}
-						<LiveBadge behind={player.position.behind} />
-					{/if}
-					<span class="meta elapsed"><span class="visually-hidden">{'Duration so far '}</span>{clock(player.position.elapsed)}</span>
-				</div>
-			{:else}
-				<p class="status" aria-live="polite">
-					{#if player.phase === 'starting' || !player.connected}
-						Connecting…
-					{:else if player.paused}
-						Paused. Calls keep queuing.
-					{:else if player.hold}
-						Waiting for {player.hold.talkgroup.name}.
-					{:else if player.last}
-						Listening. Last call: {player.last.talkgroup.name}, {unitOf(player.last)}.
-					{:else}
-						Listening. Calls play here as they come in.
-					{/if}
-				</p>
-			{/if}
+		<!-- POC: what's playing is at the top of the page now (NowPlaying.svelte);
+		     the dock keeps the controls, and a line only for what comes and goes. -->
+		{#if behind || player.stepsBack || said?.where === 'player'}
 			<p class="meta queue">
-				<span class="queued">{queuedText}</span>
-				{#if behind}<span class="sep" aria-hidden="true">·</span><button type="button" class="ghost catch-up" onclick={() => player.catchUp()}>Catch up<span class="visually-hidden"> to live</span></button>{/if}
-				{#if player.hold}<span class="hold-on"><Icon svg={dockIcons.hold} />Hold on: {player.hold.talkgroup.name} only</span>{/if}
+				{#if behind}<span class="queued">{queuedText}</span><span class="sep" aria-hidden="true">·</span><button type="button" class="ghost catch-up" onclick={() => player.catchUp()}>Catch up<span class="visually-hidden"> to live</span></button>{/if}
 				{#if player.stepsBack}<span class="said" role="status">Back {player.stepsBack} {player.stepsBack === 1 ? 'call' : 'calls'}…</span>{/if}
 				{#if said?.where === 'player'}<span class="said" role="status">{said.text}</span>{/if}
 			</p>
-		</div>
+		{/if}
 		<div class="bar">
 			<div class="controls" role="group" aria-label="Player controls">
 				{#if player.paused}
@@ -241,15 +213,7 @@
 	.start {
 		gap: var(--space-xs);
 	}
-	.now {
-		display: flex;
-		flex: 1 1 var(--field-wide);
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--space-2xs) var(--space-md);
-		min-width: 0;
-	}
-	.now p {
+	.queue {
 		margin: 0;
 	}
 	.what {
@@ -277,17 +241,8 @@
 		flex-wrap: wrap;
 		gap: 0 var(--space-xs);
 	}
-	.where {
-		display: flex;
-		align-items: center;
-		gap: var(--space-sm);
-	}
 	.elapsed {
 		font-variant-numeric: tabular-nums;
-	}
-	.status {
-		flex: 1 1 auto;
-		padding: 0;
 	}
 	.queue {
 		display: flex;
@@ -295,16 +250,6 @@
 		align-items: center;
 		gap: var(--space-2xs) var(--space-sm);
 		flex-basis: 100%;
-	}
-	.hold-on {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--space-2xs);
-		padding: var(--badge-pad-y) var(--badge-pad-x);
-		border-radius: var(--radius-badge);
-		background: var(--accent-soft);
-		color: var(--accent-soft-fg);
-		font-weight: var(--weight-strong);
 	}
 	.meta {
 		color: var(--muted);
@@ -520,13 +465,6 @@
 		   line, then its controls. */
 		.replaying .player {
 			gap: var(--space-xs);
-		}
-		.replaying .now {
-			gap: 0 var(--space-sm);
-		}
-		.replaying .status {
-			flex: 0 1 auto;
-			font-size: var(--text-sm);
 		}
 		.replaying .queue {
 			flex-basis: auto;

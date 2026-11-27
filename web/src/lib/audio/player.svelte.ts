@@ -195,6 +195,25 @@ export class Player {
 	canPrevious = $state(false);
 	/** How many steps back the presses still settling have asked for. */
 	stepsBack = $state(0);
+	/** The last few calls heard, newest first (POC: the Listen page's recent rows). */
+	recent: { seq: number; info: CallInfo }[] = $state([]);
+
+	#recentNow() {
+		this.recent = this.#history
+			.slice(-6)
+			.reverse()
+			.map((h) => ({ seq: h.seq, info: h.info }));
+	}
+
+	/** POC: plays a call from the history straight away, as Previous does when its presses settle on it. */
+	playHeard(seq: number) {
+		if (this.phase !== 'listening' || !this.#history.some((h) => h.seq === seq)) return;
+		clearTimeout(this.#settle);
+		this.#settle = undefined;
+		this.#cursor = seq;
+		this.stepsBack = 0;
+		this.#goBack();
+	}
 
 	constructor(opts: PlayerOptions = {}) {
 		this.#opts = opts;
@@ -522,11 +541,13 @@ export class Player {
 			const old = this.#history.shift()!;
 			if (this.#onAir.get(old.info.callId) === old) this.#onAir.delete(old.info.callId);
 		}
+		this.#recentNow();
 	}
 
 	/** A withdrawn call (R31) leaves the history: Previous never plays it. */
 	#unremember(id: string) {
 		this.#history = this.#history.filter((h) => h.info.callId !== id);
+		this.#recentNow();
 		this.#onAir.delete(id);
 	}
 
