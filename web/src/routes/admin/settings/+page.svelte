@@ -398,7 +398,7 @@
 			{#if quiet.systems.some((s) => !s.full)}
 				<p class="meta export">{`Nothing of a system is quiet until it has received for a whole window: ${quiet.systems.map((s) => `${s.label}, ${receivedWords(s, quiet!.window_days)}`).join('; ')}.`}</p>
 			{/if}
-			<p class="audit-status" role="status">{quietStatus}</p>
+			<p class="quiet-status" role="status">{quietStatus}</p>
 		{/if}
 
 		<h2>Setup export</h2>
@@ -425,11 +425,13 @@
 		width: var(--field-narrow);
 	}
 	.status,
-	.audit-status {
+	.audit-status,
+	.quiet-status {
 		margin: var(--space-sm) 0 var(--space-xl);
 	}
 	.status:empty,
-	.audit-status:empty {
+	.audit-status:empty,
+	.quiet-status:empty {
 		display: none;
 	}
 </style>
