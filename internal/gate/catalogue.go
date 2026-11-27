@@ -40,6 +40,8 @@ type CatalogueTalkgroup struct {
 	Alert        string
 	DelayMinutes int32
 	Fireground   *int32
+	// AlwaysShow: it, or its tag, is never quiet (R115).
+	AlwaysShow bool
 }
 
 // Catalogue is every public talkgroup, at one generation. It never changes;
@@ -160,7 +162,8 @@ func catalogueOf(gen int64, rows []db.GateCatalogueRow) (*Catalogue, error) {
 		}
 		t := CatalogueTalkgroup{System: sys, ID: r.TalkgroupID, Label: r.Label,
 			Name: displayName(r.TalkgroupID, r.Name, r.Label), Tag: deref(r.Tag),
-			Groups: make([]string, 0, len(gs)), DelayMinutes: r.DelayMinutes, Fireground: r.FiregroundChannel}
+			Groups: make([]string, 0, len(gs)), DelayMinutes: r.DelayMinutes, Fireground: r.FiregroundChannel,
+			AlwaysShow: r.AlwaysShow}
 		if r.Tag != nil {
 			tags[*r.Tag] = deref32(r.TagSortOrder)
 		}

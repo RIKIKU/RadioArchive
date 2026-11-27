@@ -16,10 +16,17 @@
 	// its one search (ADR 0051).
 	let { ix, listening, children }: { ix: Index; listening: ListeningState; children?: Snippet } = $props();
 
+	// Quiet talkgroups (R114; ADR 0054) aren't counted or shown, and a
+	// tile whose talkgroups are all quiet isn't drawn. A tap still switches
+	// the whole tile, quiet ones too, so a quiet talkgroup that comes back
+	// is on or off with its agency or category.
 	interface Tile {
 		id: string;
 		name: string;
+		/** Those shown: not quiet. */
 		talkgroups: Talkgroup[];
+		/** Every talkgroup in it, quiet ones too: what a tap switches. */
+		every: Talkgroup[];
 	}
 	interface Section {
 		id: string;
@@ -29,21 +36,24 @@
 	}
 	type State = 'on' | 'mixed' | 'off';
 
-	const all = $derived(ix.catalogue.talkgroups);
+	const all = $derived(ix.shown);
+	const every = $derived(ix.catalogue.talkgroups);
 	const on = $derived(new Set(listening.saved.map(keyOf)));
+
+	const tile = (id: string, name: string, ts: Talkgroup[]): Tile => ({ id, name, talkgroups: ts.filter((t) => !t.quiet), every: ts });
 
 	const sections: Section[] = $derived.by(() => {
 		const systems = ix.catalogue.systems?.length ? ix.catalogue.systems : [undefined];
 		return systems.map((s) => {
 			const sid = s?.id ?? 0;
-			const mine = all.filter((t) => s === undefined || t.system === s.id);
+			const mine = every.filter((t) => s === undefined || t.system === s.id);
 			const agencies: Tile[] = ix.catalogue.groups
-				.map((g, i) => ({ id: `${sid}-g${i}`, name: g, talkgroups: mine.filter((t) => t.groups.includes(g)) }))
+				.map((g, i) => tile(`${sid}-g${i}`, g, mine.filter((t) => t.groups.includes(g))))
 				.filter((g) => g.talkgroups.length);
-			const loose = mine.filter((t) => !t.groups.length);
-			if (loose.length) agencies.push({ id: `${sid}-gnone`, name: 'Not in a group', talkgroups: loose });
+			const loose = tile(`${sid}-gnone`, 'Not in a group', mine.filter((t) => !t.groups.length));
+			if (loose.talkgroups.length) agencies.push(loose);
 			const categories: Tile[] = ix.catalogue.tags
-				.map((tag, i) => ({ id: `${sid}-t${i}`, name: tag, talkgroups: mine.filter((t) => t.tag === tag) }))
+				.map((tag, i) => tile(`${sid}-t${i}`, tag, mine.filter((t) => t.tag === tag)))
 				.filter((g) => g.talkgroups.length);
 			return { id: String(sid), system: s ? s.name || s.label : undefined, agencies, categories };
 		});
@@ -58,8 +68,8 @@
 	const pressed = (s: State) => (s === 'on' ? 'true' : s === 'mixed' ? 'mixed' : 'false');
 
 	function press(tile: Tile, s: State) {
-		if (s === 'on') listening.remove(...tile.talkgroups);
-		else listening.add(...tile.talkgroups);
+		if (s === 'on') listening.remove(...tile.every);
+		else listening.add(...tile.every);
 	}
 
 	const total = $derived(all.length);
@@ -97,8 +107,8 @@
 	<div class="box-head">
 		<p class="summary" role="status"><strong>{num(onCount)}</strong> of {num(total)} talkgroups on</p>
 		<div class="all">
-			<button type="button" disabled={onCount === total} onclick={() => listening.add(...all)}>All on</button>
-			<button type="button" class="secondary" disabled={onCount === 0} onclick={() => listening.remove(...all)}>All off</button>
+			<button type="button" disabled={onCount === total} onclick={() => listening.add(...every)}>All on</button>
+			<button type="button" class="secondary" disabled={count(every) === 0} onclick={() => listening.remove(...every)}>All off</button>
 		</div>
 	</div>
 	{#if whatsOn.length}

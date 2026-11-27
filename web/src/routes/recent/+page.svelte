@@ -30,7 +30,7 @@
 	import AddToBasket from '#lib/basket/AddToBasket.svelte';
 	import { usePlayer } from '#lib/audio/context.ts';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
-	import { indexOf, keyOf, resolve, search as searchTalkgroups, type Catalogue, type Index, type Talkgroup } from '#lib/listening/set.ts';
+	import { indexOf, keyOf, quietNote, resolve, searchShown, type Catalogue, type Index, type Talkgroup } from '#lib/listening/set.ts';
 	import { limitText, refusedBy } from '#lib/limits.ts';
 	import { sendListeningSet } from '#lib/live/listening-set.ts';
 	import {
@@ -231,14 +231,20 @@
 		void goto('/recent', { reset: false });
 	}
 
-	// Talkgroup suggestions: the catalogue's search (R42), without those chosen.
+	// Talkgroup suggestions: the catalogue's search (R42), without those
+	// chosen, and without quiet talkgroups unless the word is exactly one's
+	// number, name or label (R114; ADR 0054), which then says so.
 	function suggest(t: string, caret: number) {
 		const word = t.slice(0, caret);
 		const taken = new Set(chosen.map(keyOf));
-		const found = ix ? searchTalkgroups(ix.catalogue.talkgroups, word).filter((x) => !taken.has(keyOf(x))) : [];
+		const found = ix ? searchShown(ix, word).filter((x) => !taken.has(keyOf(x))) : [];
+		const valueOf = (x: Talkgroup) => {
+			const note = quietNote(x);
+			return `${x.name} (${x.id})${note ? ` · ${note}` : ''}`;
+		};
 		return {
 			target: { start: 0, end: t.length },
-			options: found.slice(0, 20).map((x) => ({ kind: 'value' as const, id: keyOf(x), value: `${x.name} (${x.id})`, insert: '', section: x.groups[0] ?? 'Talkgroups' })),
+			options: found.slice(0, 20).map((x) => ({ kind: 'value' as const, id: keyOf(x), value: valueOf(x), insert: '', section: x.groups[0] ?? 'Talkgroups' })),
 			what: 'talkgroup'
 		};
 	}

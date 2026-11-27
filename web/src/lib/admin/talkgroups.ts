@@ -26,6 +26,11 @@ export interface TableRow {
 	frequency: number | null;
 	last_heard_at: string | null;
 	calls_30_days: number;
+	/** Never quiet, as its tag's always show does too (R115; ADR 0054). */
+	always_show?: boolean;
+	/** Listeners' lists leave it out (R114): not heard in the quiet window while its system was receiving. */
+	quiet?: boolean;
+	not_heard_days?: number;
 }
 
 /** GET /api/v1/admin/talkgroups. */
@@ -41,6 +46,8 @@ export interface Label {
 	alert: string | null;
 	led_colour: string | null;
 	sort_order: number;
+	/** A tag's only: its talkgroups are never quiet (R115). */
+	always_show?: boolean;
 }
 
 /** A system (GET /systems). */
@@ -96,11 +103,13 @@ export interface Filters {
 	tag: string;
 	state: '' | State;
 	unreviewed: boolean;
+	/** Only the quiet talkgroups (R114). */
+	quiet: boolean;
 	/** "Not heard in N days": whole days as typed, or '' for off. */
 	quietDays: string;
 }
 
-export const noFilters = (): Filters => ({ q: '', system: '', group: '', tag: '', state: '', unreviewed: false, quietDays: '' });
+export const noFilters = (): Filters => ({ q: '', system: '', group: '', tag: '', state: '', unreviewed: false, quiet: false, quietDays: '' });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -126,6 +135,7 @@ export function filterRows(rows: TableRow[], f: Filters, now: number): TableRow[
 		if (f.tag && t.tag !== f.tag) return false;
 		if (f.state && t.state !== f.state) return false;
 		if (f.unreviewed && !t.unreviewed) return false;
+		if (f.quiet && !t.quiet) return false;
 		if (quiet !== undefined && t.last_heard_at && now - new Date(t.last_heard_at).getTime() < quiet * DAY_MS) return false;
 		return true;
 	});
@@ -204,12 +214,13 @@ export interface Form {
 	led_colour: string;
 	fireground_channel: string;
 	state: State;
+	always_show: boolean;
 }
 
 export type Field = keyof Form;
 
 /** The form's fields in the order the form shows them, for the focus on the first problem. */
-export const fieldOrder: Field[] = ['label', 'name', 'tag', 'groups', 'state', 'type', 'frequency', 'sort_order', 'delay_minutes', 'alert', 'led_colour', 'fireground_channel'];
+export const fieldOrder: Field[] = ['label', 'name', 'tag', 'groups', 'state', 'type', 'frequency', 'sort_order', 'delay_minutes', 'alert', 'led_colour', 'fireground_channel', 'always_show'];
 
 export function formOf(t: TableRow): Form {
 	return {
@@ -224,7 +235,8 @@ export function formOf(t: TableRow): Form {
 		alert: t.alert ?? '',
 		led_colour: t.led_colour ?? '',
 		fireground_channel: t.fireground_channel === null ? '' : String(t.fireground_channel),
-		state: t.state
+		state: t.state,
+		always_show: !!t.always_show
 	};
 }
 
@@ -249,6 +261,7 @@ export type Patch = Partial<{
 	led_colour: string | null;
 	fireground_channel: number | null;
 	state: State;
+	always_show: boolean;
 }>;
 
 /** What the form's check found: each problem under its field, or the PATCH. */
@@ -298,6 +311,7 @@ export function check(f: Form, t: TableRow): Checked {
 	const fgn = fg === '' ? null : Number(fg);
 	if (fgn !== t.fireground_channel) patch.fireground_channel = fgn;
 	if (f.state !== t.state) patch.state = f.state;
+	if (f.always_show !== !!t.always_show) patch.always_show = f.always_show;
 	return { patch };
 }
 

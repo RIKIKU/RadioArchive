@@ -35,7 +35,9 @@
 		decodeSet,
 		encodeSet,
 		find,
+		heard,
 		indexOf,
+		keyOf,
 		linkEntries,
 		resolve,
 		sameSet,
@@ -47,6 +49,9 @@
 	import { limitText, refusedBy } from '#lib/limits.ts';
 	import { sendListeningSet } from '#lib/live/listening-set.ts';
 	import { knowZone } from '#lib/zone.svelte.ts';
+	import { usePlayer } from '#lib/audio/context.ts';
+
+	const player = usePlayer();
 
 	// Shared with the account, which saves the set to it when signed in.
 	const listening = listeningState();
@@ -77,16 +82,21 @@
 		sendListeningSet([...set, ...added].map((r) => ({ system: r.talkgroup.system, id: r.talkgroup.id })));
 	});
 
+	async function fetchCatalogue(): Promise<Index> {
+		const r = await fetch('/api/v1/catalogue', { headers: { Accept: 'application/json' } });
+		if (!r.ok) throw await refusedBy(r);
+		const cat = (await r.json()) as Catalogue & { time_zone?: string };
+		knowZone(cat.time_zone);
+		const next = indexOf(cat);
+		listening.settle(next);
+		ix = next;
+		return next;
+	}
+
 	async function loadCatalogue(): Promise<Index | undefined> {
 		loading = 'loading';
 		try {
-			const r = await fetch('/api/v1/catalogue', { headers: { Accept: 'application/json' } });
-			if (!r.ok) throw await refusedBy(r);
-			const cat = (await r.json()) as Catalogue & { time_zone?: string };
-			knowZone(cat.time_zone);
-			const next = indexOf(cat);
-			listening.settle(next);
-			ix = next;
+			const next = await fetchCatalogue();
 			loading = 'done';
 			return next;
 		} catch (err) {
@@ -95,6 +105,31 @@
 			return undefined;
 		}
 	}
+
+	// Quiet talkgroups (R114, R117; ADR 0054): the catalogue says which
+	// they are, and the page reads it again every few minutes while it's in
+	// view, and when it comes back into view, so one that has come back
+	// shows and one gone quiet goes. A call heard live on one brings it back
+	// here at once. A read that fails keeps what the page has.
+	const REFRESH_MS = 3 * 60_000;
+	let refreshedAt = 0;
+	async function refresh() {
+		if (loading !== 'done' || document.visibilityState !== 'visible' || Date.now() - refreshedAt < REFRESH_MS / 2) return;
+		refreshedAt = Date.now();
+		try {
+			await fetchCatalogue();
+		} catch {
+			// The next refresh tries again.
+		}
+	}
+	$effect(() => {
+		const c = player.playing;
+		if (!c || !ix) return;
+		const system = c.system?.id;
+		let next = ix;
+		for (const id of [c.talkgroup.id, ...(c.patched ?? [])]) next = heard(next, keyOf({ system, id }));
+		if (next !== ix) ix = next;
+	});
 
 	async function openFireground(number: string, at: Index | undefined) {
 		// Digits only, as the server reads them; anything else is no channel.
@@ -156,14 +191,26 @@
 		}
 	}
 
-	onMount(async () => {
+	onMount(() => {
+		refreshedAt = Date.now();
+		const every = setInterval(refresh, REFRESH_MS);
+		const seen = () => void refresh();
+		document.addEventListener('visibilitychange', seen);
+		void opened();
+		return () => {
+			clearInterval(every);
+			document.removeEventListener('visibilitychange', seen);
+		};
+	});
+
+	async function opened() {
 		const params = page.url.searchParams;
 		const at = await loadCatalogue();
 		const share = params.get(SHARE_PARAM);
 		if (share !== null && at) openShare(share, at);
 		const number = params.get('fireground');
 		if (number !== null) await openFireground(number, at);
-	});
+	}
 
 	const plural = (n: number, one: string) => `${n.toLocaleString('en-AU')} ${one}${n === 1 ? '' : 's'}`;
 
@@ -244,7 +291,7 @@
 	{#if set.length || hadSet}
 		<!-- Hidden, not dropped, while searching: what was tapped off stays. -->
 		<section class="on-list" aria-labelledby="on-heading" hidden={!!query.trim()}>
-			<h2 id="on-heading">Talkgroups on <span class="count">({set.length.toLocaleString('en-AU')})</span></h2>
+			<h2 id="on-heading">Talkgroups on <span class="count">({set.filter((r) => !r.talkgroup.quiet).length.toLocaleString('en-AU')})</span></h2>
 			<OnList {ix} {listening} />
 			{#if shareLink}
 				<div class="share">

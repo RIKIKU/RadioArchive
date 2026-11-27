@@ -125,6 +125,9 @@ type Admin struct {
 	backup *backup.Reader
 	// upgrade is the automatic upgrade's state (ADR 0044); nil serves none.
 	upgrade *autoupgrade.Reader
+	// quiet says which talkgroups are quiet (ADR 0054); nil serves no
+	// window and marks none.
+	quiet QuietSource
 }
 
 // WithClock gives the admin API its clock, for the talkgroup table's 30
@@ -247,6 +250,10 @@ func WithAdmin(a *Admin) Option {
 		}
 		if a.backup != nil {
 			api.handle(AdminRoute, "GET "+AdminPath+"/backup", a.serve(a.getBackup))
+		}
+		if a.quiet != nil {
+			api.handle(AdminRoute, "GET "+AdminPath+"/quiet", a.serve(a.getQuiet))
+			api.handle(AdminRoute, "PUT "+AdminPath+"/quiet", a.serve(a.putQuiet))
 		}
 		if a.upgrade != nil {
 			api.handle(AdminRoute, "GET "+AdminPath+"/upgrade", a.serve(a.getUpgrade))
@@ -655,10 +662,13 @@ type Talkgroup struct {
 	// Type is what the setup says the talkgroup is (trunk-recorder's mode:
 	// D, T, E, ...), "" for nothing said; Frequency is in hertz (R22). Kept
 	// and shown, never a listener's (migration 00024, ADR 0030).
-	Type      string     `json:"type"`
-	Frequency *int64     `json:"frequency"`
-	CreatedAt *time.Time `json:"created_at,omitempty"`
-	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	Type      string `json:"type"`
+	Frequency *int64 `json:"frequency"`
+	// AlwaysShow keeps it from ever being quiet (R115; ADR 0054), as its
+	// tag's does.
+	AlwaysShow bool       `json:"always_show"`
+	CreatedAt  *time.Time `json:"created_at,omitempty"`
+	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
 }
 
 func talkgroupOf(t db.GetTalkgroupRow) Talkgroup {
@@ -669,7 +679,7 @@ func talkgroupOf(t db.GetTalkgroupRow) Talkgroup {
 	return Talkgroup{SystemID: t.SystemID, ID: t.TalkgroupID, Label: t.Label, Name: t.Name, Tag: t.Tag,
 		Groups: groups, State: string(t.State), Unreviewed: t.Unreviewed, DelayMinutes: t.DelayMinutes,
 		Alert: t.Alert, LEDColour: t.LedColour, SortOrder: t.SortOrder, FiregroundChannel: t.FiregroundChannel,
-		Type: t.Type, Frequency: t.Frequency, CreatedAt: ts(t.CreatedAt), UpdatedAt: ts(t.UpdatedAt)}
+		Type: t.Type, Frequency: t.Frequency, AlwaysShow: t.AlwaysShow, CreatedAt: ts(t.CreatedAt), UpdatedAt: ts(t.UpdatedAt)}
 }
 
 func (a *Admin) listTalkgroups(r *http.Request, _ string) (int, any, error) {
@@ -750,6 +760,7 @@ type talkgroupFields struct {
 	FiregroundChannel optional[firegroundNumber] `json:"fireground_channel"`
 	Type              *string                    `json:"type"`
 	Frequency         optional[int64]            `json:"frequency"`
+	AlwaysShow        *bool                      `json:"always_show"`
 	settingsFields
 }
 
@@ -904,6 +915,9 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 			if in.SortOrder != nil {
 				p.SortOrder = *in.SortOrder
 			}
+			if in.AlwaysShow != nil {
+				p.AlwaysShow = *in.AlwaysShow
+			}
 			if err := talkgroupErr(q.PutTalkgroup(ctx, p)); err != nil {
 				return err
 			}
@@ -917,7 +931,7 @@ func (a *Admin) writeTalkgroup(r *http.Request, who string, full bool) (int, any
 				SetAlert: in.Alert.Set, Alert: in.Alert.Value,
 				SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value,
 				SetFiregroundChannel: in.FiregroundChannel.Set, FiregroundChannel: fg,
-				Type: in.Type, SetFrequency: in.Frequency.Set, Frequency: in.Frequency.Value})
+				Type: in.Type, SetFrequency: in.Frequency.Set, Frequency: in.Frequency.Value, AlwaysShow: in.AlwaysShow})
 			if err != nil {
 				return talkgroupErr(err)
 			}

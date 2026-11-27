@@ -28,7 +28,11 @@
 	const on = $derived(new Set(listening.saved.map(keyOf)));
 	const prio = $derived(new Set(listening.saved.filter((e) => e.priority).map(keyOf)));
 
-	const shown = $derived(ix.catalogue.talkgroups.filter((t) => on.has(keyOf(t)) || offHere.has(keyOf(t))));
+	// Quiet talkgroups (R114; ADR 0054) stay on, and play when they're next
+	// heard, but aren't listed: a line says how many there are.
+	const shown = $derived(ix.catalogue.talkgroups.filter((t) => (!t.quiet && on.has(keyOf(t))) || offHere.has(keyOf(t))));
+	const quietOn = $derived(ix.catalogue.talkgroups.filter((t) => t.quiet && on.has(keyOf(t)) && !offHere.has(keyOf(t))).length);
+	const days = $derived(ix.catalogue.quiet_window_days ?? 7);
 	const priorityShown = $derived(shown.filter((t) => prio.has(keyOf(t)) || unstarred.has(keyOf(t)) || wasPriority.has(keyOf(t))));
 
 	interface Group {
@@ -124,8 +128,13 @@
 				</li>
 			{/each}
 		</ul>
-	{:else}
+	{:else if !quietOn}
 		<p class="hint">Nothing on. Switch on an agency or a category above, or search for a talkgroup.</p>
+	{/if}
+	{#if quietOn}
+		<p class="hint quiet-on">
+			Also on: {num(quietOn)} quiet talkgroup{quietOn === 1 ? '' : 's'}, not heard in {days} day{days === 1 ? '' : 's'}. They play when they're next heard.
+		</p>
 	{/if}
 </section>
 
@@ -146,6 +155,9 @@
 		margin: 0;
 		color: var(--muted);
 		font-size: var(--text-sm);
+	}
+	.quiet-on {
+		margin-top: var(--space-sm);
 	}
 	.chips {
 		display: grid;

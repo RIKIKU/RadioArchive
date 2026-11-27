@@ -346,7 +346,7 @@ func TestIntegrationImportRoundTrip(t *testing.T) {
 		"led_colour": "green", "sort_order": 3}, 200)
 	e.mustAdmin(t, "PATCH", fmt.Sprintf("/systems/%d/talkgroups/1001", sys), map[string]any{"delay_minutes": 5,
 		"alert": "beep", "led_colour": "red", "sort_order": 2, "type": "D", "frequency": 851012500,
-		"groups": []string{"North", "east", "Zulu"}}, 200)
+		"groups": []string{"North", "east", "Zulu"}, "always_show": true}, 200)
 	e.mustAdmin(t, "POST", "/groups", map[string]any{"name": "Unused group", "alert": "pip", "sort_order": 9}, 201)
 	g := decodeJSON[[]server.Label](t, e.mustAdmin(t, "GET", "/groups", nil, 200))
 	for _, x := range g {
@@ -357,7 +357,8 @@ func TestIntegrationImportRoundTrip(t *testing.T) {
 	tags := decodeJSON[[]server.Label](t, e.mustAdmin(t, "GET", "/tags", nil, 200))
 	for _, x := range tags {
 		if x.Name == "fireground" {
-			e.mustAdmin(t, "PATCH", fmt.Sprintf("/tags/%d", x.ID), map[string]any{"alert": "none", "led_colour": "orange", "sort_order": 4}, 200)
+			e.mustAdmin(t, "PATCH", fmt.Sprintf("/tags/%d", x.ID), map[string]any{"alert": "none", "led_colour": "orange", "sort_order": 4,
+				"always_show": true}, 200)
 		}
 	}
 	// An auto-created talkgroup: unreviewed, with no tag.
@@ -369,6 +370,11 @@ func TestIntegrationImportRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(first, &s); err != nil || s.Format != "radioarchive-setup" || s.Version != 1 ||
 		len(s.Systems) != 1 || len(s.Systems[0].Talkgroups) != 5 || len(s.Systems[0].Units) != 2 {
 		t.Fatalf("the export: %v %s", err, first)
+	}
+	// Always show (ADR 0054), the talkgroup's and the tag's.
+	if !s.Systems[0].Talkgroups[0].AlwaysShow || s.Systems[0].Talkgroups[1].AlwaysShow ||
+		!bytes.Contains(first, []byte(`"name": "fireground",`)) || bytes.Count(first, []byte(`"always_show": true`)) != 2 {
+		t.Errorf("always show in the export: %s", first)
 	}
 	if !bytes.Equal(e.export(t), first) {
 		t.Fatal("two exports of one setup differ")

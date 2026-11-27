@@ -1,7 +1,7 @@
 function Set-RadioArchiveTalkgroup {
     <#
     .SYNOPSIS
-    Changes a talkgroup: its state, label, name, tag, groups, delay, alert, LED colour, sort order or fireground channel number.
+    Changes a talkgroup: its state, label, name, tag, groups, delay, alert, LED colour, sort order, fireground channel number or always show.
 
     .DESCRIPTION
     Changes only what's given, and marks the talkgroup reviewed (R22).
@@ -88,6 +88,11 @@ function Set-RadioArchiveTalkgroup {
         # unchanged.
         [Nullable[int]] $FiregroundChannel,
 
+        # $true: never quiet, so listeners always see it (R115). $false:
+        # quiet when it isn't heard, unless its tag shows it always.
+        # Default: unchanged.
+        [Nullable[bool]] $AlwaysShow,
+
         # Output the talkgroup as changed. Off by default.
         [switch] $PassThru
     )
@@ -105,6 +110,7 @@ function Set-RadioArchiveTalkgroup {
         Set-RaOptionalField -Body $body -Bound $PSBoundParameters -Clearable 'alert', 'led_colour', 'fireground_channel' -Map ([ordered]@{
                 State = 'state'; Label = 'label'; Name = 'name'; Tag = 'tag'; Group = 'groups'; DelayMinutes = 'delay_minutes'
                 Alert = 'alert'; LedColour = 'led_colour'; SortOrder = 'sort_order'; FiregroundChannel = 'fireground_channel'
+                AlwaysShow = 'always_show'
             })
         if ($body.Contains('groups')) {
             $body.groups = @($Group)

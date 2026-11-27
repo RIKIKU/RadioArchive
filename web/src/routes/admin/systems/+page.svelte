@@ -98,6 +98,11 @@
 		{ key: 'attached_at', label: 'Attached', sortable: true, firstDir: 'descending', value: (a) => (a.attached_at ? Date.parse(a.attached_at) : null), text: (a) => (a.attached_at ? whenOf(a.attached_at, timeZone) : '') }
 	];
 	const labelColumns: Column<Label>[] = [{ key: 'name', label: 'Name', sortable: true, primary: true }, ...settingColumns<Label>()];
+	// A tag's always show (R115; ADR 0054): its talkgroups are never quiet.
+	const tagColumns: Column<Label>[] = [
+		...labelColumns,
+		{ key: 'always_show', label: 'Always show', sortable: true, value: (t) => (t.always_show ? 0 : 1), text: (t) => (t.always_show ? 'Yes' : 'No') }
+	];
 
 	function show(kind: Kind, id: number, back: () => HTMLElement | null) {
 		status = '';
@@ -345,12 +350,12 @@
 
 	<section aria-labelledby="tags-heading">
 		<h2 id="tags-heading">Tags</h2>
-		<p class="intro">Every talkgroup has one tag, set on the Talkgroups page, where a new tag is made when it's first used. A talkgroup with no alert or LED colour of its own takes its tag's, then its groups', then its system's.</p>
+		<p class="intro">Every talkgroup has one tag, set on the Talkgroups page, where a new tag is made when it's first used. A talkgroup with no alert or LED colour of its own takes its tag's, then its groups', then its system's. A tag's talkgroups shown always are never quiet.</p>
 		{@render editor('tag')}
 		<div class="table-edge">
 		<DataTable
 			caption="Tags"
-			columns={labelColumns}
+			columns={tagColumns}
 			rows={tags}
 			key={(t: Label) => t.id}
 			bind:sort={tagSort}

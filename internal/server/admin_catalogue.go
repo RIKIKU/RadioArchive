@@ -93,10 +93,29 @@ type Label struct {
 	Alert     *string `json:"alert"`
 	LEDColour *string `json:"led_colour"`
 	SortOrder int32   `json:"sort_order"`
+	// AlwaysShow is a tag's only: its talkgroups are never quiet (R115;
+	// ADR 0054). Absent for a group.
+	AlwaysShow *bool `json:"always_show,omitempty"`
 }
 
 func labelOf(id int64, name string, alert, led *string, sort int32) Label {
 	return Label{ID: id, Name: name, Alert: alert, LEDColour: led, SortOrder: sort}
+}
+
+func groupLabel(g db.Group) Label { return labelOf(g.ID, g.Name, g.Alert, g.LedColour, g.SortOrder) }
+
+// tagLabel is a tag, always show included.
+func tagLabel(t db.Tag) Label {
+	l := labelOf(t.ID, t.Name, t.Alert, t.LedColour, t.SortOrder)
+	show := t.AlwaysShow
+	l.AlwaysShow = &show
+	return l
+}
+
+// tagFields are a tag's editable fields: a label's, and always show.
+type tagFields struct {
+	labelFields
+	AlwaysShow *bool `json:"always_show"`
 }
 
 // labelFields are a group's or a tag's editable fields.
@@ -166,8 +185,8 @@ func (a *Admin) createGroup(r *http.Request, who string) (int, any, error) {
 
 // patchLabel changes a group or a tag (kind), as get reads it and update
 // writes it, audited.
-func (a *Admin) patchLabel(r *http.Request, kind string, id int64, get func(*db.Queries) (db.Group, error),
-	update func(*db.Queries) (db.Group, error), name *string) (Label, error) {
+func (a *Admin) patchLabel(r *http.Request, kind string, id int64, get func(*db.Queries) (Label, error),
+	update func(*db.Queries) (Label, error), name *string) (Label, error) {
 	var out Label
 	thing := strconv.FormatInt(id, 10)
 	notFound := refuseAdmin(http.StatusNotFound, kind+"_not_found", "No %s has ID %d.", kind, id)
@@ -182,16 +201,14 @@ func (a *Admin) patchLabel(r *http.Request, kind string, id int64, get func(*db.
 		if err != nil {
 			return dbErr(kind, err)
 		}
-		g, err := update(q)
+		out, err = update(q)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return notFound
 		}
 		if err != nil {
 			return nameTaken(err, kind, name)
 		}
-		out = labelOf(g.ID, g.Name, g.Alert, g.LedColour, g.SortOrder)
-		return au.Record(store.Change{Kind: kind, Thing: thing, Label: g.Name,
-			Before: labelOf(was.ID, was.Name, was.Alert, was.LedColour, was.SortOrder), After: out})
+		return au.Record(store.Change{Kind: kind, Thing: thing, Label: out.Name, Before: was, After: out})
 	})
 	return out, err
 }
@@ -210,10 +227,14 @@ func (a *Admin) patchGroup(r *http.Request, who string) (int, any, error) {
 	}
 	ctx := r.Context()
 	out, err := a.patchLabel(r, store.AuditGroup, id,
-		func(q *db.Queries) (db.Group, error) { return q.GetGroup(ctx, id) },
-		func(q *db.Queries) (db.Group, error) {
-			return q.UpdateGroup(ctx, db.UpdateGroupParams{ID: id, Name: in.Name, SortOrder: in.SortOrder,
+		func(q *db.Queries) (Label, error) {
+			g, err := q.GetGroup(ctx, id)
+			return groupLabel(g), err
+		},
+		func(q *db.Queries) (Label, error) {
+			g, err := q.UpdateGroup(ctx, db.UpdateGroupParams{ID: id, Name: in.Name, SortOrder: in.SortOrder,
 				SetAlert: in.Alert.Set, Alert: in.Alert.Value, SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value})
+			return groupLabel(g), err
 		}, in.Name)
 	if err != nil {
 		return 0, nil, err
@@ -229,7 +250,7 @@ func (a *Admin) listTags(r *http.Request, _ string) (int, any, error) {
 	}
 	out := make([]Label, 0, len(rows))
 	for _, t := range rows {
-		out = append(out, labelOf(t.ID, t.Name, t.Alert, t.LedColour, t.SortOrder))
+		out = append(out, tagLabel(t))
 	}
 	return http.StatusOK, out, nil
 }
@@ -239,7 +260,7 @@ func (a *Admin) patchTag(r *http.Request, who string) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	var in labelFields
+	var in tagFields
 	if err := decode(r, &in); err != nil {
 		return 0, nil, err
 	}
@@ -248,14 +269,15 @@ func (a *Admin) patchTag(r *http.Request, who string) (int, any, error) {
 	}
 	ctx := r.Context()
 	out, err := a.patchLabel(r, store.AuditTag, id,
-		func(q *db.Queries) (db.Group, error) {
+		func(q *db.Queries) (Label, error) {
 			t, err := q.GetTag(ctx, id)
-			return db.Group(t), err
+			return tagLabel(t), err
 		},
-		func(q *db.Queries) (db.Group, error) {
+		func(q *db.Queries) (Label, error) {
 			t, err := q.UpdateTag(ctx, db.UpdateTagParams{ID: id, Name: in.Name, SortOrder: in.SortOrder,
-				SetAlert: in.Alert.Set, Alert: in.Alert.Value, SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value})
-			return db.Group(t), err
+				SetAlert: in.Alert.Set, Alert: in.Alert.Value, SetLedColour: in.LEDColour.Set, LedColour: in.LEDColour.Value,
+				AlwaysShow: in.AlwaysShow})
+			return tagLabel(t), err
 		}, in.Name)
 	if err != nil {
 		return 0, nil, err

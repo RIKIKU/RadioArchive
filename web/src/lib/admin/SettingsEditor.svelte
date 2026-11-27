@@ -182,6 +182,11 @@
 					<label><input id={id('auto_create')} type="checkbox" bind:checked={form.auto_create} aria-describedby="{id('auto_create')}-hint" /> Auto-create talkgroups</label>
 					<p class="field-hint" id="{id('auto_create')}-hint">Off by default. On, a call on a talkgroup this system doesn't list creates it, public and unreviewed; off, the call is refused and counted.</p>
 				</div>
+			{:else if kind === 'tag'}
+				<div class="field check">
+					<label><input id={id('always_show')} type="checkbox" bind:checked={form.always_show} aria-describedby="{id('always_show')}-hint" /> Always show its talkgroups</label>
+					<p class="field-hint" id="{id('always_show')}-hint">Its talkgroups are never quiet, such as fireground channels that sit unused until a job. Off by default.</p>
+				</div>
 			{/if}
 		</div>
 		{#if failed}<p class="field-error" role="alert">{failed}</p>{/if}

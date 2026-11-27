@@ -194,6 +194,10 @@ var auditProbes = []auditProbe{
 		change:  func(w *auditWorld) (int, string) { return w.do("PUT", "/audit/retention", `{"days":365}`) },
 		want:    auditWant{"retention", "audit", "changed", "days", `730`, `365`},
 		refused: func(w *auditWorld) (int, string) { return w.do("PUT", "/audit/retention", `{"days":29}`) }}, // too short
+	{pattern: "PUT /api/v1/admin/quiet",
+		change:  func(w *auditWorld) (int, string) { return w.do("PUT", "/quiet", `{"window_days":14}`) },
+		want:    auditWant{"retention", "quiet", "changed", "window_days", `7`, `14`},
+		refused: func(w *auditWorld) (int, string) { return w.do("PUT", "/quiet", `{"window_days":91}`) }}, // too long
 	{pattern: "PATCH /api/v1/admin/accounts/{subject}",
 		change:  func(w *auditWorld) (int, string) { return w.do("PATCH", "/accounts/2", `{"role":"admin"}`) },
 		want:    auditWant{"account", "2", "changed", "role", `"listener"`, `"admin"`},

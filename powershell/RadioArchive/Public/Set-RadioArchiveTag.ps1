@@ -1,7 +1,7 @@
 function Set-RadioArchiveTag {
     <#
     .SYNOPSIS
-    Changes a tag's alert, LED colour or sort order.
+    Changes a tag's alert, LED colour, sort order or always show.
 
     .DESCRIPTION
     Changes only what's given. -Alert '' and -LedColour '' clear the tag's
@@ -40,12 +40,16 @@ function Set-RadioArchiveTag {
         # Where it sorts. Default: unchanged.
         [Nullable[int]] $SortOrder,
 
+        # $true: its talkgroups are never quiet, so listeners always see
+        # them (R115), as for a fireground tag. Default: unchanged.
+        [Nullable[bool]] $AlwaysShow,
+
         # Output the tag as changed. Off by default.
         [switch] $PassThru
     )
     process {
         $body = [ordered]@{}
-        Set-RaOptionalField -Body $body -Bound $PSBoundParameters -Clearable 'alert', 'led_colour' -Map ([ordered]@{ Alert = 'alert'; LedColour = 'led_colour'; SortOrder = 'sort_order' })
+        Set-RaOptionalField -Body $body -Bound $PSBoundParameters -Clearable 'alert', 'led_colour' -Map ([ordered]@{ Alert = 'alert'; LedColour = 'led_colour'; SortOrder = 'sort_order'; AlwaysShow = 'always_show' })
         if (-not $PSCmdlet.ShouldProcess("tag $TagId", "Change $(@($body.Keys) -join ', ')")) {
             return
         }

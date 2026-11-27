@@ -97,6 +97,8 @@
 	const tagNames = $derived(namesIn(rows, 'tag'));
 	const groupNames = $derived(namesIn(rows, 'groups'));
 	const unreviewed = $derived(rows.filter((r) => r.unreviewed).length);
+	// Quiet talkgroups (R114; ADR 0054): every row is here, quiet ones badged.
+	const quietCount = $derived(rows.filter((r) => r.quiet).length);
 	const quietTyped = $derived(filters.quietDays.trim() !== '' && quietDaysOf(filters.quietDays) === undefined);
 	const filtering = $derived(JSON.stringify(filters) !== JSON.stringify(noFilters()));
 	const openRow = $derived(open ? rows.find((r) => keyOf(r) === open!.key) : undefined);
@@ -262,6 +264,11 @@
 		<div class="field check">
 			<label><input type="checkbox" bind:checked={filters.unreviewed} /> Unreviewed only</label>
 		</div>
+		{#if quietCount}
+			<div class="field check">
+				<label><input type="checkbox" bind:checked={filters.quiet} /> Quiet only</label>
+			</div>
+		{/if}
 		{#if filtering}
 			<div class="field check">
 				<button type="button" class="secondary" onclick={() => (filters = noFilters())}>Clear search and filters</button>
@@ -312,6 +319,7 @@
 				<span class="badges">
 					<StateBadge state={t.state === 'public' ? 'ok' : 'neutral'} text={stateWords[t.state]} />
 					{#if t.unreviewed}<StateBadge state="warning" text="Unreviewed" />{/if}
+					{#if t.quiet && !t.always_show}<span title="Not heard in {t.not_heard_days ?? 0} days: listeners' lists leave it out until its next call"><StateBadge state="neutral" text="Quiet" /></span>{/if}
 				</span>
 			{/if}
 		{/snippet}

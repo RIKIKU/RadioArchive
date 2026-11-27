@@ -55,11 +55,13 @@ export interface Form {
 	alert: string;
 	led_colour: string;
 	sort_order: string;
+	/** A tag's only: its talkgroups are never quiet (R115; ADR 0054). */
+	always_show: boolean;
 }
 
 export type Field = keyof Form;
 
-export const fieldOrder: Field[] = ['id', 'label', 'name', 'auto_create', 'alert', 'led_colour', 'sort_order'];
+export const fieldOrder: Field[] = ['id', 'label', 'name', 'auto_create', 'alert', 'led_colour', 'sort_order', 'always_show'];
 
 type Thing = FullSystem | Label;
 
@@ -74,7 +76,8 @@ export function formOf(t: Thing | undefined): Form {
 		auto_create: t && isSystem(t) ? t.auto_create : false,
 		alert: t?.alert ?? '',
 		led_colour: t?.led_colour ?? '',
-		sort_order: String(t?.sort_order ?? 0)
+		sort_order: String(t?.sort_order ?? 0),
+		always_show: !!(t && !isSystem(t) && t.always_show)
 	};
 }
 
@@ -87,6 +90,7 @@ export type Body = Partial<{
 	alert: string | null;
 	led_colour: string | null;
 	sort_order: number;
+	always_show: boolean;
 }>;
 
 export type Checked = { problems: Partial<Record<Field, string>> } | { body: Body };
@@ -122,6 +126,7 @@ export function check(kind: Kind, f: Form, was: Thing | undefined): Checked {
 	const led = f.led_colour === '' ? null : f.led_colour;
 	const all: Body = { name, alert, led_colour: led, sort_order: Number(sort) };
 	if (kind === 'system') Object.assign(all, { label, auto_create: f.auto_create });
+	if (kind === 'tag') all.always_show = f.always_show;
 	if (!was) {
 		if (kind === 'system') all.id = Number(f.id.trim());
 		return { body: all };

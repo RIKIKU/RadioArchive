@@ -24,6 +24,14 @@ export interface Talkgroup {
 	alert: string | null;
 	delay_minutes: number;
 	fireground_channel: number | null;
+	/**
+	 * Not heard in the quiet window while its system was receiving (R114;
+	 * ADR 0054): listeners' lists leave it out, and its first call brings
+	 * it back. A listening set naming it keeps it, and hears it live.
+	 */
+	quiet?: boolean;
+	/** Whole days it hasn't been heard, when it's quiet. */
+	not_heard_days?: number;
 }
 
 /** GET /api/v1/catalogue: every public talkgroup, in the catalogue's order. */
@@ -32,6 +40,8 @@ export interface Catalogue {
 	tags: string[];
 	groups: string[];
 	talkgroups: Talkgroup[];
+	/** The quiet window, in days (R114). */
+	quiet_window_days?: number;
 }
 
 /**
@@ -55,16 +65,40 @@ export interface Index {
 	byId: Map<number, Talkgroup>;
 	/** Whether the deployment shows one system (the catalogue names none). */
 	single: boolean;
+	/** The talkgroups that aren't quiet, in the catalogue's order: what the lists show (R114). */
+	shown: Talkgroup[];
+	/** How many are quiet. */
+	quiet: number;
 }
 
 export function indexOf(catalogue: Catalogue): Index {
 	const byKey = new Map<string, Talkgroup>();
 	const byId = new Map<number, Talkgroup>();
+	const shown: Talkgroup[] = [];
 	for (const t of catalogue.talkgroups) {
 		byKey.set(keyOf(t), t);
 		if (!byId.has(t.id)) byId.set(t.id, t);
+		if (!t.quiet) shown.push(t);
 	}
-	return { catalogue, byKey, byId, single: !catalogue.systems?.length };
+	return { catalogue, byKey, byId, single: !catalogue.systems?.length, shown, quiet: catalogue.talkgroups.length - shown.length };
+}
+
+/** What a quiet talkgroup's chip or option says of it. */
+export const quietNote = (t: Talkgroup): string | undefined => {
+	if (!t.quiet) return undefined;
+	const n = t.not_heard_days ?? 0;
+	return `Not heard in ${n} day${n === 1 ? '' : 's'}`;
+};
+
+/**
+ * A copy of the index with a talkgroup no longer quiet: a live call on it
+ * brings it back at once (R117), before the next catalogue read says so.
+ * The same index when it isn't quiet.
+ */
+export function heard(ix: Index, key: string): Index {
+	const t = ix.byKey.get(key);
+	if (!t?.quiet) return ix;
+	return indexOf({ ...ix.catalogue, talkgroups: ix.catalogue.talkgroups.map((x) => (x === t ? { ...x, quiet: false, not_heard_days: undefined } : x)) });
 }
 
 /**
@@ -288,4 +322,17 @@ export function search(talkgroups: Talkgroup[], query: string): Talkgroup[] {
 		else if (fields.some((f) => f.includes(q))) ranks[3].push(t);
 	}
 	return ranks.flat();
+}
+
+/**
+ * The one search's talkgroups (R114): the search, without quiet
+ * talkgroups, apart from one whose number, name or label is exactly the
+ * query; with includeQuiet, quiet ones too. As the server's search does
+ * with include_quiet.
+ */
+export function searchShown(ix: Index, query: string, includeQuiet = false): Talkgroup[] {
+	const found = search(ix.catalogue.talkgroups, query);
+	if (includeQuiet || !ix.quiet) return found;
+	const q = query.trim().toLowerCase();
+	return found.filter((t) => !t.quiet || String(t.id) === q || t.name.toLowerCase() === q || t.label.toLowerCase() === q);
 }
