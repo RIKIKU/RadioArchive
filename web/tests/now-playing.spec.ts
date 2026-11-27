@@ -136,8 +136,10 @@ test('@live R113: the display stays in view under the top bar while the page scr
 	await listen(page);
 	const top = (await page.locator('header.top').boundingBox())!;
 	await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-	// At the frame's --topbar-height, its measured inner height: the bar's own border may overlap it by a pixel.
-	await expect.poll(async () => Math.abs((await display(page).boundingBox())!.y - (top.y + top.height))).toBeLessThanOrEqual(1.5);
+	// Just under the top bar (the frame's --topbar-height, and a sliver of space), at the top of the screen.
+	await expect.poll(async () => (await display(page).boundingBox())!.y - (top.y + top.height)).toBeLessThanOrEqual(8);
+	expect((await display(page).boundingBox())!.y - (top.y + top.height)).toBeGreaterThanOrEqual(-1);
+	expect(await page.evaluate(() => window.scrollY), 'the page scrolled').toBeGreaterThan(100);
 	// The page's scroll padding covers the top bar and the display.
 	const padding = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop));
 	const d = (await display(page).boundingBox())!;

@@ -369,10 +369,24 @@
 	/* Phones: the controls across the width, short names under their icons;
 	   Share and Add to basket in the Actions menu. */
 	@media (max-width: 47.99rem) {
+		/* Seven controls at 375 px: each as wide as its short name (on one
+		   line) and at least a target, sharing what's left, rather than seven
+		   equal shares that "Previous" and "Catch up" overflow. */
 		.controls {
 			flex: 1 1 100%;
 			flex-wrap: nowrap;
 			justify-content: space-between;
+		}
+		.bar .controls {
+			gap: var(--space-3xs);
+		}
+		.bar .controls > button,
+		.bar .controls > .phone-only {
+			flex: 1 1 auto;
+			min-width: var(--target);
+		}
+		.bar .controls .label {
+			white-space: nowrap;
 		}
 		.wide-only {
 			display: none;

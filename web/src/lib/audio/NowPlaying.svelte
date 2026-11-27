@@ -141,7 +141,7 @@
 
 <p class="visually-hidden" aria-live="polite">{said}</p>
 
-<div class="place" class:slim={variant === 'slim'} bind:this={place}>
+<div class="place" class:of-slim={variant === 'slim'} bind:this={place}>
 	{#if variant === 'slim'}
 		<section class="now-playing slim" aria-label="Now playing" data-state={status.state} data-variant="slim">
 			{@render field(c?.talkgroup.name ?? DASH, 'name')}
@@ -203,11 +203,11 @@
 		position: sticky;
 		top: var(--topbar-height, 0);
 		z-index: var(--layer-header);
-		margin: 0 calc(-1 * var(--page-pad)) var(--space-lg);
-		padding: 0 var(--page-pad) var(--space-xs);
+		margin: calc(-1 * var(--space-2xs)) calc(-1 * var(--page-pad)) var(--space-lg);
+		padding: var(--space-2xs) var(--page-pad) var(--space-xs);
 		background: var(--bg);
 	}
-	.place.slim {
+	.place.of-slim {
 		margin-bottom: var(--space-md);
 	}
 	@media (max-width: 47.99rem) {
