@@ -91,6 +91,70 @@ async function thousand(page: Page): Promise<Row[]> {
 	return all;
 }
 
+/**
+ * A real setup's longer names (#165): rows like a large network's, with
+ * long labels and names, and tags and groups longer than the fixture's,
+ * added to the admin API's answer in the browser only.
+ */
+function longNames(): Row[] {
+	const names: [string, string, string | null, string[]][] = [
+		['MFB DISP NE', 'Metropolitan Fire Brigade Dispatch North East', 'Untagged', ['Metropolitan Fire District']],
+		['CFA FG 112', 'Country Fire Authority Fireground Channel 112', 'fireground', ['Country Fire Region North', 'Hills']],
+		['SES EOC', 'State Emergency Service Operations Centre', 'Emergency Ops', ['Emergency Management']],
+		['AV PATIENT', 'Ambulance Victoria Patient Transport Statewide', 'Interoperability', ['Ambulance Region']]
+	];
+	return names.map(([label, name, tag, groups], i) => ({
+		system_id: 1, id: 4000 + i, label, name, tag, groups, state: 'public', unreviewed: false, delay_minutes: 0, alert: null,
+		led_colour: null, sort_order: 0, fireground_channel: null, type: '', frequency: null, last_heard_at: null, calls_30_days: 0
+	}));
+}
+
+/**
+ * Words broken across lines (#165) in the headers and the Label, Tag and
+ * Groups cells: each word measured where it's drawn; a word on two lines
+ * has its pieces at two heights.
+ */
+async function brokenWords(page: Page): Promise<string[]> {
+	return page.locator('main table').evaluate((table) => {
+		const heads = [...table.querySelectorAll('thead th')];
+		const columns = heads.map((th) => th.textContent!.trim());
+		const out: string[] = [];
+		const check = (where: string, el: Element) => {
+			const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+			for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+				for (const m of n.textContent!.matchAll(/[^\s,]+/g)) {
+					const r = document.createRange();
+					r.setStart(n, m.index);
+					r.setEnd(n, m.index + m[0].length);
+					const tops = new Set([...r.getClientRects()].filter((x) => x.width > 0).map((x) => Math.round(x.top)));
+					if (tops.size > 1) out.push(`${where}: ${m[0]}`);
+				}
+			}
+		};
+		for (const th of heads) check('header', th);
+		for (const tr of table.querySelectorAll('tbody tr')) {
+			for (const name of ['Label', 'Tag', 'Groups']) {
+				const cell = tr.children[columns.indexOf(name)];
+				check(name, cell.querySelector('.value') ?? cell);
+			}
+		}
+		return out;
+	});
+}
+
+/** Each row's Edit and More actions are on the screen, not clipped at the page's edge (#113). */
+async function actionsOnScreen(page: Page) {
+	const off = await page.locator('main table tbody').evaluate((tbody) =>
+		[...tbody.querySelectorAll<HTMLElement>('td.actions button')]
+			.filter((b) => {
+				const r = b.getBoundingClientRect();
+				return r.width > 0 && (r.left < 0 || r.right > document.documentElement.clientWidth);
+			})
+			.map((b) => b.getAttribute('aria-label') ?? b.innerText)
+	);
+	expect(off).toEqual([]);
+}
+
 const rowsOf = (page: Page) => page.locator('main table tbody tr');
 const tgOf = (page: Page) => page.locator('main table tbody th');
 const count = (page: Page) => page.locator('p.count');
@@ -406,13 +470,22 @@ for (const look of looks)
 				test.setTimeout(90_000);
 				await saveLook(context, baseURL!, look, theme);
 				await ownLook(page);
+				await page.route('**/api/v1/admin/talkgroups', async (route) => {
+					const r = await route.fetch();
+					const body = (await r.json()) as { talkgroups: Row[] };
+					await route.fulfill({ response: r, json: { ...body, talkgroups: [...body.talkgroups, ...longNames()] } });
+				});
 				await signIn(page, 'admin');
 				await page.setViewportSize({ width, height: 900 });
 				const tag = `${look}-${theme}-${width}`;
 				await page.goto('/admin/talkgroups');
 				await expect(row(page, 1001)).toBeVisible();
+				await expect(row(page, 4002)).toBeVisible();
 				await inLook(page, look, theme);
 				await axe(page, width);
+				// A tag's and the groups' names break only at their spaces (#165).
+				expect(await brokenWords(page)).toEqual([]);
+				await actionsOnScreen(page);
 				await shot(page, `table-${tag}`);
 
 				// A row open for editing, with the server's refusal under its field.
@@ -454,3 +527,20 @@ for (const look of looks)
 				await shot(page, `ask-${tag}`);
 				await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
 			});
+
+for (const width of [1440, 1920])
+	test(`#165: at ${width} px, with a real setup's long names, tags and groups break only at their spaces, and the table fits the page`, async ({ page }) => {
+		await ownLook(page);
+		await page.route('**/api/v1/admin/talkgroups', async (route) => {
+			const r = await route.fetch();
+			const body = (await r.json()) as { talkgroups: Row[] };
+			await route.fulfill({ response: r, json: { ...body, talkgroups: [...body.talkgroups, ...longNames()] } });
+		});
+		await signIn(page, 'admin');
+		await page.setViewportSize({ width, height: 900 });
+		await page.goto('/admin/talkgroups');
+		await expect(row(page, 4003)).toBeVisible();
+		expect(await brokenWords(page)).toEqual([]);
+		await actionsOnScreen(page);
+		expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+	});
