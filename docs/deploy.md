@@ -69,6 +69,18 @@ You need:
 
 Both published ports bind to `127.0.0.1` (`API_BIND`, `AUTHENTIK_BIND`): only your reverse proxy should reach them.
 
+### With an Authentik you already run
+
+Until the combined deployment with PagerArchive (`SPEC.md` R105) ships, RadioArchive can still use an Authentik you already run, in place of its own:
+
+1. In `compose.override.yaml`:
+   - give `authentik-server` and `authentik-worker` `profiles: [off]`, so they don't start;
+   - set the API's `AUTHENTIK_INTERNAL_URL` to an address where it reaches your Authentik (a shared Docker network, or leave it unset to use `AUTHENTIK_URL`);
+   - set `AUTHENTIK_API_TOKEN: ""` if you don't create the accounts service account (step 3).
+2. `compose.yaml` still needs every `:?` setting in `.env`, so give the Authentik-only ones (`AUTHENTIK_SECRET_KEY`, `AUTHENTIK_ADMIN_*`, `SMTP_HOST`, `SMTP_FROM`) placeholder values. `db` still creates an empty `authentik` database, which the backup dumps and checks with the rest; your Authentik's own backup covers its data.
+3. Apply `deploy/authentik/blueprints/radioarchive.yaml` in your Authentik, with `RA_APP_URL` and `RA_OIDC_CLIENT_SECRET` set (your `APP_URL` and `OIDC_CLIENT_SECRET`), for example through `ak shell`'s blueprint importer. Its last two sections, the accounts service account and the removed entries, are optional: without the service account, disabling an account changes the radio only, and the admin pages say so. Leave out `radioarchive-standalone.yaml`: it's the standalone sign-up and brand.
+4. The first admin's Authentik user needs the `email_proven` attribute set to their address before they sign in ([ADR 0025](adr/0025-admin-accounts-roles-and-admin-sign-in.md)). Otherwise `INITIAL_ADMIN_EMAIL` never matches a proven address.
+
 ## The reverse proxy
 
 Your proxy terminates TLS and forwards each subdomain to its port. The release's archive has a working nginx example, `deploy/nginx/radioarchive.conf`. It:
@@ -103,6 +115,14 @@ real_ip_recursive on;
 `$remote_addr` is then the visitor's address, and the example's `proxy_set_header X-Forwarded-For $remote_addr;` sends that to RadioArchive. `TRUSTED_PROXY` stays the inner proxy's address. If the inner proxy appended rather than overwrote, every visitor would count as the forwarder, one client, and hit the request limit almost at once.
 
 **SWAG**: copy the example's two server blocks into `nginx/proxy-confs/radioarchive.subdomain.conf` (its `include` lines for SSL replace the commented `ssl_certificate` lines), and put the three `real_ip` lines in `nginx/site-confs/default.conf`'s `server` block, or in `nginx/nginx.conf`'s `http` block, when SWAG sits behind another proxy.
+### Behind a sign-in gate
+
+To keep the radio private for a while, for example behind Authentik's forward auth in your proxy, gate everything except:
+
+- `/api/v1/recorder/`, which recorder clients reach with their client key and no browser;
+- `/healthz`, if anything checks it from outside.
+
+Everything else, the live socket and zips included, can sit behind the gate. A gate that signs people in to the same Authentik as the radio means one sign-in: the radio's own **Sign in** then completes without a second password. A recorder host on your network can skip the proxy and reach the API directly, through a port that serves only `/api/v1/recorder/`.
 
 ### Checking it
 
