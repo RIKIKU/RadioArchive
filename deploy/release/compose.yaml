@@ -28,7 +28,7 @@ x-authentik: &authentik
   # but a changed label makes `docker compose up -d` recreate the container,
   # so a release's changed blueprints take effect.
   labels:
-    radioarchive.config: "d26aa32981176569"
+    radioarchive.config: "6fd96fc0e354868d"
   environment:
     AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?set AUTHENTIK_SECRET_KEY in .env}
     AUTHENTIK_POSTGRESQL__HOST: db

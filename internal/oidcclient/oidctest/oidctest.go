@@ -318,6 +318,13 @@ func build(clientSecret, subject, email, name string, logf func(format string, a
 			"jwks_uri": p.URL + "/jwks", "id_token_signing_alg_values_supported": []string{"RS256"},
 		})
 	})
+	// The Android app's own client (ADR 0052): a third application.
+	mux.HandleFunc("GET /application/o/"+AppClientID+"/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer": p.AppIssuer(), "authorization_endpoint": p.URL + "/authorize", "token_endpoint": p.URL + "/token",
+			"jwks_uri": p.URL + "/jwks", "id_token_signing_alg_values_supported": []string{"RS256"},
+		})
+	})
 	for _, m := range []string{"GET", "PATCH", "DELETE"} {
 		mux.HandleFunc(m+" /api/v3/core/users/{id}/{$}", p.serveUsers)
 	}
@@ -393,9 +400,32 @@ func (p *Provider) ModuleIssuer() string { return p.URL + "/application/o/" + Mo
 // signed with the provider's key, or with another key when otherKey.
 func (p *Provider) ModuleAccessToken(t testing.TB, subject string, edit map[string]any, otherKey bool) string {
 	t.Helper()
+	return p.accessToken(t, p.ModuleIssuer(), ModuleClientID, subject, edit, otherKey)
+}
+
+// AppClientID is the Android app's client, as the blueprint names it (ADR
+// 0052).
+const AppClientID = "radioarchive-android"
+
+// AppIssuer is the app application's issuer.
+func (p *Provider) AppIssuer() string { return p.URL + "/application/o/" + AppClientID + "/" }
+
+// AppAccessToken is an access token of the app's client for subject, with
+// the name and email Authentik puts in one, edited as ModuleAccessToken's.
+func (p *Provider) AppAccessToken(t testing.TB, subject string, edit map[string]any, otherKey bool) string {
+	t.Helper()
+	e := map[string]any{"email": p.Email, "name": p.Name, "email_verified": true}
+	for k, v := range edit {
+		e[k] = v
+	}
+	return p.accessToken(t, p.AppIssuer(), AppClientID, subject, e, otherKey)
+}
+
+func (p *Provider) accessToken(t testing.TB, issuer, client, subject string, edit map[string]any, otherKey bool) string {
+	t.Helper()
 	now := time.Now()
 	claims := map[string]any{
-		"iss": p.ModuleIssuer(), "aud": ModuleClientID, "azp": ModuleClientID, "sub": subject,
+		"iss": issuer, "aud": client, "azp": client, "sub": subject,
 		"scope": "openid email profile offline_access", "iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(),
 		"jti": "made-up-jti",
 	}

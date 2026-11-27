@@ -99,6 +99,11 @@ module relies on in the stack's Authentik. The API takes the module's
 issuer from `AUTHENTIK_URL` and `MODULE_CLIENT_ID` (default
 `radioarchive-powershell`).
 
+The Android app (RIKIKU/RadioArchive-Android) signs in with its own public
+client, `radioarchive-android` (`APP_CLIENT_ID`), and the API takes its
+access tokens on the account's routes (ADR 0052). `GET /auth/app` tells it
+where to sign in.
+
 `sqlc generate` regenerates `internal/store/db` from `internal/store/queries.sql`; CI fails if it's out of date.
 
 ### The browser app

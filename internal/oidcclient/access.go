@@ -11,7 +11,8 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 )
 
-// AccessVerifier checks the PowerShell module's access tokens (ADR 0028):
+// AccessVerifier checks a public client's access tokens: the PowerShell
+// module's (ADR 0028) and the Android app's (ADR 0052). For the module:
 // tokens Authentik issued to the module's own public client, which the
 // module sends as Authorization: Bearer on admin requests. The keys come
 // from the issuer's JWKS, found by discovery on first use, so the API
@@ -55,28 +56,46 @@ func (v *AccessVerifier) setup() (*oidc.IDTokenVerifier, error) {
 // granted scope, which Authentik's ID tokens don't. Errors wrap ErrBadToken
 // and never hold the token; any other error is discovery failing.
 func (v *AccessVerifier) Verify(ctx context.Context, raw string) (string, error) {
+	id, err := v.Identity(ctx, raw)
+	return id.Subject, err
+}
+
+// AccessIdentity is who an access token says it is: its subject, and the name and
+// email Authentik put in it from the scopes granted (an access token
+// carries the same claims as the ID token issued with it). Checked as
+// Verify checks it.
+type AccessIdentity struct {
+	Subject, Name, Email string
+	EmailVerified        bool
+}
+
+// Identity checks raw as Verify does and returns who it names.
+func (v *AccessVerifier) Identity(ctx context.Context, raw string) (AccessIdentity, error) {
 	vf, err := v.setup()
 	if err != nil {
-		return "", err
+		return AccessIdentity{}, err
 	}
 	tok, err := vf.Verify(oidc.ClientContext(ctx, v.HTTP), raw)
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", ErrBadToken, reason(err))
+		return AccessIdentity{}, fmt.Errorf("%w: %s", ErrBadToken, reason(err))
 	}
 	var claims struct {
-		AZP   string `json:"azp"`
-		Scope any    `json:"scope"`
+		AZP           string `json:"azp"`
+		Scope         any    `json:"scope"`
+		Name          string `json:"name"`
+		Email         string `json:"email"`
+		EmailVerified bool   `json:"email_verified"`
 	}
 	if err := tok.Claims(&claims); err != nil {
-		return "", fmt.Errorf("%w: claims", ErrBadToken)
+		return AccessIdentity{}, fmt.Errorf("%w: claims", ErrBadToken)
 	}
 	if s, ok := claims.Scope.(string); !ok || s == "" || claims.AZP != v.ClientID {
-		return "", fmt.Errorf("%w: not an access token", ErrBadToken)
+		return AccessIdentity{}, fmt.Errorf("%w: not an access token", ErrBadToken)
 	}
 	if tok.Subject == "" {
-		return "", fmt.Errorf("%w: no subject", ErrBadToken)
+		return AccessIdentity{}, fmt.Errorf("%w: no subject", ErrBadToken)
 	}
-	return tok.Subject, nil
+	return AccessIdentity{Subject: tok.Subject, Name: claims.Name, Email: claims.Email, EmailVerified: claims.EmailVerified}, nil
 }
 
 // reason is why go-oidc refused a token, in a word, for the log: never the

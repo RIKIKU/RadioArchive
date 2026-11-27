@@ -152,6 +152,10 @@ type Config struct {
 	// requests (ADR 0028). nil: the module can't sign in, and a bearer
 	// token opens nothing.
 	Module *oidcclient.AccessVerifier
+	// App checks the Android app's access tokens on the account's routes
+	// (ADR 0052): the app signs in with its own public client, so it can't
+	// hold the browser's session. nil: a bearer token opens no account.
+	App *oidcclient.AccessVerifier
 	// InitialAdmin is INITIAL_ADMIN_EMAIL: while no admin exists, the
 	// account signing in with this address, proven by Authentik, becomes
 	// the first admin (ADR 0025). "" for none.
@@ -225,6 +229,7 @@ func (s *Service) Routes() []Route {
 		{"PUT " + ProfilePath, http.HandlerFunc(s.saveProfile)},
 		{"DELETE " + ProfilePath, http.HandlerFunc(s.clearProfile)},
 		{"GET " + modulePath, http.HandlerFunc(s.moduleSettings)},
+		{"GET " + appPath, http.HandlerFunc(s.appSettings)},
 	}
 }
 
@@ -239,6 +244,8 @@ type session struct {
 	// Admin is whether the account is an admin now: its row's role is
 	// admin and its status active, read with the session (ADR 0025).
 	Admin bool
+	// Bearer: the app's access token, not a session cookie (ADR 0052).
+	Bearer bool
 }
 
 type attempt struct {
@@ -297,6 +304,10 @@ func (s *Service) current(w http.ResponseWriter, r *http.Request) (session, bool
 	}
 	h, ok := sessionHash(r)
 	if !ok {
+		// No session cookie: the app's bearer token, if it sent one.
+		if raw, ok := bearer(r); ok && s.cfg.App != nil {
+			return s.appSession(r, raw)
+		}
 		return session{}, false, nil
 	}
 	now := s.cfg.Now()
@@ -633,6 +644,10 @@ type State struct {
 func (s *Service) account(w http.ResponseWriter, r *http.Request) {
 	st := State{SignIn: s.On()}
 	se, ok, err := s.current(w, r)
+	if errors.Is(err, errBadBearer) {
+		refuseBearer(w)
+		return
+	}
 	if err != nil {
 		s.cfg.Log.Warn("account: couldn't read the session", "error", err.Error())
 		writeJSON(w, http.StatusServiceUnavailable, errUnavailable)
@@ -684,11 +699,17 @@ func (s *Service) profile(ctx context.Context, se session) (*Profile, error) {
 // signedInChange admits a change to the account: same site, signed in, and
 // sign-in on.
 func (s *Service) signedInChange(w http.ResponseWriter, r *http.Request) (session, bool) {
-	if !s.sameOrigin(r) {
+	// The app's token isn't sent by a browser by itself, so the same-site
+	// check, which guards the cookie, doesn't apply to it (ADR 0052).
+	if !hasBearerOnly(r) && !s.sameOrigin(r) {
 		writeJSON(w, http.StatusForbidden, errOtherSite)
 		return session{}, false
 	}
 	se, ok, err := s.current(w, r)
+	if errors.Is(err, errBadBearer) {
+		refuseBearer(w)
+		return session{}, false
+	}
 	if err != nil {
 		s.cfg.Log.Warn("account: couldn't read the session", "error", err.Error())
 		writeJSON(w, http.StatusServiceUnavailable, errUnavailable)

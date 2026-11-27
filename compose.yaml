@@ -27,7 +27,7 @@ x-authentik: &authentik
   # so changed blueprints take effect, as PagerArchive's. A test
   # (deploy/compose_test.go) checks it and prints the right value.
   labels:
-    radioarchive.config: "d26aa32981176569"
+    radioarchive.config: "6fd96fc0e354868d"
   environment:
     AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?set AUTHENTIK_SECRET_KEY in .env}
     AUTHENTIK_POSTGRESQL__HOST: db

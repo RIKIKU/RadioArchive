@@ -188,9 +188,10 @@ func TestIntegrationModuleTokens(t *testing.T) {
 			}
 		}
 	}
-	// And the account's routes don't take it: the account is the browser's.
-	if code, b := bearerCall(t, srv.URL, tok, "GET", "/api/v1/account", ""); code != 200 || !strings.Contains(b, `"account":null`) {
-		t.Errorf("GET /api/v1/account with a token = %d %s, want signed out", code, b)
+	// And the account's routes don't take it: they take the Android app's
+	// token only (ADR 0052), so the module's is refused there.
+	if code, b := bearerCall(t, srv.URL, tok, "GET", "/api/v1/account", ""); code != 401 || !strings.Contains(b, "invalid_token") {
+		t.Errorf("GET /api/v1/account with the module's token = %d %s, want 401 invalid_token", code, b)
 	}
 
 	// No token, and no address, in the logs.
