@@ -162,6 +162,8 @@
 	// per agency. Kept on the page once the set has had anything in it, so a
 	// last chip tapped off can be tapped back on.
 	let hadSet = $state(false);
+	// The one search's text; while it has any, the talkgroups on are hidden.
+	let query = $state('');
 	$effect(() => {
 		if (set.length) hadSet = true;
 	});
@@ -230,16 +232,13 @@
 
 	<section aria-labelledby="set-heading">
 		<h2 id="set-heading">Your listening set</h2>
-		<Tiles {ix} {listening} />
-	</section>
-
-	<section aria-labelledby="find-heading">
-		<h2 id="find-heading">Find a talkgroup</h2>
-		<Picker {ix} {listening} />
+		<!-- One search (POC): finds, adds, removes and marks priority, on or off. -->
+		<Tiles {ix} {listening}><Picker {ix} {listening} bind:query /></Tiles>
 	</section>
 
 	{#if set.length || hadSet}
-		<section class="on-list" aria-labelledby="on-heading">
+		<!-- Hidden, not dropped, while searching: what was tapped off stays. -->
+		<section class="on-list" aria-labelledby="on-heading" hidden={!!query.trim()}>
 			<h2 id="on-heading">Talkgroups on <span class="count">({set.length.toLocaleString('en-AU')})</span></h2>
 			<OnList {ix} {listening} />
 			{#if shareLink}

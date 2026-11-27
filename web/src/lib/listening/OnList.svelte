@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The talkgroups on, as chips (POC). Priority talkgroups first, then the
-	// rest by agency, each agency folded away until opened, and a filter
-	// that narrows them by name, label or ID.
+	// rest by agency, each agency folded away until opened. Finding one is
+	// the page's one search (Picker.svelte), above the tiles.
 	//
 	// A chip tapped off stays where it was, shown off, until the page is
 	// left, so a stray tap is undone by tapping again; one tapped back on
@@ -21,8 +21,6 @@
 	const wasPriority = new SvelteSet<string>();
 	const unstarred = new SvelteSet<string>();
 	const open = new SvelteSet<string>();
-
-	let query = $state('');
 
 	const on = $derived(new Set(listening.saved.map(keyOf)));
 	const prio = $derived(new Set(listening.saved.filter((e) => e.priority).map(keyOf)));
@@ -51,12 +49,6 @@
 			if (loose.length) out.push({ id: `${sid}-gnone`, name: 'Not in a group' + sys, talkgroups: loose });
 		}
 		return out;
-	});
-
-	const matches = $derived.by(() => {
-		const q = query.trim().toLowerCase();
-		if (!q) return [];
-		return shown.filter((t) => t.name.toLowerCase().includes(q) || t.label.toLowerCase().includes(q) || String(t.id).includes(q));
 	});
 
 	const num = (n: number) => n.toLocaleString('en-AU');
@@ -111,17 +103,7 @@
 
 <section class="part" aria-labelledby="{uid}-all">
 	<h3 id="{uid}-all">By agency</h3>
-	<div class="field filter">
-		<label for="{uid}-q">Filter what's on</label>
-		<input id="{uid}-q" type="search" bind:value={query} autocomplete="off" aria-describedby="{uid}-qh" />
-		<p class="field-hint" id="{uid}-qh">By name, label or ID.</p>
-	</div>
-
-	{#if query.trim()}
-		<p class="status" role="status">{matches.length ? `${num(matches.length)} match` : 'Nothing on matches.'}</p>
-		{#if matches.length}{@render chips(matches, 'Talkgroups on that match')}{/if}
-	{:else}
-		<ul class="groups">
+	<ul class="groups">
 			{#each groups as g (g.id)}
 				{@const expanded = open.has(g.id)}
 				<li class="group">
@@ -136,7 +118,6 @@
 				</li>
 			{/each}
 		</ul>
-	{/if}
 </section>
 
 <style>
@@ -156,9 +137,6 @@
 		margin: 0;
 		color: var(--muted);
 		font-size: var(--text-sm);
-	}
-	.filter {
-		max-width: var(--field-search);
 	}
 	.chips {
 		display: grid;

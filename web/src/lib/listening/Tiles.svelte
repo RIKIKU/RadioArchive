@@ -8,10 +8,12 @@
 	// and aria-pressed (true, mixed, false), never by colour alone. Single
 	// talkgroups are reached by the search (Picker.svelte), not drawn here:
 	// a deployment may have over a thousand.
+	import type { Snippet } from 'svelte';
 	import { keyOf, type Index, type Talkgroup } from './set.ts';
 	import type { ListeningState } from './state.svelte.ts';
 
-	let { ix, listening }: { ix: Index; listening: ListeningState } = $props();
+	// children: drawn between the top box and the tiles (POC: the one search).
+	let { ix, listening, children }: { ix: Index; listening: ListeningState; children?: Snippet } = $props();
 
 	interface Tile {
 		id: string;
@@ -113,6 +115,8 @@
 		<p class="whats-on empty">Your listening set is empty. Tap a tile to switch on all of its talkgroups, or find one below.</p>
 	{/if}
 </div>
+
+{@render children?.()}
 
 {#each sections as s (s.id)}
 	{#if s.system}<h3 class="system">{s.system}</h3>{/if}

@@ -232,12 +232,14 @@ export function sameSet(ix: Index, a: Entry[], b: Entry[]): boolean {
 export function search(talkgroups: Talkgroup[], query: string): Talkgroup[] {
 	const q = query.trim().toLowerCase();
 	if (!q) return talkgroups;
-	const ranks: Talkgroup[][] = [[], [], []];
+	// The talkgroup whose ID is the query comes before any other (POC).
+	const ranks: Talkgroup[][] = [[], [], [], []];
 	for (const t of talkgroups) {
 		const fields = [t.name, t.label, t.tag, String(t.id)].map((f) => f.toLowerCase());
-		if (fields.some((f) => f === q)) ranks[0].push(t);
-		else if (fields.some((f) => f.startsWith(q) || f.split(/\s+/).some((w) => w.startsWith(q)))) ranks[1].push(t);
-		else if (fields.some((f) => f.includes(q))) ranks[2].push(t);
+		if (String(t.id) === q) ranks[0].push(t);
+		else if (fields.some((f) => f === q)) ranks[1].push(t);
+		else if (fields.some((f) => f.startsWith(q) || f.split(/\s+/).some((w) => w.startsWith(q)))) ranks[2].push(t);
+		else if (fields.some((f) => f.includes(q))) ranks[3].push(t);
 	}
 	return ranks.flat();
 }

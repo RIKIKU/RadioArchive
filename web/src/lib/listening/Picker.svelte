@@ -9,9 +9,8 @@
 	import { keyOf, search, type Index, type Talkgroup } from './set.ts';
 	import type { ListeningState } from './state.svelte.ts';
 
-	let { ix, listening }: { ix: Index; listening: ListeningState } = $props();
+	let { ix, listening, query = $bindable('') }: { ix: Index; listening: ListeningState; query?: string } = $props();
 
-	let query = $state('');
 	const uid = $props.id();
 
 	const found = $derived(query.trim() ? search(ix.catalogue.talkgroups, query) : []);
@@ -30,7 +29,7 @@
 	<div class="field find">
 		<label for="{uid}-q">Search talkgroups</label>
 		<input id="{uid}-q" type="search" bind:value={query} autocomplete="off" aria-describedby="{uid}-hint" />
-		<p class="field-hint" id="{uid}-hint">By name, label, ID or tag. Tap one to switch it on or off; hold it, or tap its star, for priority.</p>
+		<p class="field-hint" id="{uid}-hint">By number, name, label or tag, on or off. Tap one to switch it on or off; hold it, or tap its star, for priority.</p>
 	</div>
 
 	{#if query.trim()}
@@ -56,6 +55,7 @@
 
 <style>
 	.picker {
+		margin-top: var(--space-lg);
 		display: flex;
 		flex-direction: column;
 	}
