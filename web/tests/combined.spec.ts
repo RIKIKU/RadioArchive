@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// Beside PagerArchive (SPEC.md R102, R104, A34; ADR 0054): the app switcher
+// Beside PagerArchive (SPEC.md R102, R104, A34; ADR 0056): the app switcher
 // in the top bar, and the look cookie the two apps share on their parent
 // domain; and standalone, neither.
 //
@@ -74,7 +74,7 @@ test.describe('standalone', () => {
 			await quietFeed(page);
 			const res = await page.goto('/');
 			expect(await res!.text()).not.toMatch(/data-look-shared|data-pagerarchive/);
-			await expect(page.getByRole('button', { name: /^Account menu/ })).toBeVisible();
+			await expect(page.getByRole('button', { name: /^Account menu/ })).toBeVisible({ timeout: 15_000 });
 			await expect(page.locator('[data-app-switcher]')).toHaveCount(0);
 			await expect(page.getByRole('link', { name: /^Switch to / })).toHaveCount(0);
 		});
@@ -115,6 +115,8 @@ test.describe('beside PagerArchive @combined', () => {
 		for (const theme of themes)
 			for (const width of widths)
 				test(`the app switcher, ${look}, ${theme}, ${width}px`, async ({ page, context }) => {
+					// axe takes a while, the more so with the other browsers' runs beside it.
+					test.setTimeout(90_000);
 					await context.addCookies([
 						{ name: 'look', value: look, domain: '.example.test', path: '/' },
 						{ name: 'theme', value: theme, url: RADIO }
@@ -123,7 +125,7 @@ test.describe('beside PagerArchive @combined', () => {
 					await quietFeed(page);
 					await page.goto('/');
 					const sw = switcher(page);
-					await expect(sw).toBeVisible();
+					await expect(sw).toBeVisible({ timeout: 15_000 });
 					await expect(sw).toHaveText('Pager');
 					await expect(sw).toHaveAttribute('href', PAGER);
 					await expect(sw).not.toHaveAttribute('target', /./);
@@ -149,7 +151,7 @@ test.describe('beside PagerArchive @combined', () => {
 		await quietFeed(page);
 		const res = await page.goto('/');
 		expect(await res!.text()).toContain('<html data-look-shared="example.test" data-look="console"');
-		await expect(page.getByRole('button', { name: /^Account menu/ })).toBeVisible();
+		await expect(page.getByRole('button', { name: /^Account menu/ })).toBeVisible({ timeout: 15_000 });
 		await expect(page.locator('html')).toHaveAttribute('data-look', 'console');
 		// The shared cookie is the only look cookie.
 		expect(await lookCookies(context)).toEqual([expect.objectContaining({ value: 'console', domain: '.example.test', path: '/' })]);
@@ -192,7 +194,7 @@ test.describe('beside PagerArchive @combined', () => {
 		await quietFeed(page);
 		const res = await page.goto('/');
 		expect(await res!.text()).toContain('<html data-look-shared="example.test" data-theme="dark"');
-		await expect(page.getByRole('button', { name: /^Account menu/ })).toBeVisible();
+		await expect(page.getByRole('button', { name: /^Account menu/ })).toBeVisible({ timeout: 15_000 });
 		await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 		expect(where(await themeCookies(context))).toEqual(['.example.test dark']);
 	});

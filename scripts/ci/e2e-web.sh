@@ -231,7 +231,7 @@ wait_for 120 "the limits' API" node -e "fetch(process.argv[1]).then((r) => proce
 	"http://127.0.0.1:$lport/healthz"
 cd web
 RA_URL="http://127.0.0.1:$lport" npx playwright test --grep @limits --workers=1 --pass-with-no-tests "$@"
-# Beside PagerArchive (R102, R104; ADR 0054): a binary of its own on the
+# Beside PagerArchive (R102, R104; ADR 0056): a binary of its own on the
 # same database with PAGERARCHIVE_URL and LOOK_COOKIE_DOMAIN set. A cookie
 # needs a domain name, so the browsers reach it as radio.example.test with
 # it as their HTTP proxy (RA_COMBINED_PROXY): Go's server reads the host

@@ -12,7 +12,7 @@ import (
 )
 
 // combinedFromEnv reads the settings for running beside PagerArchive
-// (SPEC.md R102, R104; ADR 0054):
+// (SPEC.md R102, R104; ADR 0056):
 //
 //   - PAGERARCHIVE_URL, PagerArchive's address, which turns on the app
 //     switcher, and PAGERARCHIVE_NAME, its name there ("Pager" unless set);

@@ -6,7 +6,7 @@
 	// phones, and the account menu, where the look and theme are chosen
 	// (R82) signed in or out, and where a listener signs in to save their
 	// preferences (R103, R110; ADR 0009). Beside PagerArchive, the app
-	// switcher to it (R102; ADR 0054). The dock, "Player", holds the player's controls
+	// switcher to it (R102; ADR 0056). The dock, "Player", holds the player's controls
 	// (R44, R81; ADR 0012, 0051) on every page, and the live feed's notices
 	// sit above it; what's playing is at the top of the page (R45, R113).
 	import { AccountMenu, BottomBar, Frame, Menu } from 'archiveux/components';
@@ -82,7 +82,7 @@
 		alerts: () => alerts,
 		apply(p: Profile) {
 			// Beside PagerArchive the shared look cookie wins over the
-			// account's (R104; ADR 0054): a look chosen there since is kept,
+			// account's (R104; ADR 0056): a look chosen there since is kept,
 			// and saved to the account.
 			look = accountLook(p.look, sharedDomain() !== undefined, document.cookie);
 			setLook(look);
@@ -163,7 +163,7 @@
 	]);
 	const bar = $derived([top[0], { ...top[1], label: 'Recent' }, top[2]]);
 	const brand = { name: 'RadioArchive', mark: 'RA', href: '/' };
-	// The app switcher (R102; ArchiveUx ADR 0002, decision 9; ADR 0054): with
+	// The app switcher (R102; ArchiveUx ADR 0002, decision 9; ADR 0056): with
 	// PAGERARCHIVE_URL set the server names PagerArchive on the page, and the
 	// top bar links to it, in the same tab, for everyone who can reach the
 	// radio. Standalone, none.

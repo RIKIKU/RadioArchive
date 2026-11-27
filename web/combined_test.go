@@ -22,7 +22,7 @@ func ask(t *testing.T, h http.Handler, host, cookie string) (*http.Response, str
 	return w.Result(), w.Body.String()
 }
 
-// R102 (ADR 0054): with PagerArchive's address set, the page names it for
+// R102 (ADR 0056): with PagerArchive's address set, the page names it for
 // the app switcher, escaped; standalone, the page is as it was.
 func TestPageNamesPagerArchive(t *testing.T) {
 	root := fstest.MapFS{"index.html": {Data: []byte(page)}}
@@ -40,7 +40,7 @@ func TestPageNamesPagerArchive(t *testing.T) {
 	}
 }
 
-// R104 (ADR 0054): with LOOK_COOKIE_DOMAIN set, the first paint is the
+// R104 (ADR 0056): with LOOK_COOKIE_DOMAIN set, the first paint is the
 // shared look cookie's, read as ArchiveUx's look.js reads it; the page says
 // the look is shared, and names the domain; and the look it was sent in is
 // moved into the shared cookie, this host's own ended. On a host outside

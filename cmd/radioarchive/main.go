@@ -78,7 +78,7 @@
 //	                        disabling, enabling and deleting an account reach Authentik
 //	                        with it. Without it they change the radio only, and say so
 //
-// Beside PagerArchive (SPEC.md R102, R104; ADR 0054), each unset standalone:
+// Beside PagerArchive (SPEC.md R102, R104; ADR 0056), each unset standalone:
 //
 //	PAGERARCHIVE_URL        PagerArchive's public URL: the app switcher in the top bar
 //	PAGERARCHIVE_NAME       the switcher's name for it (default Pager)
@@ -324,7 +324,7 @@ func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate
 
 // operations are the settings for running the deployment: the metrics
 // token (ADR 0040), the backup's status file and the setup export's
-// folder (ADR 0041), and how the app runs beside PagerArchive (ADR 0054).
+// folder (ADR 0041), and how the app runs beside PagerArchive (ADR 0056).
 type operations struct {
 	metricsToken string
 	backup       *backup.Reader

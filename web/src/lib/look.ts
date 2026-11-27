@@ -10,7 +10,7 @@
 // names no shared cookie, so the look is the browser's own choice, in a
 // cookie of this host's own.
 //
-// Beside PagerArchive (R104; ADR 0054), with LOOK_COOKIE_DOMAIN set, the
+// Beside PagerArchive (R104; ADR 0056), with LOOK_COOKIE_DOMAIN set, the
 // server marks the page data-look-shared="<domain>", and the look is the one
 // `look` cookie both apps share on that domain, written as ArchiveUx's
 // lookCookie writes it: the cookie's look wins over the account's, as in

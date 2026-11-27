@@ -7,7 +7,7 @@ import (
 	"github.com/RIKIKU/RadioArchive/web"
 )
 
-// R102, R104 (ADR 0054): the combined deployment's settings. All unset is
+// R102, R104 (ADR 0056): the combined deployment's settings. All unset is
 // standalone; PAGERARCHIVE_URL turns on the switcher, named Pager unless
 // PAGERARCHIVE_NAME says otherwise; LOOK_COOKIE_DOMAIN is lower-cased and
 // loses a leading dot, and needs APP_URL in it. Anything else stops the

@@ -1,6 +1,6 @@
 package web
 
-// Beside PagerArchive (SPEC.md R102, R104; ADR 0054): the app switcher's
+// Beside PagerArchive (SPEC.md R102, R104; ADR 0056): the app switcher's
 // settings, and the look cookie the two apps share on their parent domain.
 
 import (
