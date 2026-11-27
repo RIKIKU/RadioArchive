@@ -26,10 +26,12 @@
 	// listening's are. Several played in turn (Play all, play from here: ADR
 	// 0023) show which call of them is playing, and when it started.
 	//
-	// On a phone (ADR 0023, "On a phone") the dock stacks: the replay first,
-	// its name beside its controls and the rest under both, then
-	// live listening, its status in a line above its controls. On a desktop
-	// the two sit side by side, as before (the wrapper isn't drawn there).
+	// During a replay the dock stacks: the replay first, then live
+	// listening's controls. On a phone (ADR 0023, "On a phone") the replay's
+	// name sits beside its controls and the rest under both. On a desktop
+	// the replay's details and controls share its row; they no longer sit
+	// beside live listening's, which need the room for eight controls (ADR
+	// 0051).
 	import { Icon, MoreActions } from 'archiveux/components';
 	import { LIVE_WITHIN } from 'archiveux/live.js';
 	import type { Player, CallInfo } from './player.svelte.ts';
@@ -161,6 +163,16 @@
 	/* Desktops: not drawn, so what's in it sits in the frame's dock row. */
 	.stack {
 		display: contents;
+	}
+	/* A replay, on a desktop as on a phone: above live listening, so the
+	   bar's eight controls keep their room (ADR 0051). */
+	.stack.replaying {
+		display: flex;
+		flex: 1 1 auto;
+		flex-direction: column;
+		align-items: stretch;
+		gap: var(--space-xs);
+		min-width: 0;
 	}
 	.replay {
 		display: flex;

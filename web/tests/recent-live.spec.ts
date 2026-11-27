@@ -80,7 +80,7 @@ test('@live R46: pressing a call replays it from its recording; live listening p
 
 	// Replaying: from its recording, in the dock; live listening paused.
 	await expect(dock(page).locator('.replay')).toContainText('Dispatch North');
-	await expect(display(page).locator('.status')).toHaveText('Paused');
+	await expect(display(page).locator('.np-status')).toHaveText('Paused');
 	await expect(row).toHaveAttribute('data-playing', 'yes');
 	await expect
 		.poll(async () => (await heard(page)).first.filter((f) => f.call_id === first.call_id && (f as { replay?: boolean }).replay).length, { timeout: 15_000 })
@@ -181,7 +181,7 @@ test('@live R46: play from here plays the call, then the later ones oldest first
 	const aStart = await page.locator(`[data-call-id="${a}"] time`).getAttribute('datetime');
 	await page.locator(`[data-call-id="${a}"]`).getByRole('button', { name: /^Play from here: Dispatch North/ }).click();
 	await expect(dock(page).locator('.replay')).toContainText('From here: call 1 of');
-	await expect(display(page).locator('.status')).toHaveText('Paused');
+	await expect(display(page).locator('.np-status')).toHaveText('Paused');
 
 	// A live call meanwhile is queued, not heard.
 	const sending = sendCalls([{ unit: 5303, atMs: 200, pcm: seconds(2) }]);

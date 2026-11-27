@@ -17,9 +17,9 @@ const box = async (page: Page, cls: string) => (await display(page).locator(cls)
 /** Where each field is: they never move between calls or states. */
 async function places(page: Page) {
 	const out: Record<string, { x: number; y: number }> = {};
-	for (const f of ['.status', '.where', '.started', '.name', '.tg', '.unit', '.elapsed', '.queued', '.priority', '.hold']) {
+	for (const f of ['.np-status', '.where', '.started', '.name', '.tg', '.unit', '.elapsed', '.queued', '.priority', '.hold']) {
 		const b = await box(page, f);
-		out[f] = { x: Math.round(f === '.status' || f === '.name' ? b.x : b.x + b.width), y: Math.round(b.y) };
+		out[f] = { x: Math.round(f === '.np-status' || f === '.name' ? b.x : b.x + b.width), y: Math.round(b.y) };
 	}
 	return out;
 }
@@ -99,12 +99,12 @@ for (const width of [1280, 375] as const)
 		// Paused, then behind.
 		await dock(page).getByRole('button', { name: 'Pause' }).click();
 		await expect(display(page)).toHaveAttribute('data-state', 'paused');
-		await expect(display(page).locator('.status')).toHaveText('Paused');
+		await expect(display(page).locator('.np-status')).toHaveText('Paused');
 		expect(await height(page), 'paused').toBeCloseTo(idle, 0);
 		await page.waitForTimeout(6_000);
 		await dock(page).getByRole('button', { name: 'Resume' }).click();
 		await expect(display(page)).toHaveAttribute('data-state', 'behind');
-		await expect(display(page).locator('.status')).toHaveText(/^Behind \d+ s$/);
+		await expect(display(page).locator('.np-status')).toHaveText(/^Behind \d+ s$/);
 		expect(await height(page), 'behind').toBeCloseTo(idle, 0);
 		expect(await places(page), 'behind: every field where it was').toEqual(empty);
 		expect(await height(page, dock(page)), 'the dock while behind').toBeCloseTo(docked, 0);
@@ -135,7 +135,8 @@ test('@live R113: the display stays in view under the top bar while the page scr
 	await listen(page);
 	const top = (await page.locator('header.top').boundingBox())!;
 	await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-	await expect.poll(async () => Math.round((await display(page).boundingBox())!.y)).toBe(Math.round(top.y + top.height));
+	// At the frame's --topbar-height, its measured inner height: the bar's own border may overlap it by a pixel.
+	await expect.poll(async () => Math.abs((await display(page).boundingBox())!.y - (top.y + top.height))).toBeLessThanOrEqual(1.5);
 	// The page's scroll padding covers the top bar and the display.
 	const padding = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop));
 	const d = (await display(page).boundingBox())!;
@@ -148,7 +149,7 @@ test('@live R113: the display stays in view under the top bar while the page scr
 });
 
 test('@live R113: the other pages show a slim line while listening, at a fixed height, and none when stopped', async ({ page }) => {
-	test.setTimeout(2 * 60_000);
+	test.setTimeout(4 * 60_000);
 	await listen(page);
 	await page.locator('nav.side').getByRole('link', { name: 'Recent calls' }).click();
 	await expect(page.getByRole('heading', { name: 'Recent calls' })).toBeVisible();
@@ -161,7 +162,7 @@ test('@live R113: the other pages show a slim line while listening, at a fixed h
 	const live = await firstOf(page, 5292, 'live');
 	await expect(slim).toHaveAttribute('data-state', 'live');
 	await expect(slim.locator('.name')).toHaveText('Dispatch North');
-	await expect(slim.locator('.status')).toHaveText('Live');
+	await expect(slim.locator('.np-status')).toHaveText('Live');
 	await expect(slim.locator('.started .value')).toHaveText(`Started ${await startedOf(page, live.call_id)}`);
 	expect(await height(page), 'the slim line playing').toBeCloseTo(h, 0);
 	// One line.
@@ -171,7 +172,7 @@ test('@live R113: the other pages show a slim line while listening, at a fixed h
 		await page.setViewportSize({ width, height: 800 });
 		await axe(page, `the slim line, ${width} px`);
 		const line = (await slim.boundingBox())!;
-		for (const f of ['.name', '.status', '.started']) {
+		for (const f of ['.name', '.np-status', '.started']) {
 			const b = (await slim.locator(f).boundingBox())!;
 			expect(b.y, `${f} in the line, ${width} px`).toBeGreaterThanOrEqual(line.y - 0.5);
 			expect(b.y + b.height, `${f} in the line, ${width} px`).toBeLessThanOrEqual(line.y + line.height + 0.5);

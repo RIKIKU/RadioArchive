@@ -145,14 +145,14 @@
 	{#if variant === 'slim'}
 		<section class="now-playing slim" aria-label="Now playing" data-state={status.state} data-variant="slim">
 			{@render field(c?.talkgroup.name ?? DASH, 'name')}
-			<span class="live-badge status" data-state={status.state} title={status.text}>{status.text}</span>
+			<span class="live-badge np-status" data-state={status.state} title={status.text}>{status.text}</span>
 			{@render field(queued, 'queued')}
 			{@render sized(at(c?.startedAt), 'started', '00:00:00', 'Started')}
 		</section>
 	{:else}
 		<section class="now-playing full" aria-label="Now playing" data-state={status.state} data-variant="full">
 			<div class="row r1">
-				<span class="live-badge status" data-state={status.state} title={status.text}>{status.text}</span>
+				<span class="live-badge np-status" data-state={status.state} title={status.text}>{status.text}</span>
 				{@render field(where, 'where')}
 				{@render sized(at(c?.startedAt), 'started', '00:00:00', 'Started')}
 			</div>
@@ -261,7 +261,7 @@
 		height: calc(var(--leading-tight) * var(--text-sm) + 2 * var(--badge-pad-y));
 		font-size: var(--text-sm);
 	}
-	.status {
+	.np-status {
 		min-width: 0;
 		max-width: 100%;
 		overflow: hidden;

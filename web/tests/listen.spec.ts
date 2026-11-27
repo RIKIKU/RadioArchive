@@ -33,7 +33,7 @@ test("the Listen page opens at / with Start listening, in ArchiveUx's frame", as
 	// The now-playing display, at the top of the page, idle, every field there (ADR 0051).
 	const display = page.getByRole('region', { name: 'Now playing' });
 	await expect(display).toHaveAttribute('data-state', 'idle');
-	await expect(display.locator('.status')).toHaveText('Idle');
+	await expect(display.locator('.np-status')).toHaveText('Idle');
 	await expect(display.locator('.name')).toHaveText('—');
 	await expect(display.locator('.started .value')).toHaveText('Started —');
 	await expect(page.getByRole('list', { name: 'Recent calls heard' })).toHaveCount(0);

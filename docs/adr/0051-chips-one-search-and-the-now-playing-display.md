@@ -87,6 +87,8 @@ Now:
 
 So the dock's height is fixed while listening, behind or not.
 
+A replay from Recent calls (ADR 0016, 0023) now sits above live listening's controls on a desktop too, as it already did on a phone. Beside eight controls at 1,280 px, the two didn't fit in one row. The dock grows by the replay's row while it plays, which follows the listener's own press.
+
 _This contradicts ADR 0048's "Catch up … only when behind", which the owner approved._ It's worth it here because the owner's newer decisions are fixed positions and "the bottom dock keeps only the controls", and a line that appears only when behind is neither. Catch up still does exactly what it did, and is still unusable when there's nothing to catch up to; only its absence became a disabled state. With 7 controls on a phone (Actions holding Share and Add to basket), each is still a whole target at 375 px. With names beside the icons the row is about 68rem wide, so the bar switches to short names under the icons below 72rem (was 64rem).
 
 | Option | Why not |

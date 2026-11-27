@@ -14,7 +14,7 @@ import { display, dock, firstOf, heard, listen, playedFrom, recorderDeaf, second
 
 const NOTICE = "Some talkgroups aren't being received right now.";
 const queued = (page: Page) => display(page).locator('.queued');
-const badge = (page: Page) => display(page).locator('.status');
+const badge = (page: Page) => display(page).locator('.np-status');
 
 test('@live A8: a priority call plays next without cutting off the call playing; the queued call then plays from its recording', async ({ page }) => {
 	await listen(page, 'webcodecs', [{ id: 1001 }, { id: 1002, priority: true }]);
