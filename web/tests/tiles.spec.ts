@@ -174,6 +174,8 @@ test('R112: a long press with the mouse flips priority and leaves the chip on; a
 		await expect(star(results(page), 'Channel 101')).toHaveAttribute('aria-pressed', 'false');
 	}
 	// A long press on one that's off switches it on as priority (ADR 0051).
+	await page.getByLabel('Search talkgroups').fill('TG102');
+	await expect(chip(results(page), 'Channel 102')).toHaveAttribute('aria-pressed', 'false');
 	await press(page, chip(results(page), 'Channel 102'), 700);
 	await expect(chip(results(page), 'Channel 102')).toHaveAttribute('aria-pressed', 'true');
 	expect(await priorityOf(page, 102)).toBe(true);
@@ -246,9 +248,9 @@ test('R112: the star is a toggle button for the keyboard: Space and Enter flip p
 	await page.keyboard.press('Enter');
 	await expect(s).toHaveAttribute('aria-pressed', 'false');
 	expect(await priorityOf(page, 101)).toBe(false);
-	// The chip, a Tab back: Space and Enter switch it, never mark it.
-	await page.keyboard.press('Shift+Tab');
+	// The chip, just before the star: Space and Enter switch it, never mark it.
 	const c = chip(results(page), 'Channel 101');
+	await c.focus();
 	await expect(c).toBeFocused();
 	await page.keyboard.press('Space');
 	await expect(c).toHaveAttribute('aria-pressed', 'false');

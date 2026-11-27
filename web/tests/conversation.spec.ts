@@ -73,7 +73,7 @@ test('Share on a conversation copies a link that opens its name, note and three 
 	await expect(page.getByRole('button', { name: 'Play all' })).toBeVisible();
 	await expect(cards(page).first().getByRole('link', { name: /^Open the call/ })).toHaveAttribute('href', `/calls/${ids[0]}`);
 	// Live listening doesn't start.
-	await expect(page.getByRole('region', { name: 'Now playing' }).getByRole('button', { name: 'Start listening' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Player' }).getByRole('button', { name: 'Start listening' })).toBeVisible();
 });
 
 test("a name and note holding markup show as the text typed; nothing in them runs or renders", async ({ page }) => {

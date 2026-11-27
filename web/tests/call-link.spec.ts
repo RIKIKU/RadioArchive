@@ -54,7 +54,7 @@ test("an ended call's card: its talkgroup, group, start in TZ, duration, units, 
 	await expect(card(page).getByRole('button', { name: /^Share: Dispatch North/ })).toBeVisible();
 	await expect(page).toHaveTitle('Dispatch North · RadioArchive');
 	// Live listening doesn't start; Start listening stays in the dock.
-	await expect(page.getByRole('region', { name: 'Now playing' }).getByRole('button', { name: 'Start listening' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Player' }).getByRole('button', { name: 'Start listening' })).toBeVisible();
 	// Below: its talkgroup's calls from it on, oldest first, starting with it.
 	const rows = below(page, 'Dispatch North');
 	await expect(rows.first()).toHaveAttribute('data-call-id', c.id);
@@ -79,7 +79,7 @@ test('a call in progress: the card says so and offers live listening, with no Pl
 	await expect(card(page).getByRole('button', { name: /^Play/ })).toHaveCount(0);
 	await expect(card(page).getByRole('link', { name: /^Download/ })).toHaveCount(0);
 	await expect(card(page)).toContainText('Once the call ends, this link plays its recording.');
-	await expect(page.getByRole('region', { name: 'Now playing' }).getByRole('button', { name: 'Start listening' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Player' }).getByRole('button', { name: 'Start listening' })).toBeVisible();
 });
 
 test("an unavailable call: one card naming nothing, the app's own page with one status, whatever the reason", async ({ page, request }) => {
