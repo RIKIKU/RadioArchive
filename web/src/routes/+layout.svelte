@@ -21,7 +21,8 @@
 	import { current, setLook, setTheme, type Look, type Theme } from '#lib/look.ts';
 	import { alertsOn, setAlerts } from '#lib/playback.ts';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
-	import { indexOf, resolve, type Catalogue } from '#lib/listening/set.ts';
+	import { compareSets, indexOf, type Catalogue, type Index } from '#lib/listening/set.ts';
+	import SetDifferences from '#lib/listening/SetDifferences.svelte';
 	import { Account } from '#lib/account/account.svelte.ts';
 	import { basketState } from '#lib/basket/state.svelte.ts';
 	import { dockIcons } from '#lib/audio/icons.ts';
@@ -117,23 +118,29 @@
 		}
 	}
 
-	// The prompt's names: the account's set, as the catalogue shows it.
-	let offered: string[] = $state([]);
+	// The prompt's comparison: the account's set against this browser's, as
+	// the catalogue shows them. Counts and a folded few names, never the
+	// whole set (R41).
+	let offerIx: Index | undefined = $state();
 	$effect(() => {
-		const offer = acct.offer;
-		if (!offer) return;
+		if (!acct.offer) return;
 		fetch('/api/v1/catalogue', { headers: { Accept: 'application/json' } })
 			.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-			.then((c: Catalogue) => (offered = resolve(indexOf(c), offer.talkgroups).map((r) => r.talkgroup.name)))
-			.catch(() => (offered = []));
+			.then((c: Catalogue) => (offerIx = indexOf(c)))
+			.catch(() => (offerIx = undefined));
 	});
+	const compared = $derived(offerIx && acct.offer ? compareSets(offerIx, acct.offer.talkgroups, listening.saved) : undefined);
 
 	onMount(() => {
 		readNotice();
 		void acct.load();
 	});
 
-	const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+	const n = (x: number) => x.toLocaleString('en-AU');
+	const plural = (x: number, one: string) => `${n(x)} ${one}${x === 1 ? '' : 's'}`;
+	/** One side of the prompt: "1,200 talkgroups (10 priority) and 3 calls in its basket". */
+	const holds = (s: { count: number; priority: number }, calls: number) =>
+		`${plural(s.count, 'talkgroup')}${s.priority ? ` (${n(s.priority)} priority)` : ''}${calls ? ` and ${plural(calls, 'call')} in its basket` : ''}`;
 	const signInHref = $derived(`/auth/signin?return=${encodeURIComponent(page.url.pathname + page.url.search)}`);
 	const who = $derived(acct.who ? { name: acct.who.name, email: acct.who.email } : null);
 
@@ -204,6 +211,26 @@
 	{/snippet}
 	{#snippet bottomBar()}<BottomBar entries={bar} {groups} current={page.url.pathname} />{/snippet}
 
+	<!-- The first sign-in's one question (R41; ADR 0009), above everything,
+	     its buttons straight under a line of counts: the sets themselves can
+	     be thousands of talkgroups, so only what differs is shown, folded. -->
+	{#if acct.mode === 'asking' && acct.offer}
+		{@const theirs = compared?.offered ?? { count: acct.offer.talkgroups.length, priority: acct.offer.talkgroups.filter((e) => e.priority).length }}
+		{@const ours = compared?.current ?? { count: listening.saved.length, priority: listening.saved.filter((e) => e.priority).length }}
+		<section class="panel" aria-labelledby="account-offer-heading">
+			<h2 id="account-offer-heading">Use the listening set saved to your account?</h2>
+			<p>
+				Your account has {holds(theirs, acct.offer.basket?.calls.length ?? 0)}. This browser has {holds(ours, basket.basket.calls.length)}. Nothing is merged: choose one.
+			</p>
+			<div class="actions">
+				<button type="button" onclick={() => acct.useAccounts()}>Use my account's set</button>
+				<button type="button" class="secondary" onclick={() => acct.keepBrowsers()}>Keep this browser's set</button>
+			</div>
+			{#if compared}<SetDifferences c={compared} offered="your account" current="this browser" />{/if}
+			<p class="hint">Keeping this browser's set saves it to your account in place of the one there. The look, playback settings and basket go with the set.</p>
+		</section>
+	{/if}
+
 	<!-- Now playing at the top (R45, R113; ADR 0051): the whole display on the
 	     Listen page, idle too when not listening; a slim line on the others
 	     while listening. The dock holds the controls. -->
@@ -223,26 +250,6 @@
 		<p class="ok" role="status">You're signed out. This browser keeps its listening set.</p>
 	{:else if notice === 'signed-out-here'}
 		<p class="alert" role="status">You're signed out of the radio, but the sign-in service couldn't be reached to sign you out there too.</p>
-	{/if}
-
-	{#if acct.mode === 'asking' && acct.offer}
-		<section class="panel" aria-labelledby="account-offer-heading">
-			<h2 id="account-offer-heading">Use the listening set saved to your account?</h2>
-			<p>
-				Your account has {plural(offered.length || acct.offer.talkgroups.length, 'talkgroup')}{#if acct.offer.talkgroups.some((e) => e.priority)}, with priority marks{/if}{#if acct.offer.basket?.calls.length}, and {plural(acct.offer.basket.calls.length, 'call')} in its basket{/if}.
-				This browser has {plural(listening.saved.length, 'talkgroup')}{#if basket.basket.calls.length}, and {plural(basket.basket.calls.length, 'call')} in its basket{/if}. Nothing is merged: choose one.
-			</p>
-			{#if offered.length}
-				<ul class="names" aria-label="Your account's listening set">
-					{#each offered as name, i (i)}<li>{name}</li>{/each}
-				</ul>
-			{/if}
-			<div class="actions">
-				<button type="button" onclick={() => acct.useAccounts()}>Use my account's set</button>
-				<button type="button" class="secondary" onclick={() => acct.keepBrowsers()}>Keep this browser's set</button>
-			</div>
-			<p class="hint">Keeping this browser's set saves it to your account in place of the one there. Either way, the look, the playback settings and the download basket go with the set.</p>
-		</section>
 	{/if}
 
 	{#if acct.clearing === 'confirm'}
@@ -348,10 +355,6 @@
 	}
 	.panel h2 {
 		margin-top: 0;
-	}
-	.names {
-		margin: var(--space-sm) 0 var(--space-lg);
-		padding-left: var(--space-xl);
 	}
 	.actions {
 		display: flex;

@@ -27,9 +27,11 @@
 	import OnList from '#lib/listening/OnList.svelte';
 	import Picker from '#lib/listening/Picker.svelte';
 	import Tiles from '#lib/listening/Tiles.svelte';
+	import SetDifferences from '#lib/listening/SetDifferences.svelte';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import {
 		SHARE_PARAM,
+		compareSets,
 		decodeSet,
 		encodeSet,
 		find,
@@ -163,7 +165,7 @@
 		if (number !== null) await openFireground(number, at);
 	});
 
-	const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+	const plural = (n: number, one: string) => `${n.toLocaleString('en-AU')} ${one}${n === 1 ? '' : 's'}`;
 
 	// The talkgroups on, as chips, grouped by agency and folded away per
 	// agency. Kept on the page once the set has had anything in it, so a
@@ -201,15 +203,11 @@
 			It has {plural(offered.length, 'talkgroup')}{#if offered.some((r) => r.priority)}, {plural(offered.filter((r) => r.priority).length, 'priority talkgroup')}{/if}.
 			It replaces the {plural(set.length, 'talkgroup')} in your listening set in this browser.
 		</p>
-		<ul class="names">
-			{#each offered as r (`${r.talkgroup.system ?? 0}.${r.talkgroup.id}`)}
-				<li>{r.talkgroup.name}{#if r.priority}<span class="mark">Priority</span>{/if}</li>
-			{/each}
-		</ul>
 		<div class="actions">
 			<button type="button" onclick={acceptShare}>Replace my listening set</button>
 			<button type="button" class="secondary" onclick={forgetShare}>Keep mine</button>
 		</div>
+		{#if ix && offer}<SetDifferences c={compareSets(ix, offer, listening.saved)} offered="the link" current="your set" />{/if}
 	</section>
 {/if}
 
@@ -286,10 +284,6 @@
 	.offer h2 {
 		margin-top: 0;
 	}
-	.names {
-		margin: var(--space-sm) 0 var(--space-lg);
-		padding-left: var(--space-xl);
-	}
 	.actions,
 	.row-actions {
 		display: flex;
@@ -323,12 +317,6 @@
 		color: var(--muted);
 		font-family: var(--font-meta);
 		font-size: var(--text-sm);
-	}
-	.mark {
-		margin-left: var(--space-sm);
-		color: var(--muted);
-		font-size: var(--text-sm);
-		font-weight: var(--weight-strong);
 	}
 	.row-actions {
 		margin-left: auto;

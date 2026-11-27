@@ -8,6 +8,8 @@ Date: 2026-11-24
 
 The listening set and its priority marks live in the browser's `localStorage`; talkgroups added for the session live in its `sessionStorage`. A share link is `/?set=` followed by the set written as decimal talkgroup IDs, separated by commas, with runs of three or more as ranges and `p` after a priority one: `/?set=1001,1002p,1010-1015`. Opening one asks before it replaces the browser's set, and reads only what the public catalogue still holds, so a hidden talkgroup's ID is dropped without a word. A fireground link (`/?fireground=41`) adds its talkgroup to the session's additions. These are the implementer's choices where `SPEC.md` R33, R41, R43, R47, R101 and section 13 ("the listener's share link format … recorded in an ADR") leave room (spec "How to use this spec", item 6). Built in [Listening set: picker, share link and fireground links](https://github.com/RIKIKU/RadioArchive/issues/59). How the set travels on the live feed is ADR 0007's.
 
+> **Amended 2026-11-28:** the question no longer lists the link's talkgroups. Its counts are followed straight away by its buttons. What differs from this browser's set is folded under **Show the differences**: the first 12 names on each side, then how many more. A link can name thousands of talkgroups. The rest stands.
+
 ## Summary
 
 | Part | Choice |

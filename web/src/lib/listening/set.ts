@@ -222,6 +222,50 @@ export function sameSet(ix: Index, a: Entry[], b: Entry[]): boolean {
 	return true;
 }
 
+/** A talkgroup in a set, as the catalogue shows it, with its mark. */
+export type Shown = { talkgroup: Talkgroup; priority: boolean };
+
+/**
+ * Two listening sets side by side, as the catalogue shows them, for a
+ * prompt that asks which one to keep (R41): an account's or a share link's
+ * (`offered`) against this browser's (`current`). Counts only, plus what is
+ * in one and not the other, so a prompt about a set of 1,200 talkgroups
+ * stays a few lines long.
+ */
+export interface Comparison {
+	offered: { count: number; priority: number };
+	current: { count: number; priority: number };
+	/** In both sets. */
+	both: number;
+	/** In both, marked priority in one only. */
+	marks: number;
+	onlyOffered: Shown[];
+	onlyCurrent: Shown[];
+}
+
+export function compareSets(ix: Index, offered: Entry[], current: Entry[]): Comparison {
+	const a = resolve(ix, offered);
+	const b = resolve(ix, current);
+	const inA = new Map(a.map((r) => [keyOf(r.talkgroup), r.priority]));
+	const inB = new Map(b.map((r) => [keyOf(r.talkgroup), r.priority]));
+	let both = 0;
+	let marks = 0;
+	for (const [k, p] of inA) {
+		if (!inB.has(k)) continue;
+		both++;
+		if (inB.get(k) !== p) marks++;
+	}
+	const priority = (rs: Shown[]) => rs.filter((r) => r.priority).length;
+	return {
+		offered: { count: a.length, priority: priority(a) },
+		current: { count: b.length, priority: priority(b) },
+		both,
+		marks,
+		onlyOffered: a.filter((r) => !inB.has(keyOf(r.talkgroup))),
+		onlyCurrent: b.filter((r) => !inA.has(keyOf(r.talkgroup)))
+	};
+}
+
 /**
  * Talkgroups matching a search (R42), as the server's search does (ADR
  * 0006): by name, label, tag or decimal ID, ignoring case; a talkgroup whose

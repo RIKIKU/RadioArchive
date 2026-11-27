@@ -146,8 +146,11 @@ test('A33: an account with {1002} on a browser with {1001}: one prompt, and noth
 	const page = await browserWith(browser, [{ id: 1001 }]);
 	await signIn(page, baseURL!, email);
 	const prompt = page.getByRole('region', { name: 'Use the listening set saved to your account?' });
-	await expect(prompt).toBeVisible();
-	await expect(prompt.getByRole('listitem')).toHaveText(['Fireground 41']);
+	await expect(prompt).toContainText('Your account has 1 talkgroup. This browser has 1 talkgroup. Nothing is merged: choose one.');
+	// What differs, folded: the names on each side.
+	await prompt.getByText('Show the differences').click();
+	await expect(prompt.getByRole('list', { name: 'Only in your account' }).getByRole('listitem')).toHaveText(['Fireground 41']);
+	await expect(prompt.getByRole('list', { name: 'Only in this browser' }).getByRole('listitem')).toHaveText(['Dispatch North']);
 	await accessible(page);
 	await prompt.getByRole('button', { name: "Use my account's set" }).click();
 	await expect(prompt).toHaveCount(0);
@@ -384,7 +387,7 @@ test('screenshots: the account menu signed out and in, the prompt and the clear'
 		await shot(page, `account-signed-out-${width}`);
 		await signIn(page, baseURL!, email);
 		const prompt = page.getByRole('region', { name: 'Use the listening set saved to your account?' });
-		await expect(prompt.getByRole('listitem')).toHaveText(['Fireground 41']);
+		await expect(prompt).toContainText('Your account has 1 talkgroup.');
 		await shot(page, `first-sign-in-prompt-${width}`);
 		await prompt.getByRole('button', { name: "Use my account's set" }).click();
 		await openMenu(page);
