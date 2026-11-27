@@ -48,8 +48,9 @@ type Route struct {
 
 // App is the browser app.
 type App struct {
-	routes []Route
-	index  []byte // the app's one page; nil when the app wasn't built
+	routes   []Route
+	index    []byte   // the app's one page; nil when the app wasn't built
+	combined Combined // beside PagerArchive (combined.go); zero standalone
 }
 
 // Routes are the app's routes, for the server to mount.
@@ -115,22 +116,37 @@ func notBuilt(w http.ResponseWriter) {
 	http.Error(w, "The browser app wasn't built into this binary (cd web && npm run build).", http.StatusServiceUnavailable)
 }
 
-// write sends page with status, in the asker's look and theme.
+// write sends page with status, in the asker's look and theme. Beside
+// PagerArchive, the look is the shared cookie's, and the page carries the
+// app switcher's and the shared look's settings (combined.go).
 func (a *App) write(w http.ResponseWriter, r *http.Request, status int, cache string, page []byte) {
 	look, theme := "", ""
-	if c, err := r.Cookie(LookCookie); err == nil {
-		look = c.Value
-	}
-	if c, err := r.Cookie(ThemeCookie); err == nil {
-		theme = c.Value
+	shared := a.combined.sharedHere(r)
+	if shared {
+		look, theme = lookFromCookies(r), themeFromCookies(r)
+	} else {
+		if c, err := r.Cookie(LookCookie); err == nil {
+			look = c.Value
+		}
+		if c, err := r.Cookie(ThemeCookie); err == nil {
+			theme = c.Value
+		}
 	}
 	h := w.Header()
 	h.Set("Cache-Control", cache)
 	h.Set("Vary", "Cookie")
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Content-Security-Policy", csp)
+	if shared {
+		a.combined.moveLook(w, look)
+		a.combined.moveTheme(w, theme)
+	}
 	w.WriteHeader(status)
-	_, _ = w.Write(WithLook(page, look, theme))
+	page = WithLook(a.combined.withSwitcher(page), look, theme)
+	if shared {
+		page = a.combined.withShared(page)
+	}
+	_, _ = w.Write(page)
 }
 
 // Preview is what a page tells link previews about what it names (R61,

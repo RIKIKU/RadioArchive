@@ -98,6 +98,12 @@ services:
       # account signing in with it, proven by its emailed code, is made
       # admin. Admins' roles live in the radio's database, not Authentik.
       INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      # Beside PagerArchive (R102, R104; ADR 0054): its address, for the app
+      # switcher, and the parent domain the look cookie is shared on. Empty
+      # is standalone.
+      PAGERARCHIVE_URL: ${PAGERARCHIVE_URL:-}
+      PAGERARCHIVE_NAME: ${PAGERARCHIVE_NAME:-}
+      LOOK_COOKIE_DOMAIN: ${LOOK_COOKIE_DOMAIN:-}
       # Heavy-use limits (SPEC.md section 6.11, ADR 0036). Empty is the SPEC's
       # default. Every request here comes from Docker's bridge, one
       # address, so scripts/dev-env.sh raises them for the test stack.

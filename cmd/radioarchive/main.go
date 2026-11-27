@@ -78,6 +78,13 @@
 //	                        disabling, enabling and deleting an account reach Authentik
 //	                        with it. Without it they change the radio only, and say so
 //
+// Beside PagerArchive (SPEC.md R102, R104; ADR 0054), each unset standalone:
+//
+//	PAGERARCHIVE_URL        PagerArchive's public URL: the app switcher in the top bar
+//	PAGERARCHIVE_NAME       the switcher's name for it (default Pager)
+//	LOOK_COOKIE_DOMAIN      the parent domain the apps share the look cookie on, such
+//	                        as example.org for radio.example.org; APP_URL must be in it
+//
 // The secret and the token are never logged. A signed-in listener's saved
 // settings live in the radio's own database (ADR 0021), and so do
 // accounts' roles (ADR 0025): nothing the token can change makes anyone a
@@ -310,29 +317,35 @@ func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate
 		reg.Add(ops.upgrade)
 	}
 	return server.New(st, log, server.WithRecorders(rs), server.WithPublic(public.New(g, log, public.WithLocation(deploymentZone()))),
-		server.WithAccount(acc), server.WithAdmin(admin), server.WithApp(web.New()),
+		server.WithAccount(acc), server.WithAdmin(admin), server.WithApp(web.New().Combined(ops.combined)),
 		// Admins are exempt, by the same check as the admin API's (R70).
 		server.WithLimits(lim, acc), server.WithMetrics(reg, ops.metricsToken)), acc, admin, nil
 }
 
 // operations are the settings for running the deployment: the metrics
-// token (ADR 0040), and the backup's status file and the setup export's
-// folder (ADR 0041).
+// token (ADR 0040), the backup's status file and the setup export's
+// folder (ADR 0041), and how the app runs beside PagerArchive (ADR 0054).
 type operations struct {
 	metricsToken string
 	backup       *backup.Reader
 	exportDir    string
 	upgrade      *upgrade.Reader
+	combined     web.Combined
 }
 
-// operationsFromEnv reads METRICS_TOKEN (or its file), BACKUP_STATUS_FILE
-// and SETUP_EXPORT_DIR.
+// operationsFromEnv reads METRICS_TOKEN (or its file), BACKUP_STATUS_FILE,
+// SETUP_EXPORT_DIR, AUTO_UPGRADE_STATUS_FILE and the combined deployment's
+// settings (combinedFromEnv).
 func operationsFromEnv(getenv func(string) string) (operations, error) {
 	mt, err := metricsToken(getenv)
 	if err != nil {
 		return operations{}, err
 	}
-	ops := operations{metricsToken: mt, exportDir: getenv("SETUP_EXPORT_DIR")}
+	cb, err := combinedFromEnv(getenv)
+	if err != nil {
+		return operations{}, err
+	}
+	ops := operations{metricsToken: mt, exportDir: getenv("SETUP_EXPORT_DIR"), combined: cb}
 	if f := getenv("BACKUP_STATUS_FILE"); f != "" {
 		ops.backup = backup.New(f, nil)
 	}

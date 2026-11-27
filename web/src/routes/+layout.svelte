@@ -5,8 +5,8 @@
 	// ArchiveUx's frame (R81): the side menu on desktops, the bottom bar on
 	// phones, and the account menu, where the look and theme are chosen
 	// (R82) signed in or out, and where a listener signs in to save their
-	// preferences (R103, R110; ADR 0009). No app switcher until the combined
-	// deployment (M7, R102). The dock, "Player", holds the player's controls
+	// preferences (R103, R110; ADR 0009). Beside PagerArchive, the app
+	// switcher to it (R102; ADR 0054). The dock, "Player", holds the player's controls
 	// (R44, R81; ADR 0012, 0051) on every page, and the live feed's notices
 	// sit above it; what's playing is at the top of the page (R45, R113).
 	import { AccountMenu, BottomBar, Frame, Menu } from 'archiveux/components';
@@ -20,7 +20,7 @@
 	import { keyOf } from '#lib/listening/set.ts';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
-	import { current, setLook, setTheme, type Look, type Theme } from '#lib/look.ts';
+	import { accountLook, accountTheme, current, setLook, setTheme, sharedDomain, type Look, type Theme } from '#lib/look.ts';
 	import { alertsOn, setAlerts } from '#lib/playback.ts';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
 	import { compareSets, indexOf, type Catalogue, type Index } from '#lib/listening/set.ts';
@@ -81,24 +81,27 @@
 		theme: () => theme,
 		alerts: () => alerts,
 		apply(p: Profile) {
-			look = p.look ?? 'harbour';
+			// Beside PagerArchive the shared look cookie wins over the
+			// account's (R104; ADR 0054): a look chosen there since is kept,
+			// and saved to the account.
+			look = accountLook(p.look, sharedDomain() !== undefined, document.cookie);
 			setLook(look);
-			theme = p.theme ?? 'system';
-			shown = theme;
+			if (look !== (p.look ?? 'harbour')) setTimeout(() => acct.changed());
+			// The theme the same way (ArchiveUx 0.7.0).
+			theme = accountTheme(p.theme, sharedDomain() !== undefined, document.cookie);
 			setTheme(theme);
+			if (theme !== (p.theme ?? 'system')) setTimeout(() => acct.changed());
 			alerts = p.alerts;
 			setAlerts(alerts);
 		}
 	});
 
-	// The account menu binds the theme; it's shown and saved when it changes.
-	let shown = sent.theme;
-	$effect(() => {
-		if (theme === shown) return;
-		shown = theme;
-		setTheme(theme);
+	// The account menu's choices: shown at once, and saved.
+	function chooseTheme(t: Theme) {
+		theme = t;
+		setTheme(t);
 		acct.changed();
-	});
+	}
 	function chooseLook(l: Look) {
 		setLook(l);
 		acct.changed();
@@ -160,6 +163,12 @@
 	]);
 	const bar = $derived([top[0], { ...top[1], label: 'Recent' }, top[2]]);
 	const brand = { name: 'RadioArchive', mark: 'RA', href: '/' };
+	// The app switcher (R102; ArchiveUx ADR 0002, decision 9; ADR 0054): with
+	// PAGERARCHIVE_URL set the server names PagerArchive on the page, and the
+	// top bar links to it, in the same tab, for everyone who can reach the
+	// radio. Standalone, none.
+	const root = document.documentElement.dataset;
+	const otherApp = root.pagerarchiveUrl ? { name: root.pagerarchiveName || 'Pager', href: root.pagerarchiveUrl } : null;
 
 	// R84's Admin section (ADR 0027), for an admin only: a group of the side
 	// menu, and on phones a group of the bottom bar's More. It opens
@@ -170,7 +179,7 @@
 	let noticeRoom = $state(0);
 </script>
 
-<Frame dockLabel="Player">
+<Frame dockLabel="Player" {otherApp}>
 	{#snippet menu()}<Menu {brand} current={page.url.pathname} {top} {groups} open={opened} ontoggle={(id, was) => (opened = { ...opened, [id]: !was })} />{/snippet}
 	{#snippet start()}<a class="brand" href="/">RadioArchive</a>{/snippet}
 	{#snippet dock()}<Dock {player} {avoid} />{/snippet}
@@ -190,7 +199,7 @@
 		</div>
 	{/snippet}
 	{#snippet account()}
-		<AccountMenu account={who} bind:theme bind:look onlook={chooseLook} signIn={signInHref} onsignout={() => acct.signOut()}>
+		<AccountMenu account={who} bind:theme bind:look onlook={chooseLook} ontheme={chooseTheme} signIn={signInHref} onsignout={() => acct.signOut()}>
 			{#snippet extra({ close }: { close: () => void })}
 				<!-- Playback settings (R48), with the look (R82), signed in or out. -->
 				<label class="setting">

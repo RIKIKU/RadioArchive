@@ -91,6 +91,12 @@ services:
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
       AUTHENTIK_API_TOKEN: ${AUTHENTIK_API_TOKEN}
       INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      # Beside PagerArchive (R102, R104): its address, for the app switcher,
+      # and the parent domain the look cookie is shared on. Empty is
+      # standalone.
+      PAGERARCHIVE_URL: ${PAGERARCHIVE_URL:-}
+      PAGERARCHIVE_NAME: ${PAGERARCHIVE_NAME:-}
+      LOOK_COOKIE_DOMAIN: ${LOOK_COOKIE_DOMAIN:-}
       # Heavy-use limits (SPEC.md section 6.11). Empty is the default.
       TRUSTED_PROXY: ${TRUSTED_PROXY:-}
       LIMIT_REQUESTS: ${LIMIT_REQUESTS:-}
