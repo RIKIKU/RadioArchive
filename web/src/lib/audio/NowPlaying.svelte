@@ -60,7 +60,9 @@
 		if (player.paused) return { state: 'paused', text: 'Paused' };
 		if (!playing) return { state: 'idle', text: player.hold ? 'Waiting (hold)' : 'Waiting' };
 		const b = playing.delayMinutes ? liveBadge({ delay: playing.delayMinutes }) : liveBadge({ behind: player.position.behind, liveWithin: LIVE_WITHIN });
-		return b;
+		// Short, so it fits its fixed column: "Behind 9 s", "Behind 2:05".
+		const s = Math.floor(player.position.behind);
+		return b.state === "behind" ? { state: b.state, text: `Behind ${s < 60 ? `${s} s` : clock(s)}` } : b;
 	});
 
 	const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s) % 60).padStart(2, '0')}`;
@@ -96,13 +98,13 @@
 {#if variant === 'slim'}
 	<div class="np slim" role="group" aria-label="Now playing">
 		{@render field(c?.talkgroup.name ?? DASH, 'name')}
-		<span class="live-badge status" data-state={status.state}>{status.text}</span>
+		<span class="live-badge status" data-state={status.state} title={status.text}>{status.text}</span>
 		{@render field(at(c?.startedAt), 'time', 'Started')}
 	</div>
 {:else}
 	<div class="np full" role="group" aria-label="Now playing" data-state={status.state}>
 		<div class="row r1">
-			<span class="live-badge status" data-state={status.state}>{status.text}</span>
+			<span class="live-badge status" data-state={status.state} title={status.text}>{status.text}</span>
 			{@render field(where, 'where')}
 			{@render field(at(c?.startedAt), 'time', 'Started')}
 		</div>
