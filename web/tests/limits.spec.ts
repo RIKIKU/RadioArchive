@@ -64,13 +64,14 @@ function socket(baseURL: string, from?: string): Promise<WebSocket> {
 	});
 }
 
-const dock = (page: Page) => page.getByRole('region', { name: 'Now playing' });
+const dock = (page: Page) => page.getByRole('region', { name: 'Player' });
+const display = (page: Page) => page.getByRole('region', { name: 'Now playing' });
 
 /** Opens the Listen page with {1001} and presses Start listening. */
 async function startListening(page: Page) {
 	await page.addInitScript(() => localStorage.setItem('radioarchive.listening-set', JSON.stringify({ v: 1, talkgroups: [{ id: 1001 }] })));
 	await page.goto('/');
-	await expect(page.getByText('Talkgroups on (1): priority, remove and share')).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Talkgroups on (1)' })).toBeVisible();
 	await page.getByRole('button', { name: 'Start listening' }).click();
 }
 
@@ -172,7 +173,7 @@ test('A20 @limits: a 5th live connection from one place shows its limit, and get
 		for (const ws of four) expect(ws.readyState).toBe(WebSocket.OPEN);
 		// One closes: within the 30 s retry, the page is in.
 		four[0].close();
-		await expect(dock(page).getByText('Listening. Calls play here as they come in.')).toBeVisible({ timeout: 45_000 });
+		await expect(display(page)).toHaveAttribute('data-state', 'waiting', { timeout: 45_000 });
 		await expect(page.getByText(/Too many live connections/)).toHaveCount(0);
 	} finally {
 		for (const ws of four) ws.close();
@@ -209,7 +210,7 @@ test('A20 @limits: with 50 sockets open a new listener sees "The radio is full r
 		for (const ws of fifty) expect(ws.readyState).toBe(WebSocket.OPEN);
 		// One closes: within the 30 s retry, the waiting listener is in.
 		fifty[0].close();
-		await expect(dock(page).getByText('Listening. Calls play here as they come in.')).toBeVisible({ timeout: 45_000 });
+		await expect(display(page)).toHaveAttribute('data-state', 'waiting', { timeout: 45_000 });
 		await expect(full).toHaveCount(0);
 		for (const ws of fifty.slice(1)) expect(ws.readyState).toBe(WebSocket.OPEN);
 		await context.close();

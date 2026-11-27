@@ -1,30 +1,46 @@
 /// <reference types="node" />
-// The listening set (issue #59; SPEC.md R33, R41, R42, R43, R47, R101; A15;
-// ADR 0008): the picker, the share link and fireground links, against the
-// binary with the test fixture's setup (scripts/ci/e2e-web.sh): 1001
+// The listening set (issue #59, #176; SPEC.md R33, R41, R42, R43, R47, R101,
+// R112; A15, A42; ADR 0008, 0051): the chips and the one search, the share
+// link and fireground links, against the binary with the test fixture's
+// setup (scripts/ci/e2e-web.sh): 1001
 // "Dispatch North" in group North, 1002 "Fireground 41" with number 41,
 // 1003 "Admin" hidden (number 43, also in North) and 1004 ignored (44).
-import { test, expect, type Browser, type Page } from '@playwright/test';
+import { test, expect, type Browser, type Locator, type Page } from '@playwright/test';
 
 const SAVED = 'radioarchive.listening-set';
 const SESSION = 'radioarchive.session-additions';
 
-const setList = (page: Page) => page.getByRole('list', { name: 'Your listening set' });
 const sessionList = (page: Page) => page.getByRole('list', { name: 'Added for this session' });
 const saved = (page: Page) => page.evaluate((k) => localStorage.getItem(k), SAVED);
 
-/** Opens the talkgroups on, which fold away at the page's foot (ADR 0048). */
+/** The talkgroups on, at the page's foot, as chips (ADR 0051). */
+const onList = (page: Page) => page.getByRole('region', { name: /^Talkgroups on/ });
+/** A talkgroup's chip: its accessible name starts with its name. */
+const chip = (scope: Page | Locator, name: string) => scope.getByRole('button', { name: new RegExp(`^${name} `) });
+const star = (scope: Page | Locator, name: string) => scope.getByRole('button', { name: `Priority: ${name}` });
+
+/** Opens every agency in the talkgroups on, each folded until opened. */
 async function openSet(page: Page) {
-	const on = page.locator('details.on-list');
-	await expect(on).toBeVisible();
-	if ((await on.getAttribute('open')) === null) await on.locator('summary').click();
-	await expect(setList(page)).toBeVisible();
+	await expect(onList(page)).toBeVisible();
+	const folded = onList(page).getByRole('button', { expanded: false });
+	while (await folded.count()) await folded.first().click();
 }
 
-/** Ticks a talkgroup in the search's results. */
+/** The talkgroups on, each once: every agency opened, the chips that are on. */
+async function expectOn(page: Page, names: string[]) {
+	await openSet(page);
+	await expect
+		.poll(async () => [...new Set(await onList(page).locator('.groups .chip[data-on="true"] .name').allInnerTexts())])
+		.toEqual(names);
+}
+
+/** Switches on a talkgroup from the search's results with a tap on its chip. */
 async function pick(page: Page, query: string, name: string) {
 	await page.getByLabel('Search talkgroups').fill(query);
-	await page.getByRole('checkbox', { name: new RegExp(`^${name}`) }).check();
+	const results = page.getByRole('list', { name: 'Search results' });
+	await expect(chip(results, name)).toHaveAttribute('aria-pressed', 'false');
+	await chip(results, name).click();
+	await expect(chip(results, name)).toHaveAttribute('aria-pressed', 'true');
 	await page.getByLabel('Search talkgroups').fill('');
 }
 
@@ -83,32 +99,40 @@ test('A39: the tiles switch a whole group or tag on and off; All on, All off; th
 	expect(await saved(page)).toBeNull();
 
 	await north.click();
-	await openSet(page);
-	await expect(setList(page).getByRole('listitem')).toHaveText([/Dispatch North/]);
+	await expectOn(page, ['Dispatch North']);
 
-	// Search by label, tag and ID.
+	// Search by label, tag and ID, on or off; the talkgroups on hide while it has text.
 	for (const q of ['FG 41', 'fireground', '1002']) {
 		await page.getByLabel('Search talkgroups').fill(q);
-		await expect(page.getByRole('list', { name: 'Search results' }).getByRole('listitem')).toHaveText([/Fireground 41/]);
+		await expect(page.getByRole('list', { name: 'Search results' }).getByRole('listitem')).toHaveText([/^ *Fireground 41/]);
+		await expect(onList(page)).toBeHidden();
 	}
 	await page.getByLabel('Search talkgroups').fill('admin');
 	await expect(page.getByText('No talkgroups match.')).toBeVisible();
 	await pick(page, '1002', 'Fireground 41');
-	await expect(setList(page).getByRole('listitem')).toHaveText([/Dispatch North/, /Fireground 41/]);
+	await expect(onList(page)).toBeVisible();
+	await expectOn(page, ['Dispatch North', 'Fireground 41']);
 	await expect.poll(live).toEqual([{ id: 1001 }, { id: 1002 }]);
 
-	// Priority, kept in the browser with the set.
-	await page.getByRole('checkbox', { name: 'Priority: Fireground 41' }).check();
-	expect(await saved(page)).toBe(JSON.stringify({ v: 1, talkgroups: [{ id: 1001 }, { id: 1002, priority: true }] }));
+	// Priority, by a chip's star, kept in the browser with the set.
+	await star(onList(page), 'Fireground 41').click();
+	await expect.poll(() => saved(page)).toBe(JSON.stringify({ v: 1, talkgroups: [{ id: 1001 }, { id: 1002, priority: true }] }));
 	await page.reload();
+	// Priority first.
+	await expect(page.getByRole('list', { name: 'Priority talkgroups' }).getByRole('listitem')).toHaveText([/^ *Fireground 41/]);
 	await openSet(page);
-	await expect(page.getByRole('checkbox', { name: 'Priority: Fireground 41' })).toBeChecked();
-	await expect(page.getByRole('checkbox', { name: 'Priority: Dispatch North' })).not.toBeChecked();
+	await expect(star(onList(page), 'Fireground 41').first()).toHaveAttribute('aria-pressed', 'true');
+	await expect(star(onList(page), 'Dispatch North')).toHaveAttribute('aria-pressed', 'false');
 
-	// Taking one out.
-	await setList(page).getByRole('button', { name: 'Remove Dispatch North' }).click();
-	await expect(setList(page).getByRole('listitem')).toHaveText([/Fireground 41/]);
+	// Taking one out: a tap. It stays where it was, off, until the page is left.
+	await chip(onList(page), 'Dispatch North').click();
+	await expect(chip(onList(page), 'Dispatch North')).toHaveAttribute('aria-pressed', 'false');
+	await expect(chip(onList(page), 'Dispatch North')).toContainText('Off');
 	await expect.poll(live).toEqual([{ id: 1002 }]);
+	await expect(page.getByRole('heading', { name: 'Talkgroups on (1)' })).toBeVisible();
+	await page.reload();
+	await expectOn(page, ['Fireground 41']);
+	await expect(chip(onList(page), 'Dispatch North')).toHaveCount(0);
 	await namesNothingHidden(page);
 });
 
@@ -124,8 +148,7 @@ test('A15: a fireground link adds its talkgroup for the session, apart from the 
 	await expect(page.getByRole('status').filter({ hasText: 'Fireground 41 is added for this session.' })).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'Added for this session' })).toBeVisible();
 	await expect(sessionList(page).getByRole('listitem')).toHaveText([/Fireground 41/]);
-	await openSet(page);
-	await expect(setList(page).getByRole('listitem')).toHaveText([/Dispatch North/]);
+	await expectOn(page, ['Dispatch North']);
 	await expect(page.getByRole('button', { name: 'Start listening' })).toBeVisible();
 	// The live feed hears both.
 	await expect.poll(live).toEqual([{ id: 1001 }, { id: 1002 }]);
@@ -135,8 +158,7 @@ test('A15: a fireground link adds its talkgroup for the session, apart from the 
 	await page.close();
 	const next = await context.newPage();
 	await next.goto('/');
-	await openSet(next);
-	await expect(setList(next).getByRole('listitem')).toHaveText([/Dispatch North/]);
+	await expectOn(next, ['Dispatch North']);
 	await expect(next.getByRole('heading', { name: 'Added for this session' })).toHaveCount(0);
 	expect(await saved(next)).toBe(before);
 
@@ -146,12 +168,12 @@ test('A15: a fireground link adds its talkgroup for the session, apart from the 
 	await next.goto('/');
 	await pick(next, '1002', 'Fireground 41');
 	await openSet(next);
-	await next.getByRole('checkbox', { name: 'Priority: Fireground 41' }).check();
+	await star(onList(next), 'Fireground 41').click();
+	await expect.poll(() => saved(next)).toContain('"priority":true');
 	await next.goto('/?fireground=41');
 	await expect(next.getByText('Fireground 41 is in your listening set.')).toBeVisible();
 	await expect(next.getByRole('heading', { name: 'Added for this session' })).toHaveCount(0);
-	await openSet(next);
-	await expect(next.getByRole('checkbox', { name: 'Priority: Fireground 41' })).toBeChecked();
+	await expect(star(next.getByRole('list', { name: 'Priority talkgroups' }), 'Fireground 41')).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('R47: one tap keeps a talkgroup added for the session', async ({ page }) => {
@@ -159,8 +181,7 @@ test('R47: one tap keeps a talkgroup added for the session', async ({ page }) =>
 	await expect(sessionList(page).getByRole('listitem')).toHaveText([/Fireground 41/]);
 	await page.getByRole('button', { name: 'Keep Fireground 41' }).click();
 	await expect(page.getByRole('heading', { name: 'Added for this session' })).toHaveCount(0);
-	await openSet(page);
-	await expect(setList(page).getByRole('listitem')).toHaveText([/Fireground 41/]);
+	await expectOn(page, ['Fireground 41']);
 	expect(await saved(page)).toBe(JSON.stringify({ v: 1, talkgroups: [{ id: 1002 }] }));
 	expect(await page.evaluate((k) => sessionStorage.getItem(k), SESSION)).toBeNull();
 });
@@ -177,11 +198,10 @@ test("A15, R33: an unknown, hidden or ignored number shows one \"This channel is
 	for (const n of ['99', '43', '044', '44', 'x41']) {
 		await page.goto(`/?fireground=${n}`);
 		await expect(page.getByText("This channel isn't available.")).toBeVisible();
-		await expect(page.getByRole('heading', { name: 'Find a talkgroup' })).toBeVisible();
+		await expect(page.getByLabel('Search talkgroups')).toBeVisible();
 		seen.push(await page.locator('main').innerHTML());
 		await expect(page.getByRole('heading', { name: 'Added for this session' })).toHaveCount(0);
-		await openSet(page);
-		await expect(setList(page).getByRole('listitem')).toHaveText([/Dispatch North/]);
+		await expectOn(page, ['Dispatch North']);
 		expect(await saved(page)).toBe(before);
 		expect(await page.evaluate((k) => sessionStorage.getItem(k), SESSION)).toBeNull();
 		await expect.poll(live).toEqual([{ id: 1001 }]);
@@ -203,7 +223,8 @@ test('R41: a share link copied from one browser replaces the set in another, aft
 	await pick(a.page, '1001', 'Dispatch North');
 	await pick(a.page, '1002', 'Fireground 41');
 	await openSet(a.page);
-	await a.page.getByRole('checkbox', { name: 'Priority: Fireground 41' }).check();
+	await star(onList(a.page), 'Fireground 41').click();
+	await expect(a.page.getByLabel('Share link')).toHaveValue(/1002p$/);
 	const link = await a.page.getByLabel('Share link').inputValue();
 	expect(link).toBe(`${new URL(baseURL!).origin}/?set=1001,1002p`);
 	await a.context.close();
@@ -219,9 +240,8 @@ test('R41: a share link copied from one browser replaces the set in another, aft
 	expect(await saved(b.page)).toBe(JSON.stringify({ v: 1, talkgroups: [{ id: 1001 }] }));
 	await offer.getByRole('button', { name: 'Replace my listening set' }).click();
 	await expect(offer).toHaveCount(0);
-	await openSet(b.page);
-	await expect(setList(b.page).getByRole('listitem')).toHaveText([/Dispatch North/, /Fireground 41/]);
-	await expect(b.page.getByRole('checkbox', { name: 'Priority: Fireground 41' })).toBeChecked();
+	await expectOn(b.page, ['Dispatch North', 'Fireground 41']);
+	await expect(star(b.page.getByRole('list', { name: 'Priority talkgroups' }), 'Fireground 41')).toHaveAttribute('aria-pressed', 'true');
 	expect(await saved(b.page)).toBe(JSON.stringify({ v: 1, talkgroups: [{ id: 1001 }, { id: 1002, priority: true }] }));
 	// Answered once: the address no longer carries it, so a reload asks nothing.
 	await expect(b.page).toHaveURL(`${new URL(baseURL!).origin}/`);
@@ -237,8 +257,7 @@ test('R41: a share link copied from one browser replaces the set in another, aft
 	// Keep mine leaves the set as it was.
 	await b.page.goto('/?set=1002');
 	await offer.getByRole('button', { name: 'Keep mine' }).click();
-	await openSet(b.page);
-	await expect(setList(b.page).getByRole('listitem')).toHaveText([/Dispatch North/, /Fireground 41/]);
+	await expectOn(b.page, ['Dispatch North', 'Fireground 41']);
 	await b.context.close();
 });
 
@@ -260,8 +279,7 @@ test('R33: a share link naming hidden 1003 opens without it, and without saying 
 	await namesNothingHidden(hidden.page);
 
 	await hidden.offer.getByRole('button', { name: 'Replace my listening set' }).click();
-	await openSet(hidden.page);
-	await expect(setList(hidden.page).getByRole('listitem')).toHaveText([/Dispatch North/, /Fireground 41/]);
+	await expectOn(hidden.page, ['Dispatch North', 'Fireground 41']);
 	expect(await saved(hidden.page)).toBe(JSON.stringify({ v: 1, talkgroups: [{ id: 1001 }, { id: 1002 }] }));
 	await namesNothingHidden(hidden.page);
 

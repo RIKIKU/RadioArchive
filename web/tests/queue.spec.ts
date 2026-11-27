@@ -1,8 +1,8 @@
 /// <reference types="node" />
-// The queue, its controls and now playing in the dock (issue #60; SPEC.md
-// R15, R22, R23, R31, R43, R44, R45, R48, R81; A8, A9, A11, A14, A27; ADR
-// 0012), with the whole stack: the fake recorder's calls through the
-// recorder client and the binary's live feed to the dock's player. An
+// The queue, the dock's controls and the now-playing display (issue #60;
+// SPEC.md R15, R22, R23, R31, R43, R44, R45, R48, R81; A8, A9, A11, A14,
+// A27; ADR 0012, 0051), with the whole stack: the fake recorder's calls
+// through the recorder client and the binary's live feed to the player. An
 // admin's changes, which the binary can't make yet (M4), are made in the
 // database by the fixture's command, and the live feed sees them as it sees
 // any writer's (ADR 0007).
@@ -10,11 +10,11 @@
 // scripts/ci/e2e-web.sh runs these with the playback tests, one at a time.
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { dock, firstOf, heard, listen, playedFrom, recorderDeaf, seconds, sendCalls, setTalkgroup, tone } from './live.ts';
+import { display, dock, firstOf, heard, listen, playedFrom, recorderDeaf, seconds, sendCalls, setTalkgroup, tone } from './live.ts';
 
 const NOTICE = "Some talkgroups aren't being received right now.";
-const queued = (page: Page) => dock(page).locator('.queued');
-const badge = (page: Page) => dock(page).locator('.live-badge');
+const queued = (page: Page) => display(page).locator('.queued');
+const badge = (page: Page) => display(page).locator('.status');
 
 test('@live A8: a priority call plays next without cutting off the call playing; the queued call then plays from its recording', async ({ page }) => {
 	await listen(page, 'webcodecs', [{ id: 1001 }, { id: 1002, priority: true }]);
@@ -26,12 +26,18 @@ test('@live A8: a priority call plays next without cutting off the call playing;
 	]);
 	await firstOf(page, 5201, 'live');
 	await expect(queued(page)).toHaveText('2 queued', { timeout: 10_000 });
-	// Now playing: the talkgroup, its group, the unit, Live, the duration so far.
-	await expect(dock(page).locator('.tg')).toHaveText('Dispatch North');
-	await expect(dock(page).locator('.group')).toHaveText('North');
-	await expect(dock(page).locator('.unit')).toHaveText('5201');
+	// Now playing, at the top of the page: the talkgroup, its group (one
+	// system, so no system's name), the unit, Live, the duration so far,
+	// priority and hold.
+	await expect(display(page).locator('.name')).toHaveText('Dispatch North');
+	await expect(display(page).locator('.where')).toHaveText('North');
+	await expect(display(page).locator('.tg')).toHaveText('TG 1001');
+	await expect(display(page).locator('.unit')).toHaveText('Unit 5201');
 	await expect(badge(page)).toHaveText('Live');
-	await expect(dock(page).locator('.elapsed')).toHaveText(/Duration so far \d:\d\d/);
+	await expect(display(page)).toHaveAttribute('data-state', 'live');
+	await expect(display(page).locator('.elapsed .value')).toHaveText(/^Duration so far \d:\d\d$/);
+	await expect(display(page).locator('.priority')).toHaveText('☆ Not priority');
+	await expect(display(page).locator('.hold')).toHaveText('Hold off');
 	await sending;
 
 	const first = await playedFrom(page, 5201, 'live');
@@ -42,7 +48,7 @@ test('@live A8: a priority call plays next without cutting off the call playing;
 	expect(h.order).toEqual([first.first.call_id, priority.first.call_id, rest.first.call_id]);
 	expect(first.played.frames, 'the first call, all 4 s of it').toBeGreaterThanOrEqual(150);
 	expect(h.ended).toEqual([]);
-	await expect(queued(page)).toHaveText('No calls queued');
+	await expect(queued(page)).toHaveText('0 queued');
 });
 
 test('@live A8: Skip moves to the next call, Catch up empties the queue, Pause keeps queuing', async ({ page }) => {
@@ -60,14 +66,15 @@ test('@live A8: Skip moves to the next call, Catch up empties the queue, Pause k
 	await expect.poll(async () => (await heard(page)).ended).toEqual([expect.objectContaining({ call_id: skipped.call_id, how: 'skipped' })]);
 	// The next call plays at once, from its start: it's still live.
 	await firstOf(page, 5212, 'live', 5_000);
-	await expect(queued(page)).toHaveText('No calls queued');
+	await expect(queued(page)).toHaveText('0 queued');
 	await sending;
 	await playedFrom(page, 5212, 'live');
 	expect((await heard(page)).played.some((p) => p.call_id === skipped.call_id), 'the skipped call never finishes').toBe(false);
 
-	// Catch up: offered only while behind, here with calls queued (ADR 0048).
+	// Catch up: always in the bar, enabled only while behind, here with
+	// calls queued (ADR 0048, 0051).
 	const catchUp = dock(page).getByRole('button', { name: 'Catch up to live' });
-	await expect(catchUp).toHaveCount(0);
+	await expect(catchUp).toBeDisabled();
 	sending = sendCalls([
 		{ unit: 5221, atMs: 200, pcm: seconds(6) },
 		{ unit: 5222, atMs: 800, pcm: [tone] },
@@ -75,10 +82,10 @@ test('@live A8: Skip moves to the next call, Catch up empties the queue, Pause k
 	]);
 	await firstOf(page, 5221, 'live');
 	await expect(queued(page)).toHaveText('2 queued', { timeout: 10_000 });
-	await expect(dock(page).locator('.queue')).toContainText(/2 queued\s*·\s*Catch up/);
+	await expect(catchUp).toBeEnabled();
 	await catchUp.click();
-	await expect(queued(page)).toHaveText('No calls queued');
-	await expect(catchUp).toHaveCount(0);
+	await expect(queued(page)).toHaveText('0 queued');
+	await expect(catchUp).toBeDisabled();
 	await expect.poll(async () => (await heard(page)).ended.filter((e) => e.how === 'cleared').length).toBe(2);
 	// The call playing is live, so it plays on.
 	await sending;
@@ -102,7 +109,8 @@ test('@live A8: Skip moves to the next call, Catch up empties the queue, Pause k
 	// Resume carries on where it paused, behind the radio now (by more than
 	// ArchiveUx's LIVE_WITHIN, 5 s, for a while), then through the queue.
 	await dock(page).getByRole('button', { name: 'Resume' }).click();
-	await expect(badge(page)).toHaveText(/^Behind by \d+ s$/);
+	await expect(badge(page)).toHaveText(/^Behind \d+ s$/);
+	await expect(display(page)).toHaveAttribute('data-state', 'behind');
 	const whole = await playedFrom(page, 5231, 'live');
 	expect(whole.played.frames, 'all 10 s of the paused call').toBeGreaterThanOrEqual(450);
 	const next = await playedFrom(page, 5232, 'recording');
@@ -121,7 +129,7 @@ test("@live A9: with hold on, other talkgroups' calls aren't queued, and the sav
 	const hold = dock(page).getByRole('button', { name: 'Hold' });
 	await hold.click();
 	await expect(hold).toHaveAttribute('aria-pressed', 'true');
-	await expect(dock(page).getByText('Hold on: Dispatch North only')).toBeVisible();
+	await expect(display(page).locator('.hold')).toHaveText('Hold on');
 
 	// Calls on 1002 aren't queued; one on 1001, the held talkgroup, is.
 	await sendCalls([
@@ -139,7 +147,7 @@ test("@live A9: with hold on, other talkgroups' calls aren't queued, and the sav
 	// Hold off. The saved set, and what the feed hears, never changed.
 	await hold.click();
 	await expect(hold).toHaveAttribute('aria-pressed', 'false');
-	await expect(dock(page).getByText(/Hold on/)).toHaveCount(0);
+	await expect(display(page).locator('.hold')).toHaveText('Hold off');
 	expect(await page.evaluate(() => localStorage.getItem('radioarchive.listening-set'))).toBe(saved);
 	expect(sets).toEqual([]);
 });
@@ -159,9 +167,11 @@ test('@live A11: hiding 1001 mid-call stops the audio and removes its queued cal
 		console.log(`A11: withdrawn ${withdrawn.map((e) => `${e.at - hidden} ms`).join(', ')} after the change committed`);
 		for (const e of withdrawn) expect(e.at - hidden, 'withdrawn within 1 s of hiding').toBeLessThanOrEqual(1_000);
 		expect(withdrawn.map((e) => e.call_id)).toContain(live.call_id);
-		// Nothing plays and nothing waits; the dock names nothing of it.
-		await expect(queued(page)).toHaveText('No calls queued');
-		await expect(dock(page).locator('.tg')).toHaveCount(0);
+		// Nothing plays and nothing waits; the display names nothing of it.
+		await expect(queued(page)).toHaveText('0 queued');
+		await expect(display(page)).toHaveAttribute('data-state', 'waiting');
+		await expect(display(page).locator('.name')).toHaveText('—');
+		await expect(display(page)).not.toContainText('Dispatch North');
 		await sending;
 		expect((await heard(page)).first.filter((f) => f.unit === 5252)).toEqual([]);
 	} finally {
@@ -181,8 +191,15 @@ test('@live A14: a delayed call is queued once its delay has passed, labelled, a
 		// Nothing of it live.
 		await page.waitForTimeout(5_000);
 		expect((await heard(page)).first.filter((f) => f.unit === 5261)).toEqual([]);
+		const idleHeight = (await display(page).boundingBox())!.height;
 		// A minute after it ended: queued, "Delayed 1 min", from its recording.
 		await expect(badge(page)).toHaveText('Delayed 1 min', { timeout: 90_000 });
+		await expect(display(page)).toHaveAttribute('data-state', 'delayed');
+		// The badge, padding and all, inside its fixed row, and the display no taller (ADR 0051).
+		const [b, row] = [(await badge(page).boundingBox())!, (await display(page).locator('.r1').boundingBox())!];
+		expect(b.y, 'the Delayed badge not clipped at its top').toBeGreaterThanOrEqual(row.y - 0.5);
+		expect(b.y + b.height, 'the Delayed badge not clipped at its foot').toBeLessThanOrEqual(row.y + row.height + 0.5);
+		expect((await display(page).boundingBox())!.height).toBeCloseTo(idleHeight, 0);
 		const { first } = await playedFrom(page, 5261, 'recording', 30_000);
 		expect(first.at - ended, 'not before its delay').toBeGreaterThanOrEqual(59_000);
 	} finally {
@@ -271,7 +288,7 @@ test('@live the dock playing, with a queue, with hold on and with the recorder n
 		]);
 		await firstOf(page, 5281, 'live');
 		await expect(queued(page)).toHaveText('2 queued', { timeout: 10_000 });
-		await expect(dock(page).locator('.led[data-led="blue"]')).toBeVisible();
+		await expect(display(page).locator('.led[data-led="blue"]')).toBeVisible();
 
 		const check = async (state: string) => {
 			for (const width of [1280, 375]) {

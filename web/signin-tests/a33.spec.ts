@@ -152,8 +152,10 @@ test('A33: an account with {1002} on a browser with {1001}: one prompt, and noth
 	await prompt.getByRole('button', { name: "Use my account's set" }).click();
 	await expect(prompt).toHaveCount(0);
 	expect(ids(await savedSet(page))).toEqual([1002]);
-	await page.getByText(/^Talkgroups on \(/).click();
-	await expect(page.getByRole('list', { name: 'Your listening set' }).getByRole('listitem')).toHaveCount(1);
+	// The talkgroups on, as chips (ADR 0051): the one, in no group.
+	await expect(page.getByRole('heading', { name: 'Talkgroups on (1)' })).toBeVisible();
+	await page.getByRole('button', { name: /^Not in a group — 1 on/ }).click();
+	await expect(page.getByRole('list', { name: 'Not in a group' }).getByRole('listitem')).toHaveText([/^ *Fireground 41/]);
 	expect(ids((await account(page)).profile!.talkgroups)).toEqual([1002]);
 	// Once: the next page doesn't ask again.
 	await page.reload();
@@ -177,9 +179,10 @@ test('signed in, changes are saved to the account; hold and session additions ne
 	await signUp(page, request, baseURL!, address('changes'));
 	await expect.poll(async () => (await account(page)).profile?.talkgroups, { timeout: 15_000 }).toEqual([{ id: 1001 }]);
 
-	// A priority mark (in the talkgroups on, folded away: ADR 0048) and the look are saved.
-	await page.getByText(/^Talkgroups on \(/).click();
-	await page.getByRole('checkbox', { name: 'Priority: Dispatch North' }).check();
+	// A priority mark (a chip's star, in its agency: ADR 0051) and the look are saved.
+	await page.getByRole('button', { name: /^North — 1 on/ }).click();
+	await page.getByRole('button', { name: 'Priority: Dispatch North' }).click();
+	await expect(page.getByRole('button', { name: 'Priority: Dispatch North' }).first()).toHaveAttribute('aria-pressed', 'true');
 	await openMenu(page);
 	await page.getByRole('combobox', { name: 'Look' }).selectOption('console');
 	await closeMenu(page);

@@ -1,12 +1,13 @@
 /// <reference types="node" />
 // Previous, Catch up and the player bar (SPEC.md R44, R45; A8, A40, A41,
-// A36; ADR 0048), with the whole stack: the fake recorder's calls through
-// the recorder client and the binary's live feed to the dock's player.
+// A36; ADR 0048, 0051), with the whole stack: the fake recorder's calls
+// through the recorder client and the binary's live feed to the dock's
+// player.
 //
 // scripts/ci/e2e-web.sh runs these with the playback tests, one at a time.
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { dock, firstOf, heard, listen, playedFrom, seconds, sendCalls, tone } from './live.ts';
+import { display, dock, firstOf, heard, listen, playedFrom, seconds, sendCalls, tone } from './live.ts';
 
 const previous = (page: Page) => dock(page).getByRole('button', { name: 'Previous' });
 const catchUp = (page: Page) => dock(page).getByRole('button', { name: 'Catch up to live' });
@@ -51,7 +52,7 @@ test('@live A40: Previous goes back a call a press, counts quick presses, then p
 	await expect(dock(page).getByText(/Back \d calls?…/)).toHaveCount(0);
 	// The first call heard: nothing earlier.
 	await expect(previous(page)).toBeDisabled();
-	await expect(catchUp(page)).toBeVisible();
+	await expect(catchUp(page)).toBeEnabled();
 	await sending;
 
 	// Every call from there, in order, then the call that queued meanwhile.
@@ -66,7 +67,7 @@ test('@live A40: Previous goes back a call a press, counts quick presses, then p
 	await playedFrom(page, 5705, 'recording');
 
 	// Caught up: live carries on by itself.
-	await expect(catchUp(page)).toHaveCount(0, { timeout: 10_000 });
+	await expect(catchUp(page)).toBeDisabled({ timeout: 10_000 });
 	await sendCalls([{ unit: 5706, atMs: 200, pcm: [tone] }]);
 	await playedFrom(page, 5706, 'live');
 	expect((await heardFrom(page, 5704)).at(-1)).toBe('5706 live');
@@ -108,7 +109,7 @@ test('@live A40: with hold on, Previous steps through the held talkgroup\'s call
 	const sending = sendCalls([{ unit: 5724, atMs: 200, pcm: seconds(8) }]);
 	await firstOf(page, 5724, 'live');
 	await dock(page).getByRole('button', { name: 'Hold' }).click();
-	await expect(dock(page).getByText('Hold on: Dispatch North only')).toBeVisible();
+	await expect(display(page).locator('.hold')).toHaveText('Hold on');
 	// Two steps back on 1001 pass over 1002's call.
 	await back(page, 2);
 	await expect.poll(async () => (await heard(page)).previous).toEqual([{ call_id: first.call_id, steps: 2 }]);
@@ -130,10 +131,10 @@ test('@live A41: Catch up leaves Previous\'s calls and goes back to live at once
 	// Nothing playing: two presses go to the call before the last.
 	await back(page, 2);
 	const replayed = await firstOf(page, 5731, 'recording');
-	await expect(catchUp(page)).toBeVisible();
+	await expect(catchUp(page)).toBeEnabled();
 	await catchUp(page).click();
 	await expect.poll(async () => (await heard(page)).ended).toEqual([expect.objectContaining({ call_id: replayed.call_id, how: 'cleared' })]);
-	await expect(catchUp(page)).toHaveCount(0);
+	await expect(catchUp(page)).toBeDisabled();
 	await sendCalls([{ unit: 5733, atMs: 200, pcm: [tone] }]);
 	await playedFrom(page, 5733, 'live');
 	// 5732 wasn't played again.
@@ -160,7 +161,7 @@ test('@live the player bar: its order, in one row at 1,280 px beside the side me
 
 async function barChecks(page: Page, shots: string) {
 	await firstOf(page, 5742, 'live');
-	await expect(dock(page).locator('.queued')).toHaveText('1 queued', { timeout: 10_000 });
+	await expect(display(page).locator('.queued')).toHaveText('1 queued', { timeout: 10_000 });
 	const controls = dock(page).getByRole('group', { name: 'Player controls' });
 	const rows = async () => new Set(await controls.getByRole('button').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)))).size;
 
@@ -188,11 +189,12 @@ async function barChecks(page: Page, shots: string) {
 
 	// A desktop, with the side menu: every control in one row, names beside icons.
 	await page.setViewportSize({ width: 1280, height: 900 });
-	await expect(controls.getByRole('button')).toHaveText(['Pause', 'Previous', 'Skip', 'Hold', 'Stop listening', 'Share', 'Add to basket']);
+	await expect(controls.getByRole('button')).toHaveText(['Pause', 'Previous', 'Skip', 'Catch up to live', 'Hold', 'Stop listening', 'Share', 'Add to basket']);
 	expect(await controls.getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') ?? e.textContent?.trim()))).toEqual([
 		'Pause',
 		'Previous',
 		'Skip',
+		'Catch up to live',
 		'Hold',
 		'Stop listening',
 		'Share: Dispatch North',
@@ -222,6 +224,7 @@ async function barChecks(page: Page, shots: string) {
 		'Pause',
 		'Previous',
 		'Skip',
+		'Catch up to live',
 		'Hold',
 		'Stop listening',
 		'More actions: Dispatch North'
@@ -243,7 +246,7 @@ async function barChecks(page: Page, shots: string) {
 	await expect(dock(page).getByRole('button', { name: 'Share link' })).toBeVisible();
 	await check('phone-actions', 375);
 	await dock(page).getByRole('button', { name: 'Add to basket' }).click();
-	await expect(dock(page).locator('.queue')).toContainText('Added to the basket');
+	await expect(dock(page).locator('.said-place')).toContainText('Added to the basket');
 
 	await dock(page).getByRole('button', { name: 'Stop listening' }).click();
 }

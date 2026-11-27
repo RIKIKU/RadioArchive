@@ -29,7 +29,14 @@ test("the Listen page opens at / with Start listening, in ArchiveUx's frame", as
 	await expect(page).toHaveTitle('Listen · RadioArchive');
 	await expect(page.getByRole('heading', { level: 1, name: 'Listen' })).toBeVisible();
 	// Start listening is in the frame's dock (R44, R81), on every page.
-	await expect(page.getByRole('region', { name: 'Now playing' }).getByRole('button', { name: 'Start listening' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Player' }).getByRole('button', { name: 'Start listening' })).toBeVisible();
+	// The now-playing display, at the top of the page, idle, every field there (ADR 0051).
+	const display = page.getByRole('region', { name: 'Now playing' });
+	await expect(display).toHaveAttribute('data-state', 'idle');
+	await expect(display.locator('.status')).toHaveText('Idle');
+	await expect(display.locator('.name')).toHaveText('—');
+	await expect(display.locator('.started .value')).toHaveText('Started —');
+	await expect(page.getByRole('list', { name: 'Recent calls heard' })).toHaveCount(0);
 	// The side menu, with the brand and Listen as the current page.
 	const menu = page.locator('nav.side');
 	await expect(menu.getByRole('link', { name: 'RadioArchive' })).toBeVisible();
@@ -141,12 +148,16 @@ for (const look of looks)
 				await shot(page, `unavailable-${look}-${theme}-${width}`);
 
 				// Then one that does: the session's addition, the tiles with
-				// North on and the rest off, and the talkgroups on, opened.
+				// North on and the rest off, and the talkgroups on: priority,
+				// and North opened, a chip off among them (ADR 0051).
 				await page.goto('/?fireground=41');
 				await expect(page.getByText('is added for this session')).toBeVisible();
 				await expect(page.getByRole('list', { name: 'Agencies' }).getByRole('button', { name: /^North/ })).toHaveAttribute('aria-pressed', 'true');
-				await page.getByText(/^Talkgroups on \(/).click();
-				await expect(page.getByRole('list', { name: 'Your listening set' }).getByRole('listitem')).toHaveCount(1);
+				await expect(page.getByRole('list', { name: 'Priority talkgroups' }).getByRole('listitem')).toHaveCount(1);
+				await page.getByRole('button', { name: /^North — 1 on/ }).click();
+				await expect(page.getByRole('list', { name: 'North' }).getByRole('listitem')).toHaveCount(1);
+				await page.getByRole('list', { name: 'North' }).getByRole('button', { name: /^Dispatch North / }).click();
+				await expect(page.getByRole('list', { name: 'North' }).getByRole('button', { name: /^Dispatch North / })).toHaveAttribute('aria-pressed', 'false');
 				await axe(page, width);
 				await shot(page, `listen-${look}-${theme}-${width}`);
 
@@ -166,6 +177,7 @@ for (const look of looks)
 				await page.getByLabel('Search talkgroups').fill('fire');
 				await expect(page.getByRole('list', { name: 'Search results' }).getByRole('listitem')).toHaveCount(1);
 				await axe(page, width);
+				await shot(page, `search-${look}-${theme}-${width}`);
 
 				// A disabled account's sign-in comes back here (ADR 0025): a
 				// plain notice, once, and listening as before.

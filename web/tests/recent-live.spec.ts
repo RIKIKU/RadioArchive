@@ -7,12 +7,12 @@
 // with the fixture's command. scripts/ci/e2e-web.sh runs these with the
 // playback tests, one at a time.
 import { test, expect, type Page } from '@playwright/test';
-import { audible, dock, env, heard, listen, playedFrom, seconds, sendCalls, setTalkgroup } from './live.ts';
+import { audible, display, dock, env, heard, listen, playedFrom, seconds, sendCalls, setTalkgroup, waiting } from './live.ts';
 import { execFile } from 'node:child_process';
 import AxeBuilder from '@axe-core/playwright';
 
 const rows = (page: Page) => page.getByRole('list', { name: 'Recent calls' }).getByRole('listitem');
-const queued = (page: Page) => dock(page).locator('.queued');
+const queued = (page: Page) => display(page).locator('.queued');
 
 /** Stores one call on a talkgroup from unit, ending now; resolves with its ID and when it ended (Unix ms). */
 function storeCall(talkgroup: number, unit: number): Promise<{ id: string; ended: number }> {
@@ -80,7 +80,7 @@ test('@live R46: pressing a call replays it from its recording; live listening p
 
 	// Replaying: from its recording, in the dock; live listening paused.
 	await expect(dock(page).locator('.replay')).toContainText('Dispatch North');
-	await expect(dock(page).getByText('Paused. Calls keep queuing.')).toBeVisible();
+	await expect(display(page).locator('.status')).toHaveText('Paused');
 	await expect(row).toHaveAttribute('data-playing', 'yes');
 	await expect
 		.poll(async () => (await heard(page)).first.filter((f) => f.call_id === first.call_id && (f as { replay?: boolean }).replay).length, { timeout: 15_000 })
@@ -108,7 +108,7 @@ test('@live R46: pressing a call replays it from its recording; live listening p
 	await expect(dock(page).getByRole('button', { name: 'Pause' })).toBeVisible();
 	// The call that queued meanwhile plays, from its recording, with no press.
 	await playedFrom(page, 5302, 'recording', 30_000);
-	await expect(queued(page)).toHaveText('No calls queued');
+	await expect(queued(page)).toHaveText('0 queued');
 
 	// Stop replay stops it at once, and live listening resumes.
 	await row.getByRole('button', { name: /^Play: Dispatch North/ }).click();
@@ -181,7 +181,7 @@ test('@live R46: play from here plays the call, then the later ones oldest first
 	const aStart = await page.locator(`[data-call-id="${a}"] time`).getAttribute('datetime');
 	await page.locator(`[data-call-id="${a}"]`).getByRole('button', { name: /^Play from here: Dispatch North/ }).click();
 	await expect(dock(page).locator('.replay')).toContainText('From here: call 1 of');
-	await expect(dock(page).getByText('Paused. Calls keep queuing.')).toBeVisible();
+	await expect(display(page).locator('.status')).toHaveText('Paused');
 
 	// A live call meanwhile is queued, not heard.
 	const sending = sendCalls([{ unit: 5303, atMs: 200, pcm: seconds(2) }]);
@@ -250,7 +250,7 @@ test('@live R46: a call replays with live listening never started, and starting 
 	await expect(dock(page).getByRole('button', { name: 'Start listening' })).toBeVisible();
 	await dock(page).getByRole('button', { name: 'Start listening' }).click();
 	await expect(dock(page).locator('.replay')).toHaveCount(0);
-	await expect(dock(page).getByText('Listening. Calls play here as they come in.')).toBeVisible({ timeout: 15_000 });
+	await waiting(page);
 	await dock(page).getByRole('button', { name: 'Stop listening' }).click();
 });
 

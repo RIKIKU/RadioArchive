@@ -372,7 +372,8 @@ test("A13, the browser's half: an admin plays a 1003 recording from its row, in 
 	const [played] = await page.evaluate(() => (window as unknown as { played: { frames: number; source: string }[] }).played);
 	expect(played.frames).toBeGreaterThan(100);
 	expect(played.source).toBe('recording');
-	await expect(page.getByRole('region', { name: 'Now playing' }).locator('.tg')).toHaveCount(0);
+	await expect(page.getByRole('region', { name: 'Player' }).locator('.replay')).toHaveCount(0);
+	await expect(page.getByRole('region', { name: 'Now playing' })).toHaveCount(0);
 
 	// The listener, signed in as this admin: no 1003 anywhere.
 	await page.goto('/');
