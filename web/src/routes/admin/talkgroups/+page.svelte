@@ -110,8 +110,8 @@
 		...(several ? [{ key: 'system', label: 'System', sortable: true, value: (r: TableRow) => systemOf(r.system_id)?.label ?? String(r.system_id) }] : []),
 		{ key: 'label', label: 'Label', sortable: true },
 		{ key: 'name', label: 'Name', sortable: true },
-		{ key: 'tag', label: 'Tag', sortable: true },
-		{ key: 'groups', label: 'Groups', sortable: true, value: (r) => r.groups.join(', ') },
+		{ key: 'tag', label: 'Tag', sortable: true, custom: true },
+		{ key: 'groups', label: 'Groups', sortable: true, custom: true, value: (r) => r.groups.join(', ') },
 		{ key: 'state', label: 'State', sortable: true, custom: true, value: (r) => stateOrder(r.state) * 2 + (r.unreviewed ? 1 : 0) },
 		{ key: 'last_heard_at', label: 'Last heard', sortable: true, firstDir: 'descending', value: (r) => (r.last_heard_at ? new Date(r.last_heard_at).getTime() : null), text: (r) => (r.last_heard_at ? agoOf(r.last_heard_at, now) : 'Never') },
 		{ key: 'calls_30_days', label: 'Calls (30 days)', sortable: true, firstDir: 'descending', align: 'end', text: (r) => n(r.calls_30_days) }
@@ -306,6 +306,8 @@
 		{#snippet cell(t: TableRow, c: Column)}
 			{#if c.key === 'id'}
 				{t.id}
+			{:else if c.key === 'tag' || c.key === 'groups'}
+				<span class="words" class:groups={c.key === 'groups'}>{c.key === 'tag' ? (t.tag ?? '') : t.groups.join(', ')}</span>
 			{:else if c.key === 'state'}
 				<span class="badges">
 					<StateBadge state={t.state === 'public' ? 'ok' : 'neutral'} text={stateWords[t.state]} />
@@ -409,6 +411,26 @@
 		margin: 0;
 		color: var(--muted);
 		font-size: var(--text-sm);
+	}
+	/* A tag's and the groups' names break only at their spaces (#165): the
+	   table's cells may break anywhere, so a long name in a crowded table
+	   came out as "Untagge|d". Each column is never narrower than its longest
+	   word. Only a single word longer than a field (a tag) or a wide field
+	   (the groups) still breaks, so the table never pushes the page wider
+	   (#113). */
+	.words {
+		display: inline-block;
+		max-inline-size: var(--field-narrow);
+		overflow-wrap: break-word;
+	}
+	.words.groups {
+		max-inline-size: var(--field-wide);
+	}
+	/* The room for them comes from the headers, which the table keeps on one
+	   line: here "Last heard" and "Calls (30 days)" may take two, at their
+	   spaces, when the table is short of room. */
+	.table-edge :global(thead th) {
+		white-space: normal;
 	}
 	.badges {
 		display: inline-flex;
