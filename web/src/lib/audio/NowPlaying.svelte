@@ -153,7 +153,9 @@
 	}
 	.row {
 		display: grid;
-		align-items: baseline;
+		align-items: center;
+		/* Each row is one line high (its height, below), whatever is in it: nothing moves between calls. */
+		overflow: hidden;
 		gap: var(--space-md);
 		min-width: 0;
 		line-height: var(--leading-tight);
@@ -167,6 +169,8 @@
 	/* Fixed columns: the status and time never push the middle about. */
 	.r1 {
 		grid-template-columns: var(--label-min) minmax(0, 1fr) auto;
+		height: calc(var(--leading-tight) * var(--text-sm));
+		font-size: var(--text-sm);
 	}
 	.r1 .status {
 		min-width: 0;
@@ -184,6 +188,8 @@
 	}
 	.r2 {
 		grid-template-columns: minmax(0, 1fr);
+		height: calc(var(--leading-tight) * var(--text-xl));
+		font-size: var(--text-xl);
 	}
 	.name {
 		font-size: var(--text-xl);
@@ -191,6 +197,7 @@
 	}
 	.r3 {
 		grid-template-columns: var(--label-min) minmax(0, 1fr) auto;
+		height: calc(var(--leading-tight) * var(--text-base));
 		font-family: var(--font-meta);
 	}
 	.elapsed {
@@ -198,6 +205,7 @@
 	}
 	.r4 {
 		grid-template-columns: repeat(3, minmax(0, 1fr));
+		height: calc(var(--leading-tight) * var(--text-sm));
 		color: var(--muted);
 		font-size: var(--text-sm);
 	}
