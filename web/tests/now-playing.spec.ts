@@ -64,6 +64,7 @@ for (const width of [1280, 375] as const)
 
 		await listen(page, 'webcodecs', [{ id: 1001 }, { id: 1002, priority: true }]);
 		expect(await height(page), 'waiting').toBeCloseTo(idle, 0);
+		// The dock's height, within a pixel: the Actions menu's toggle, there only with a call to act on, can sit a fraction of a pixel taller than the buttons in Firefox and WebKit.
 		const docked = await height(page, dock(page));
 		await expect(dock(page).getByRole('button', { name: 'Catch up to live' })).toBeDisabled();
 		const empty = await places(page);
@@ -94,7 +95,7 @@ for (const width of [1280, 375] as const)
 		// Queued: Catch up enabled in place, and the dock no taller.
 		await expect(display(page).locator('.queued')).toHaveText('1 queued', { timeout: 10_000 });
 		await expect(dock(page).getByRole('button', { name: 'Catch up to live' })).toBeEnabled();
-		expect(await height(page, dock(page)), 'the dock while behind').toBeCloseTo(docked, 0);
+		expect(Math.abs((await height(page, dock(page))) - docked), 'the dock while behind').toBeLessThanOrEqual(1);
 
 		// Paused, then behind.
 		await dock(page).getByRole('button', { name: 'Pause' }).click();
@@ -107,7 +108,7 @@ for (const width of [1280, 375] as const)
 		await expect(display(page).locator('.np-status')).toHaveText(/^Behind \d+ s$/);
 		expect(await height(page), 'behind').toBeCloseTo(idle, 0);
 		expect(await places(page), 'behind: every field where it was').toEqual(empty);
-		expect(await height(page, dock(page)), 'the dock while behind').toBeCloseTo(docked, 0);
+		expect(Math.abs((await height(page, dock(page))) - docked), 'the dock while behind').toBeLessThanOrEqual(1);
 		await axe(page, `the display behind, ${width} px`);
 		await sending;
 
@@ -124,7 +125,7 @@ for (const width of [1280, 375] as const)
 		await expect(display(page).locator('.elapsed .value')).toHaveText(/^Duration \d:\d\d$/);
 		expect(await height(page), 'waiting, the last call shown').toBeCloseTo(idle, 0);
 		expect(await places(page), 'waiting: every field where it was').toEqual(empty);
-		expect(await height(page, dock(page)), 'the dock, waiting').toBeCloseTo(docked, 0);
+		expect(Math.abs((await height(page, dock(page))) - docked), 'the dock, waiting').toBeLessThanOrEqual(1);
 		await dock(page).getByRole('button', { name: 'Stop listening' }).click();
 		await expect(display(page)).toHaveAttribute('data-state', 'idle');
 		expect(await height(page), 'idle again').toBeCloseTo(idle, 0);
