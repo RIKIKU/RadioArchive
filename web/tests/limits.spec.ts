@@ -74,6 +74,33 @@ async function startListening(page: Page) {
 	await page.getByRole('button', { name: 'Start listening' }).click();
 }
 
+/**
+ * The page keeps room at its foot for a refused socket's notice (#147):
+ * scrolled to the end, the page's last content, the Listen page's "Add
+ * all" among it, is clear of the notice above the dock, so nothing stays
+ * under it.
+ */
+async function endClearOfNotice(page: Page, width: number) {
+	// The room follows the notice's height a frame after it's drawn.
+	await expect
+		.poll(
+			() =>
+				page.evaluate(() => {
+					window.scrollTo(0, document.documentElement.scrollHeight);
+					const top = document.querySelector('.notice-place')!.getBoundingClientRect().top;
+					return [...document.querySelectorAll('main *:not(.notice-room)')]
+						.filter((e) => {
+							const r = e.getBoundingClientRect();
+							return r.height > 0 && r.bottom > top;
+						})
+						.map((e) => `${e.tagName.toLowerCase()}.${e.className}: ${(e.textContent ?? '').trim().slice(0, 40)}`);
+				}),
+			{ message: `${width} px: the page's end is under the notice`, timeout: 5_000 }
+		)
+		.toEqual([]);
+	await page.evaluate(() => window.scrollTo(0, 0));
+}
+
 async function axe(page: Page, width: number) {
 	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
 	const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
@@ -169,6 +196,10 @@ test('A20 @limits: a 5th live connection from one place shows its limit, and get
 		const page = await context.newPage();
 		await startListening(page);
 		await expect(page.getByText('Too many live connections from here: at most 4 at once. Trying again…')).toBeVisible({ timeout: 15_000 });
+		for (const width of [1280, 375]) {
+			await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
+			await endClearOfNotice(page, width);
+		}
 		for (const ws of four) expect(ws.readyState).toBe(WebSocket.OPEN);
 		// One closes: within the 30 s retry, the page is in.
 		four[0].close();
@@ -202,6 +233,7 @@ test('A20 @limits: with 50 sockets open a new listener sees "The radio is full r
 					await startListening(p);
 					await expect(p.getByText('The radio is full right now. Trying again…')).toBeVisible({ timeout: 15_000 });
 					await axe(p, width);
+					await endClearOfNotice(p, width);
 					await shot(p, `radio-full-${look}-${theme}-${width}`);
 					await c.close();
 				}
