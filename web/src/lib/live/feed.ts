@@ -53,6 +53,14 @@ export interface FeedHandlers {
 	 * notice comes with the server's message (ADR 0039).
 	 */
 	notice?(kind: NoticeKind, active: boolean, message?: string): void;
+	/**
+	 * The server has said the notice is off (ADR 0050): it sent the
+	 * notice's off, or took the set (listening) without having sent the
+	 * notice's on since the welcome, which it would have sent first. A
+	 * welcome's own reset of the notices is not this: it says nothing of
+	 * the outage, only that the socket is new.
+	 */
+	noticeOff?(kind: NoticeKind): void;
 }
 
 /**
@@ -90,6 +98,8 @@ export class LiveFeed {
 	#set: LiveTalkgroup[] = [];
 	#lastEventId: number | undefined;
 	#welcomed = false;
+	/** The notices the server has sent on since this socket's welcome. */
+	#on = new Set<NoticeKind>();
 	#stopped = true;
 	#tries = 0;
 	#timer: ReturnType<typeof setTimeout> | undefined;
@@ -203,11 +213,15 @@ export class LiveFeed {
 				this.#welcomed = true;
 				// A new socket starts with every notice off; one that's on comes next.
 				for (const k of NOTICES) this.#h.notice?.(k, false);
+				this.#on.clear();
 				this.#sendSet(true);
 				return;
 			case 'listening':
 				this.#tries = 0;
 				this.#h.connected?.(true);
+				// A notice that's on comes before the listening (ADR 0010), so
+				// one not on by now is off.
+				for (const k of NOTICES) if (!this.#on.has(k)) this.#h.noticeOff?.(k);
 				return;
 			case 'call_start':
 			case 'transmission':
@@ -219,7 +233,15 @@ export class LiveFeed {
 				if (typeof m.call_id === 'string') this.#h.withdrawn(m.call_id);
 				return;
 			case 'notice':
-				if (NOTICES.includes(m.notice as NoticeKind) && typeof m.active === 'boolean') this.#h.notice?.(m.notice as NoticeKind, m.active);
+				if (NOTICES.includes(m.notice as NoticeKind) && typeof m.active === 'boolean') {
+					const kind = m.notice as NoticeKind;
+					this.#h.notice?.(kind, m.active);
+					if (m.active) this.#on.add(kind);
+					else {
+						this.#on.delete(kind);
+						this.#h.noticeOff?.(kind);
+					}
+				}
 				return;
 		}
 	}

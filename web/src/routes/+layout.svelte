@@ -26,6 +26,8 @@
 	import type { Profile } from '#lib/account/profile.ts';
 	import { adminGroup } from '#lib/admin/menu.ts';
 	import { tryingAgain } from '#lib/limits.ts';
+	import { NoticeDismissal } from '#lib/live/dismissal.svelte.ts';
+	import TimedNotice from '#lib/live/TimedNotice.svelte';
 
 	let { children } = $props();
 
@@ -40,11 +42,18 @@
 	// The download basket (R64; ADR 0018), saved with the set (R110).
 	const basket = basketState();
 
+	// The recorder notice, once put away, stays away for the browser
+	// session until the server says it's off (R15; ADR 0050).
+	const dismissal = new NoticeDismissal();
+
 	// The player, in the dock. Priority marks are the saved set's (R43); the
 	// talkgroups added for the session have none.
 	const player = new Player({
 		isPriority: (t) => listening.saved.some((e) => e.priority && keyOf(e) === keyOf(t)),
-		alerts: () => alerts
+		alerts: () => alerts,
+		noticeOff: (kind) => {
+			if (kind === 'recorders') dismissal.ended();
+		}
 	});
 	onDestroy(() => {
 		player.stop();
@@ -143,6 +152,8 @@
 	// nothing by itself: each admin page follows the admin API's answer.
 	const groups = $derived(acct.who?.admin ? [adminGroup()] : []);
 	let opened: Record<string, boolean> = $state({});
+	// How tall the notices are, for the room kept for them at the page's foot.
+	let noticeRoom = $state(0);
 </script>
 
 <Frame dockLabel="Now playing">
@@ -150,9 +161,13 @@
 	{#snippet start()}<a class="brand" href="/">RadioArchive</a>{/snippet}
 	{#snippet dock()}<Dock {player} />{/snippet}
 	{#snippet notices()}
-		<!-- The live feed's notices (R15, R81), above the dock, while they're on. -->
-		<div class="notice-place" aria-live="polite">
-			{#if player.notices.recorders}<p class="feed-notice">Some talkgroups aren't being received right now.</p>{/if}
+		<!-- The live feed's notices (R15, R81), above the dock, while they're
+		     on, each announced once as it comes. The recorder notice can be put
+		     away, and goes by itself after 10 s (ADR 0050); the refused
+		     socket's stay while the feed tries again, since nothing plays
+		     until it gets in. -->
+		<div class="notice-place" role="status" aria-atomic="false" bind:offsetHeight={noticeRoom}>
+			{#if player.notices.recorders && !dismissal.dismissed}<TimedNotice text="Some talkgroups aren't being received right now." ondismiss={() => dismissal.dismiss()} />{/if}
 			<!-- A refused socket (R71; ADR 0037, 0039): the feed tries again by itself. -->
 			{#if player.notices.radio_full}<p class="feed-notice limit">The radio is full right now. Trying again…</p>{/if}
 			{#if player.notices.too_many_live}<p class="feed-notice limit">{tryingAgain(player.liveLimit)}</p>{/if}
@@ -235,6 +250,9 @@
 	{/if}
 
 	{@render children()}
+	<!-- Room at the page's foot for the feed's notices while one is shown,
+	     so the end of the page can always be scrolled out from under it. -->
+	{#if noticeRoom}<div class="notice-room" aria-hidden="true" style:height="{noticeRoom}px"></div>{/if}
 </Frame>
 
 <style>
@@ -277,6 +295,12 @@
 		border-radius: var(--radius);
 		box-shadow: var(--notice-shadow);
 		font-size: var(--text-sm);
+	}
+	/* The notice place sits --space-lg above the dock (--space-sm on
+	   phones); the room keeps that gap too. */
+	.notice-room {
+		flex: none;
+		margin-top: var(--space-lg);
 	}
 	.saved {
 		margin: 0;
