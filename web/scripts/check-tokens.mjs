@@ -38,7 +38,7 @@
 //
 // usage: node scripts/check-tokens.mjs [file …]   (default: all of src)
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'svelte/compiler';
 
@@ -344,6 +344,13 @@ const targets = args.length ? args.map((a) => join(process.cwd(), a)) : files(sr
 // ArchiveUx's tokens, at the release package.json pins.
 const sharedFile = fileURLToPath(import.meta.resolve('archiveux/tokens.css'));
 const found = [];
+// What ArchiveUx's frame sets on its root from what it measures
+// (style:--topbar-height, style:--dock-offset), for the parts of a page
+// that sit by the top bar or the dock: known as tokens are.
+const frameFile = join(dirname(sharedFile), 'components', 'Frame.svelte');
+walk(parse(readFileSync(frameFile, 'utf8'), { modern: true, filename: frameFile }).fragment, (n) => {
+	for (const a of n.attributes ?? []) if (a.type === 'StyleDirective' && a.name.startsWith('--')) defined.add(a.name);
+});
 // The token file first, so its tokens are known.
 for (const file of [sharedFile, ...targets]) {
 	const text = readFileSync(file, 'utf8');

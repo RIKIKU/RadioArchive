@@ -186,15 +186,28 @@ export async function listen(page: Page, path: 'webcodecs' | 'wasm' = 'webcodecs
 		{ removeDecoder: path === 'wasm', set, playback }
 	);
 	await page.goto('/');
-	// The set has loaded: the talkgroups on, folded away at the page's foot.
-	await expect(page.getByText(/^Talkgroups on \(/)).toBeVisible();
+	// The set has loaded: the talkgroups on, at the page's foot.
+	await expect(page.getByRole('heading', { name: /^Talkgroups on \(/ })).toBeVisible();
 	await page.getByRole('button', { name: 'Start listening' }).click();
-	await expect(dock(page).getByText('Listening. Calls play here as they come in.')).toBeVisible({ timeout: 15_000 });
+	await waiting(page);
 	await expect(dock(page).locator('.player')).toHaveAttribute('data-decoder', path);
 }
 
-/** The frame's dock, "Now playing". */
-export const dock = (page: Page) => page.getByRole('region', { name: 'Now playing' });
+/** The frame's dock, "Player": the controls (ADR 0051). */
+export const dock = (page: Page) => page.getByRole('region', { name: 'Player' });
+
+/**
+ * The now-playing display at the top of the page (ADR 0051): the whole of
+ * it on the Listen page, a slim line on the others while listening. Its
+ * data-state is the status's: idle, connecting, waiting, live, behind,
+ * delayed or paused.
+ */
+export const display = (page: Page) => page.getByRole('region', { name: 'Now playing' });
+
+/** Listening, connected, with nothing playing: the display says Waiting. */
+export async function waiting(page: Page, timeout = 15_000) {
+	await expect(display(page)).toHaveAttribute('data-state', 'waiting', { timeout });
+}
 
 export const heard = (page: Page) => page.evaluate(() => (window as unknown as { heard: Heard }).heard);
 

@@ -57,7 +57,7 @@ test('an admin: the Admin menu on desktops, and under More on phones; its pages 
 	await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
 	// The listener's pages are still there, with the dock.
 	await expect(side(page).getByRole('link', { name: 'Listen' })).toBeVisible();
-	await expect(page.getByRole('region', { name: 'Now playing' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Player' })).toBeVisible();
 
 	await page.setViewportSize({ width: 375, height: 800 });
 	await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'More' }).click();

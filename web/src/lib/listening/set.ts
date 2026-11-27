@@ -224,20 +224,24 @@ export function sameSet(ix: Index, a: Entry[], b: Entry[]): boolean {
 
 /**
  * Talkgroups matching a search (R42), as the server's search does (ADR
- * 0006): by name, label, tag or decimal ID, ignoring case; those a field
- * names exactly first, then those with a field or a word in it that starts
+ * 0006): by name, label, tag or decimal ID, ignoring case; a talkgroup whose
+ * ID is the query first (ADR 0051), then those a field names exactly, then
+ * those with a field or a word in it that starts
  * with the query, then those that contain it, each in the catalogue's
  * order. An empty query matches every talkgroup.
  */
 export function search(talkgroups: Talkgroup[], query: string): Talkgroup[] {
 	const q = query.trim().toLowerCase();
 	if (!q) return talkgroups;
-	const ranks: Talkgroup[][] = [[], [], []];
+	// The talkgroup whose number is the query comes before any other (R112):
+	// on a list this big you mostly search by number or by name.
+	const ranks: Talkgroup[][] = [[], [], [], []];
 	for (const t of talkgroups) {
 		const fields = [t.name, t.label, t.tag, String(t.id)].map((f) => f.toLowerCase());
-		if (fields.some((f) => f === q)) ranks[0].push(t);
-		else if (fields.some((f) => f.startsWith(q) || f.split(/\s+/).some((w) => w.startsWith(q)))) ranks[1].push(t);
-		else if (fields.some((f) => f.includes(q))) ranks[2].push(t);
+		if (String(t.id) === q) ranks[0].push(t);
+		else if (fields.some((f) => f === q)) ranks[1].push(t);
+		else if (fields.some((f) => f.startsWith(q) || f.split(/\s+/).some((w) => w.startsWith(q)))) ranks[2].push(t);
+		else if (fields.some((f) => f.includes(q))) ranks[3].push(t);
 	}
 	return ranks.flat();
 }

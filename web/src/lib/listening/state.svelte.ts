@@ -137,6 +137,17 @@ export class ListeningState {
 		this.#saveSet();
 	}
 
+	/** Flips a talkgroup's priority mark (a chip's long press or star). One
+	 * not in the set joins it, marked priority. */
+	togglePriority(t: Talkgroup) {
+		if (!this.inSet(t)) {
+			this.add(t);
+			this.setPriority(t, true);
+			return;
+		}
+		this.setPriority(t, !this.isPriority(t));
+	}
+
 	/**
 	 * Adds a talkgroup for this session (R47): apart from the set, until the
 	 * tab closes. A talkgroup already in the set is left as it is. Says

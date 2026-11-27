@@ -9,7 +9,7 @@
 // the one recorder). Their titles carry @live, which picks them out.
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { audible, bursts, dock, heard, listen, playedFrom, seconds, sendCalls, tone } from './live.ts';
+import { audible, bursts, display, dock, heard, listen, playedFrom, seconds, sendCalls, tone, waiting } from './live.ts';
 
 const paths = ['webcodecs', 'wasm'] as const;
 
@@ -22,8 +22,12 @@ for (const path of paths) {
 		console.log(`A7 [${info.project.name}] ${first.call_id}: ${played.path}, ${played.frames} frames, peak ${played.peak.toFixed(3)}`);
 		expect(first.path).toBe(path);
 		audible(played, path);
-		// What played is in the dock until the next call, its unit by its alias (R27).
-		await expect(dock(page).getByText('Last call: Dispatch North, Engine 1.')).toBeVisible();
+		// What played stays on the display until the next call, its unit by
+		// its alias (R27), never by its alias and its ID both (ADR 0051).
+		await expect(display(page)).toHaveAttribute('data-state', 'waiting');
+		await expect(display(page).locator('.name')).toHaveText('Dispatch North');
+		await expect(display(page).locator('.unit')).toHaveText('Unit Engine 1');
+		await expect(display(page).locator('.elapsed .value')).toHaveText(/^Duration \d:\d\d$/);
 	});
 
 	test(`@live a finished call plays from its recording, through ${path === 'webcodecs' ? 'WebCodecs' : 'the WASM fallback'}`, async ({ page, request }, info) => {
@@ -86,7 +90,7 @@ test('@live the feed reconnects after a drop and resumes from the last event ID 
 	await expect.poll(() => page.evaluate(() => (window as unknown as { sent: unknown[] }).sent.length), { timeout: 15_000 }).toBe(2);
 	const sent = await page.evaluate(() => (window as unknown as { sent: { type: string; talkgroups: unknown; last_event_id?: number }[] }).sent);
 	expect(sent[1]).toEqual({ type: 'set', talkgroups: [{ id: 1001 }], last_event_id: seen });
-	await expect(dock(page).getByText(/^Listening\./)).toBeVisible({ timeout: 15_000 });
+	await waiting(page);
 
 	// And the next call plays.
 	await sendCalls([{ unit: 5006, atMs: 200, pcm: [bursts] }]);
@@ -127,8 +131,8 @@ test('@live the dock while a call plays and another waits: axe at phone and desk
 			{ unit, atMs: 200, pcm: seconds(6) },
 			{ unit: unit + 10, atMs: 1200, pcm: [bursts] }
 		]);
-		await expect(dock(page).locator('.tg')).toHaveText('Dispatch North', { timeout: 15_000 });
-		await expect(dock(page).getByText('1 queued')).toBeVisible({ timeout: 10_000 });
+		await expect(display(page).locator('.name')).toHaveText('Dispatch North', { timeout: 15_000 });
+		await expect(display(page).locator('.queued')).toHaveText('1 queued', { timeout: 10_000 });
 		const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
 		expect(results.violations).toEqual([]);
 		expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);

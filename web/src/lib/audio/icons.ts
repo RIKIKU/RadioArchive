@@ -28,6 +28,8 @@
 // a 24 x 24 outline SVG drawn with currentColor, passed to ArchiveUx's Icon
 // as svg and compiled into the app.
 export const dockIcons = {
+	/** Catch up: to the live edge (Tabler's arrow-bar-to-right). */
+	catchUp: '<path d="M14 12l-10 0" /><path d="M14 12l-4 4" /><path d="M14 12l-4 -4" /><path d="M20 4l0 16" />',
 	/** Hold. */
 	hold: '<path d="M5 13a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2l0 -6" /><path d="M11 16a1 1 0 1 0 2 0a1 1 0 0 0 -2 0" /><path d="M8 11v-4a4 4 0 1 1 8 0v4" />',
 	/** Stop listening. */

@@ -1,26 +1,24 @@
 <script lang="ts">
-	// The dock's player (SPEC.md R44, R45, R81; ADR 0012, 0048), in
-	// ArchiveUx's frame dock: Start listening, then now playing and the
-	// controls.
+	// The dock's player (SPEC.md R44, R45, R81; ADR 0012, 0048, 0051), in
+	// ArchiveUx's frame dock: Start listening, then live listening's
+	// controls. What's playing is shown at the top of the page, in the
+	// now-playing display (NowPlaying.svelte, ADR 0051): the dock holds only
+	// the controls, so its height never changes while listening.
 	//
-	// Now playing: the LED colour mark beside the talkgroup's name (never the
-	// only cue: the name is there), its group, the transmitting unit's alias
-	// or ID (updated per transmission), the system only when there are
-	// several, Live or Behind by N s or Delayed N min (ArchiveUx's badge),
-	// the call's duration so far, and how many calls are queued. Hold shows
-	// in words, beside the queue and on its pressed button. Only when behind
-	// (calls queued, or the call playing further back than Live allows),
-	// "Catch up" in words by the queue count brings it back to live.
+	// Controls (R44; ADR 0048, 0051), in this order: Pause or Resume,
+	// Previous, Skip, Catch up, Hold, Stop, then Share (R45, ADR 0017) and
+	// Add to basket (ADR 0018), which act on the playing call. Previous is
+	// the skip icon facing the other way. Catch up is always there, enabled
+	// only when behind: calls queued, or the call playing further back than
+	// Live allows (and not a delayed talkgroup's). Each control has its name
+	// in words beside its icon when there's room for them all in one row,
+	// and a short name under its icon when there isn't. On a phone, Share
+	// and Add to basket go in an Actions menu, which opens upwards.
 	//
-	// Controls (R44; ADR 0048), in this order: Pause or Resume, Previous,
-	// Skip, Hold, Stop, then Share (R45, ADR 0017) and Add to basket (ADR
-	// 0018), which act on the playing call. Previous is the skip icon facing
-	// the other way; while its presses are being counted the queue line says
-	// "Back 3 calls…". Each control has its name in words beside its icon
-	// when there's room for them all in one row, and a short name under its
-	// icon when there isn't. On a phone, Share and Add to basket go in an
-	// Actions menu, which opens upwards, and what they did shows by the
-	// queue count.
+	// What comes and goes, Previous's "Back 3 calls…" and what an Actions
+	// menu's action did, shows in a small label above the controls, over
+	// the page rather than in a line of its own, so the dock doesn't grow
+	// while it shows.
 	//
 	// A call replayed from recent calls (R46; ADR 0016) shows first, with
 	// its own Stop, Share and Add to basket, whether live listening is
@@ -28,11 +26,13 @@
 	// listening's are. Several played in turn (Play all, play from here: ADR
 	// 0023) show which call of them is playing, and when it started.
 	//
-	// On a phone (ADR 0023, "On a phone") the dock stacks: the replay first,
-	// its name beside its controls and the rest under both, then
-	// live listening, its status in a line above its controls. On a desktop
-	// the two sit side by side, as before (the wrapper isn't drawn there).
-	import { Icon, LiveBadge, MoreActions } from 'archiveux/components';
+	// During a replay the dock stacks: the replay first, then live
+	// listening's controls. On a phone (ADR 0023, "On a phone") the replay's
+	// name sits beside its controls and the rest under both. On a desktop
+	// the replay's details and controls share its row; they no longer sit
+	// beside live listening's, which need the room for eight controls (ADR
+	// 0051).
+	import { Icon, MoreActions } from 'archiveux/components';
 	import { LIVE_WITHIN } from 'archiveux/live.js';
 	import type { Player, CallInfo } from './player.svelte.ts';
 	import { dockIcons } from './icons.ts';
@@ -48,8 +48,8 @@
 	// Live allows. A delayed talkgroup's call is behind on purpose.
 	const behind = $derived(player.queued > 0 || (!!player.playing && !player.playing.delayMinutes && player.position.behind > LIVE_WITHIN));
 
-	// What an Actions menu's action did, by the queue count or the replay's
-	// details (the menu closes).
+	// What an Actions menu's action did, above the controls or in the
+	// replay's details (the menu closes).
 	let said: { where: 'player' | 'replay'; text: string } | undefined = $state();
 	let saidTimer: ReturnType<typeof setTimeout> | undefined;
 	function say(where: 'player' | 'replay', text: string) {
@@ -74,11 +74,6 @@
 	const r = $derived(player.replay.call);
 	const clock = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 	const unitOf = (i: CallInfo) => (i.unit ? i.unit.name || String(i.unit.id) : 'Unit unknown');
-	const queuedText = $derived(
-		player.queued === 0
-			? 'No calls queued'
-			: `${player.queued} queued${player.heldBack ? `, ${player.heldBack} after hold` : ''}`
-	);
 </script>
 
 {#snippet actions(where: 'player' | 'replay', id: string, name: string)}
@@ -131,48 +126,12 @@
 	</div>
 {:else}
 	<div class="player" data-decoder={player.path ?? ''} data-hold={player.hold ? 'on' : 'off'} data-paused={player.paused ? 'yes' : 'no'}>
-		<div class="now">
-			{#if c}
-				<div class="what" aria-live="polite">
-					<p class="np-name">
-						{#if c.talkgroup.led_colour}<span class="led" data-led={c.talkgroup.led_colour} aria-hidden="true"></span>{/if}
-						<span class="tg">{c.talkgroup.name}</span>{#if c.talkgroup.groups?.[0]}<span class="group">{c.talkgroup.groups[0]}</span>{/if}
-					</p>
-					<p class="meta np-unit">
-						<span class="unit">{unitOf(c)}</span>{#if c.system}<span class="sep" aria-hidden="true">·</span><span class="system">{c.system.name}</span>{/if}
-					</p>
-				</div>
-				<div class="where">
-					{#if c.delayMinutes}
-						<LiveBadge delay={c.delayMinutes} />
-					{:else}
-						<LiveBadge behind={player.position.behind} />
-					{/if}
-					<span class="meta elapsed"><span class="visually-hidden">{'Duration so far '}</span>{clock(player.position.elapsed)}</span>
-				</div>
-			{:else}
-				<p class="status" aria-live="polite">
-					{#if player.phase === 'starting' || !player.connected}
-						Connecting…
-					{:else if player.paused}
-						Paused. Calls keep queuing.
-					{:else if player.hold}
-						Waiting for {player.hold.talkgroup.name}.
-					{:else if player.last}
-						Listening. Last call: {player.last.talkgroup.name}, {unitOf(player.last)}.
-					{:else}
-						Listening. Calls play here as they come in.
-					{/if}
-				</p>
-			{/if}
-			<p class="meta queue">
-				<span class="queued">{queuedText}</span>
-				{#if behind}<span class="sep" aria-hidden="true">·</span><button type="button" class="ghost catch-up" onclick={() => player.catchUp()}>Catch up<span class="visually-hidden"> to live</span></button>{/if}
-				{#if player.hold}<span class="hold-on"><Icon svg={dockIcons.hold} />Hold on: {player.hold.talkgroup.name} only</span>{/if}
-				{#if player.stepsBack}<span class="said" role="status">Back {player.stepsBack} {player.stepsBack === 1 ? 'call' : 'calls'}…</span>{/if}
-				{#if said?.where === 'player'}<span class="said" role="status">{said.text}</span>{/if}
-			</p>
-		</div>
+		<!-- What comes and goes, over the page above the controls: always in
+		     the page, so it's announced as it changes, and never a line of its own. -->
+		<p class="said-place" role="status">
+			{#if player.stepsBack}<span class="said">Back {player.stepsBack} {player.stepsBack === 1 ? 'call' : 'calls'}…</span>{/if}
+			{#if said?.where === 'player'}<span class="said">{said.text}</span>{/if}
+		</p>
 		<div class="bar">
 			<div class="controls" role="group" aria-label="Player controls">
 				{#if player.paused}
@@ -184,6 +143,9 @@
 					><span class="flip"><Icon name="skip" /></span><span class="label">Previous</span></button
 				>
 				<button type="button" class="secondary" disabled={!c} onclick={() => player.skip()}><Icon name="skip" /><span class="label">Skip</span></button>
+				<button type="button" class="secondary" disabled={!behind} onclick={() => player.catchUp()}
+					><Icon svg={dockIcons.catchUp} /><span class="label">Catch up<span class="visually-hidden">{' to live'}</span></span></button
+				>
 				<button type="button" class="secondary" aria-pressed={!!player.hold} disabled={!c && !player.hold} onclick={() => player.setHold(!player.hold)}
 					><Icon svg={dockIcons.hold} /><span class="label">Hold</span></button
 				>
@@ -201,6 +163,16 @@
 	/* Desktops: not drawn, so what's in it sits in the frame's dock row. */
 	.stack {
 		display: contents;
+	}
+	/* A replay, on a desktop as on a phone: above live listening, so the
+	   bar's eight controls keep their room (ADR 0051). */
+	.stack.replaying {
+		display: flex;
+		flex: 1 1 auto;
+		flex-direction: column;
+		align-items: stretch;
+		gap: var(--space-xs);
+		min-width: 0;
 	}
 	.replay {
 		display: flex;
@@ -241,16 +213,28 @@
 	.start {
 		gap: var(--space-xs);
 	}
-	.now {
-		display: flex;
-		flex: 1 1 var(--field-wide);
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--space-2xs) var(--space-md);
-		min-width: 0;
+	.player {
+		position: relative;
 	}
-	.now p {
+	/* Over the page, just above the controls, and only as wide as its words. */
+	.said-place {
+		position: absolute;
+		bottom: calc(100% + var(--space-sm));
+		left: 0;
+		display: flex;
+		gap: var(--space-sm);
 		margin: 0;
+		font-size: var(--text-sm);
+		pointer-events: none;
+	}
+	.said-place:empty {
+		display: none;
+	}
+	.said {
+		padding: var(--badge-pad-y) var(--badge-pad-x);
+		border-radius: var(--radius-badge);
+		background: var(--surface-2);
+		color: var(--fg);
 	}
 	.what {
 		flex: 1 1 auto;
@@ -277,34 +261,8 @@
 		flex-wrap: wrap;
 		gap: 0 var(--space-xs);
 	}
-	.where {
-		display: flex;
-		align-items: center;
-		gap: var(--space-sm);
-	}
 	.elapsed {
 		font-variant-numeric: tabular-nums;
-	}
-	.status {
-		flex: 1 1 auto;
-		padding: 0;
-	}
-	.queue {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--space-2xs) var(--space-sm);
-		flex-basis: 100%;
-	}
-	.hold-on {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--space-2xs);
-		padding: var(--badge-pad-y) var(--badge-pad-x);
-		border-radius: var(--radius-badge);
-		background: var(--accent-soft);
-		color: var(--accent-soft-fg);
-		font-weight: var(--weight-strong);
 	}
 	.meta {
 		color: var(--muted);
@@ -327,20 +285,11 @@
 	.controls button {
 		gap: var(--space-xs);
 	}
-	/* Hold is on: the pressed button says so as well as the words beside the queue. */
+	/* Hold is on: the pressed button says so as well as the display's "Hold on". */
 	.controls button[aria-pressed='true'] {
 		background: var(--accent-soft);
 		border-color: var(--accent);
 		color: var(--accent-soft-fg);
-	}
-	/* Catch up: words, by the queue count, only when behind. */
-	.catch-up {
-		min-height: var(--target);
-		padding: 0 var(--space-xs);
-		color: var(--accent);
-		font-family: var(--font-ui);
-		font-size: var(--text-sm);
-		text-decoration: underline;
 	}
 	.sep {
 		color: var(--muted);
@@ -349,9 +298,6 @@
 	.flip {
 		display: inline-flex;
 		transform: scaleX(-1);
-	}
-	.said {
-		color: var(--fg);
 	}
 	.wide-only {
 		display: contents;
@@ -380,10 +326,10 @@
 	/* Not room for every control's name beside its icon in one row: each
 	   shows a short name under its icon, and they share the row. Stop's
 	   whole name is still read out. */
-	/* The row with names beside the icons is about 60rem wide (with
-	   Resume), so a desktop of 1,280 px beside the side menu has the short
-	   names; the margin covers each browser's fonts. */
-	@container dock-controls (width < 64rem) {
+	/* The row with names beside the icons is about 68rem wide (with Resume
+	   and Catch up), so a desktop of 1,280 px beside the side menu has the
+	   short names; the margin covers each browser's fonts. */
+	@container dock-controls (width < 72rem) {
 		.controls {
 			flex-wrap: nowrap;
 			gap: var(--space-2xs);
@@ -423,10 +369,24 @@
 	/* Phones: the controls across the width, short names under their icons;
 	   Share and Add to basket in the Actions menu. */
 	@media (max-width: 47.99rem) {
+		/* Seven controls at 375 px: each as wide as its short name (on one
+		   line) and at least a target, sharing what's left, rather than seven
+		   equal shares that "Previous" and "Catch up" overflow. */
 		.controls {
 			flex: 1 1 100%;
 			flex-wrap: nowrap;
 			justify-content: space-between;
+		}
+		.bar .controls {
+			gap: var(--space-3xs);
+		}
+		.bar .controls > button,
+		.bar .controls > .phone-only {
+			flex: 1 1 auto;
+			min-width: var(--target);
+		}
+		.bar .controls .label {
+			white-space: nowrap;
 		}
 		.wide-only {
 			display: none;
@@ -516,20 +476,9 @@
 			flex: none;
 			width: calc(2 * var(--target) + 2 * var(--space-md) + var(--space-xs));
 		}
-		/* Live listening under a replay: its status and queue in one small
-		   line, then its controls. */
+		/* Live listening's controls under a replay. */
 		.replaying .player {
 			gap: var(--space-xs);
-		}
-		.replaying .now {
-			gap: 0 var(--space-sm);
-		}
-		.replaying .status {
-			flex: 0 1 auto;
-			font-size: var(--text-sm);
-		}
-		.replaying .queue {
-			flex-basis: auto;
 		}
 	}
 </style>

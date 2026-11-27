@@ -68,7 +68,7 @@ async function start(page: Page, feed: Feed, path = '/') {
 
 async function listen(page: Page) {
 	await page.getByRole('button', { name: 'Start listening' }).click();
-	await expect(page.getByText('Listening. Calls play here as they come in.')).toBeVisible({ timeout: 15_000 });
+	await expect(page.getByRole('region', { name: 'Now playing' })).toHaveAttribute('data-state', 'waiting', { timeout: 15_000 });
 }
 
 test('R15: the close button puts the recorder notice away, and the focus goes on to the content', async ({ page }) => {
@@ -95,7 +95,7 @@ test('R15: put away, it stays away on other pages, through a new socket and thro
 	await expect(notice(page)).toHaveCount(0);
 	// A new socket starts with every notice off, then the server says it's on again: the same outage.
 	await feed.drop();
-	await expect(page.getByText('Listening. Calls play here as they come in.')).toBeVisible({ timeout: 15_000 });
+	await expect(page.getByRole('region', { name: 'Now playing' })).toHaveAttribute('data-state', 'waiting', { timeout: 15_000 });
 	await expect(notice(page)).toHaveCount(0);
 	// A reload: the browser session keeps it.
 	await page.reload();
@@ -168,7 +168,7 @@ test('R15: it goes by itself after 10 s, which counts as putting it away', async
 	expect(await kept(page)).toBe('1');
 	// The same outage on a new socket: still away.
 	await feed.drop();
-	await expect(page.getByText('Listening. Calls play here as they come in.')).toBeVisible({ timeout: 15_000 });
+	await expect(page.getByRole('region', { name: 'Now playing' })).toHaveAttribute('data-state', 'waiting', { timeout: 15_000 });
 	await expect(notice(page)).toHaveCount(0);
 });
 
@@ -228,7 +228,7 @@ test('axe: the recorder notice in both looks and both themes at 375 px and 1,280
 				expect(results.violations, `${look} ${theme}, ${width} px`).toEqual([]);
 				// Above the dock and the bottom bar, inside the screen, no sideways scroll.
 				const box = (await page.locator('.notice-place').boundingBox())!;
-				const dock = (await page.getByRole('region', { name: 'Now playing' }).boundingBox())!;
+				const dock = (await page.getByRole('region', { name: 'Player' }).boundingBox())!;
 				expect(box.y + box.height, `${width} px: above the dock`).toBeLessThanOrEqual(dock.y);
 				expect(box.x).toBeGreaterThanOrEqual(0);
 				expect(box.x + box.width).toBeLessThanOrEqual(width);
