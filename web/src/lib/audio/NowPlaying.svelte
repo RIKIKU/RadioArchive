@@ -263,6 +263,16 @@
 		display: flex;
 		min-width: 0;
 	}
+	/* Phones: one column, so the names have room; three calls. */
+	@media (max-width: 47.99rem) {
+		.recent {
+			grid-template-columns: minmax(0, 1fr);
+			gap: 0;
+		}
+		.recent li:nth-child(4) {
+			display: none;
+		}
+	}
 	.recent button,
 	.recent .empty {
 		display: flex;
