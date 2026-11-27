@@ -25,6 +25,9 @@ type signInConfig struct {
 	// moduleClientID is MODULE_CLIENT_ID: the PowerShell module's own
 	// public client (ADR 0028), radioarchive-powershell unless set.
 	moduleClientID string
+	// appClientID is APP_CLIENT_ID: the Android app's own public client
+	// (ADR 0052), radioarchive-android unless set.
+	appClientID string
 	// initialAdmin is INITIAL_ADMIN_EMAIL: the first admin's address
 	// (ADR 0025), "" for none.
 	initialAdmin string
@@ -85,6 +88,13 @@ func signInFromEnv(getenv func(string) string) (signInConfig, error) {
 	}
 	if c.moduleClientID == c.clientID {
 		return signInConfig{}, errors.New("MODULE_CLIENT_ID must be the PowerShell module's own client, not OIDC_CLIENT_ID's")
+	}
+	c.appClientID = strings.TrimSpace(getenv("APP_CLIENT_ID"))
+	if c.appClientID == "" {
+		c.appClientID = "radioarchive-android"
+	}
+	if c.appClientID == c.clientID || c.appClientID == c.moduleClientID {
+		return signInConfig{}, errors.New("APP_CLIENT_ID must be the Android app's own client, not OIDC_CLIENT_ID's or MODULE_CLIENT_ID's")
 	}
 	if c.clientSecret, err = secret(getenv, "OIDC_CLIENT_SECRET"); err != nil {
 		return signInConfig{}, err
@@ -158,6 +168,12 @@ func (c signInConfig) service(g *gate.Gate, st *store.Store, log *slog.Logger) (
 		Module: &oidcclient.AccessVerifier{
 			Issuer:   c.authentikURL.JoinPath("application", "o", c.moduleClientID).String() + "/",
 			ClientID: c.moduleClientID,
+			HTTP:     hc,
+		},
+		// The Android app's own client (ADR 0052), on the same Authentik.
+		App: &oidcclient.AccessVerifier{
+			Issuer:   c.authentikURL.JoinPath("application", "o", c.appClientID).String() + "/",
+			ClientID: c.appClientID,
 			HTTP:     hc,
 		},
 		InitialAdmin: c.initialAdmin,

@@ -410,6 +410,7 @@ func newWorld(t *testing.T) *world {
 			ClientSecret: clientSecret, RedirectURL: w.app.URL + "/auth/callback", HTTP: http.DefaultClient},
 		Sessions: w.ss, Profiles: w.db, Accounts: w.acc, Catalogue: catalogue{}, Secret: []byte(clientSecret), InitialAdmin: "Admin@Example.test",
 		Module: &oidcclient.AccessVerifier{Issuer: w.p.ModuleIssuer(), ClientID: oidctest.ModuleClientID, HTTP: http.DefaultClient},
+		App:    &oidcclient.AccessVerifier{Issuer: w.p.AppIssuer(), ClientID: oidctest.AppClientID, HTTP: http.DefaultClient},
 		Log:    slog.New(slog.NewJSONHandler(w.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Now:    w.clk.now,
 	})
