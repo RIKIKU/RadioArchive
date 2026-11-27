@@ -672,6 +672,30 @@ func TestA3Ignored(t *testing.T) {
 	}
 }
 
+// TestWithdrawnCall (issue #185, ADR 0053): trunk-recorder concludes a call
+// it streamed some audio of without a recording, and the plugin withdraws
+// it. The server keeps nothing of it, so it never counts as a missing
+// recording, while the call beside it is stored as usual.
+func TestWithdrawnCall(t *testing.T) {
+	r := start(t)
+	r.replay(t, "no-transmissions.json")
+	r.waitRecordings(t, 1)
+	var nums []int64
+	waitFor(t, "the withdrawn call gone", 10*time.Second, func() bool {
+		nums = nums[:0]
+		for _, c := range r.calls(t) {
+			nums = append(nums, c.callNum)
+		}
+		return slices.Equal(nums, []int64{22})
+	})
+	if n := r.client.Metrics().Get(recorderclient.MetricWithdrawn, "reason", "no_transmissions"); n != 1 {
+		t.Errorf("client withdrawn = %d, want 1", n)
+	}
+	if n := r.rs.Stat.Withdrawn.Load(); n != 1 {
+		t.Errorf("server withdrawn = %d, want 1", n)
+	}
+}
+
 // TestA4PatchStorage is the storage half of SPEC.md A4: a call on 1001
 // patched with 1002 is stored once, public; one patched with the hidden 1003
 // is stored once, and its effective state is hidden. (Who hears them is the

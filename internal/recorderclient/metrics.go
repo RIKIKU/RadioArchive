@@ -16,6 +16,7 @@ const (
 	MetricLost        = "radioarchive_client_udp_lost_total"         //
 	MetricLate        = "radioarchive_client_udp_late_audio_total"   //
 	MetricPatchCopies = "radioarchive_client_patch_copies_total"     //
+	MetricWithdrawn   = "radioarchive_client_calls_withdrawn_total"  // {reason}: concluded without a recording (ADR 0053)
 	MetricLiveDropped = "radioarchive_client_live_dropped_total"     // {reason}
 	MetricUploads     = "radioarchive_client_uploads_total"          // {result}
 

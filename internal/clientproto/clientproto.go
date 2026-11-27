@@ -127,12 +127,16 @@ type Transmission struct {
 	PatchedTalkgroups []int32 `json:"patched_talkgroups"`
 }
 
-// CallEnd ends a live call. Its recording follows by upload.
+// CallEnd ends a live call. Its recording follows by upload, unless
+// Withdrawn says none will: trunk-recorder concluded the call without one
+// (ADR 0053), and the server withdraws it. A server from before ADR 0053
+// ignores the field and ends the call as any other.
 type CallEnd struct {
 	Type string `json:"type"`
 	CallID
 	StopTimeMS        int64   `json:"stop_time_ms"`
 	PatchedTalkgroups []int32 `json:"patched_talkgroups"`
+	Withdrawn         bool    `json:"withdrawn,omitempty"`
 }
 
 // Heartbeat is the client's, every 5 s.

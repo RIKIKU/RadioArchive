@@ -424,6 +424,60 @@ func TestEngineCallEndOnly(t *testing.T) {
 	}
 }
 
+// trunk-recorder concluded a call without a recording (ADR 0053): its live
+// audio ends, the server is told to withdraw it, and nothing is uploaded.
+func TestEngineWithdraw(t *testing.T) {
+	r := newRig()
+	withdraw := func(seq uint32, callNum int64) {
+		b, err := rp.EncodeControl(1, seq, rp.CallWithdraw{Identity: rp.Identity{CallNum: callNum, StartTime: 1764000000, ShortName: "ex"},
+			Talkgroup: 1001, TimeMS: 1764000009000, Reason: rp.WithdrawNoTransmissions})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.e.handle(b)
+	}
+	r.e.handle(audio(t, 0, 1, 8000, 200)) // call 1 starts live: a frame and 40 samples left over
+	r.now = r.now.Add(2 * time.Second)
+	withdraw(1, 1)
+	ends := r.live.events(cp.TypeCallEnd)
+	if len(ends) != 1 || ends[0]["withdrawn"] != true || num(ends[0]["call_num"]) != 1 ||
+		num(ends[0]["stop_time_ms"]) != 1764000000000 {
+		t.Fatalf("call_end = %v, want one, withdrawn, stopped at its last packet", ends)
+	}
+	if len(r.e.calls) != 0 || len(r.up.recs) != 0 {
+		t.Fatalf("calls %d, uploads %d after a withdrawal", len(r.e.calls), len(r.up.recs))
+	}
+	frames := 0
+	for _, s := range r.live.out {
+		if s.frame != nil {
+			frames++
+		}
+	}
+	if frames != 2 { // the leftover, padded, before the call_end
+		t.Errorf("%d frames, want 2", frames)
+	}
+
+	// One the client no longer holds (it restarted, or ended the call's
+	// live audio after 30 s idle) is still sent: the server may hold it.
+	withdraw(2, 7)
+	if ends := r.live.events(cp.TypeCallEnd); len(ends) != 2 || num(ends[1]["call_num"]) != 7 || ends[1]["withdrawn"] != true ||
+		num(ends[1]["stop_time_ms"]) != 1764000009000 {
+		t.Fatalf("call_ends = %v", ends)
+	}
+	if n := r.m.Get(MetricWithdrawn, "reason", rp.WithdrawNoTransmissions); n != 2 {
+		t.Errorf("withdrawn = %d, want 2", n)
+	}
+
+	// A plain call_end still uploads, and isn't withdrawn.
+	ce := rp.CallEnd{Identity: rp.Identity{CallNum: 9, StartTime: 1, ShortName: "ex"}, Talkgroup: 1001,
+		StartTimeMS: 1764000000100, StopTimeMS: 1764000002100, TDMASlot: -1, Filename: "/x.wav"}
+	b, _ := rp.EncodeControl(1, 3, ce)
+	r.e.handle(b)
+	if ends := r.live.events(cp.TypeCallEnd); len(ends) != 3 || ends[2]["withdrawn"] != nil || len(r.up.recs) != 1 {
+		t.Fatalf("call_ends = %v, uploads %d", ends, len(r.up.recs))
+	}
+}
+
 func TestEngineChannelReuseIsNotACopy(t *testing.T) {
 	// Same frequency and slot, overlapping, but no shared patch: both stay.
 	r := newRig()

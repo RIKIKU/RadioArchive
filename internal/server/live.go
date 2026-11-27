@@ -203,6 +203,7 @@ type event struct {
 	FirstPCMMS        *int64  `json:"first_pcm_ms"`
 	OffsetMS          *int64  `json:"offset_ms"`
 	StopTimeMS        *int64  `json:"stop_time_ms"`
+	Withdrawn         bool    `json:"withdrawn"`
 }
 
 func (s *session) text(ctx context.Context, b []byte) error {
@@ -422,6 +423,9 @@ func (s *session) callEnd(ctx context.Context, id cp.CallID, e event) error {
 	if e.StopTimeMS == nil {
 		return protoErr(policyViolation, "call_end: missing field stop_time_ms")
 	}
+	if e.Withdrawn {
+		return s.withdraw(ctx, id)
+	}
 	c := s.calls[id]
 	if c == nil {
 		if s.refused[id] {
@@ -450,6 +454,61 @@ func (s *session) callEnd(ctx context.Context, id cp.CallID, e event) error {
 	delete(s.calls, id)
 	if live != nil {
 		live.CallEnded(c.idText)
+	}
+	return nil
+}
+
+// withdraw takes a call_end that says no recording will come: trunk-recorder
+// concluded the call without one (ADR 0053). The call is deleted unless a
+// recording has somehow arrived, so it leaves the history and recent calls
+// and never counts as a missing recording (R19), and the live feed, reading
+// it again, withdraws it from every listener who has it (R31). The call is
+// found by its identity, so one already ended, on this socket or an
+// earlier one, is withdrawn too.
+func (s *session) withdraw(ctx context.Context, id cp.CallID) error {
+	c := s.calls[id]
+	delete(s.calls, id)
+	delete(s.refused, id)
+	var (
+		deleted bool
+		rowID   pgtype.UUID
+	)
+	err := s.rs.st.InTx(ctx, func(_ pgx.Tx, q *db.Queries) error {
+		row, err := q.CallForAdmission(ctx, db.CallForAdmissionParams{RecorderID: s.rec.ID, SysNum: int32(id.SysNum),
+			CallNum: id.CallNum, StartTime: id.StartTime})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("call: %s", store.SafeError(err))
+		}
+		if row.Recorded {
+			rowID = row.ID
+			return nil
+		}
+		if err := q.DeleteUnrecordedCall(ctx, row.ID); err != nil {
+			return fmt.Errorf("delete: %s", store.SafeError(err))
+		}
+		deleted, rowID = true, row.ID
+		return nil
+	})
+	if err != nil {
+		return protoErr(websocket.StatusInternalError, "call_end: %v", err)
+	}
+	if deleted {
+		s.rs.Stat.Withdrawn.Add(1)
+		s.log.Info("withdrew a call the recorder concluded without a recording",
+			"sys_num", id.SysNum, "call_num", id.CallNum, "start_time", id.StartTime)
+	} else if rowID.Valid && c != nil && c.unflush > 0 {
+		// Its recording is stored after all: it stays, ended by the recording.
+		if err := s.rs.st.AddLiveFrames(ctx, db.AddLiveFramesParams{ID: c.id, Frames: c.unflush}); err != nil {
+			return protoErr(websocket.StatusInternalError, "call_end: frames: %s", store.SafeError(err))
+		}
+	}
+	if live := s.rs.cfg.Live; live != nil && rowID.Valid {
+		// The live feed finds the row gone and withdraws the call, or, for
+		// a recorded one, ends it as usual.
+		live.CallEnded(uuidString(rowID))
 	}
 	return nil
 }

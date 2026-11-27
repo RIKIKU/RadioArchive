@@ -41,7 +41,7 @@ var (
 	ClientsOutOfDate = &Desc{Name: "radioarchive_recorder_clients_out_of_date_total", Type: Counter,
 		Help: "Live connections opened by a recorder client one minor version behind (R6)."}
 	RecorderErrors = &Desc{Name: "radioarchive_recorder_protocol_events_total", Type: Counter, Labels: []string{"kind"},
-		Help: "Recorder protocol events: frames for unstarted calls, unknown types, sockets closed for bad input or a revoked key, bad heartbeat systems."}
+		Help: "Recorder protocol events: frames for unstarted calls, unknown types, sockets closed for bad input or a revoked key, bad heartbeat systems, calls withdrawn because trunk-recorder concluded them without a recording."}
 	Uploads = &Desc{Name: "radioarchive_recorder_uploads_total", Type: Counter, Labels: []string{"status"},
 		Help: "Recording uploads, by their answer."}
 

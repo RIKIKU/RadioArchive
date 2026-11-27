@@ -12,6 +12,12 @@
 // that directory and names the link in call_end instead, so a recorder shared
 // with another uploader can keep "audioArchive": false.
 //
+// trunk-recorder drops some calls when it concludes them, with no recording
+// and no call_end: one whose recorder decoded no voice, for one ("No
+// Transmissions were recorded!"). calls_active sees each recorded call
+// concluded, and the plugin sends call_withdraw for one of those, so the
+// server withdraws a call whose recording will never come (ADR 0053).
+//
 // Built against trunk-recorder v5.2.1 (recorder/plugin/Dockerfile pins it).
 // trunk-recorder references below are to that release.
 
@@ -43,10 +49,11 @@
 #include <utility>
 #include <vector>
 
+#include "conclusion.h"
 #include "wire.h"
 
 #ifndef RADIOARCHIVE_PLUGIN_VERSION
-#define RADIOARCHIVE_PLUGIN_VERSION "0.1.0"
+#define RADIOARCHIVE_PLUGIN_VERSION "0.2.0"
 #endif
 
 // formatter.h declares this global and Plugin_Api::init (inline in plugin_api.h)
@@ -57,6 +64,7 @@ int frequency_format = 0;
 
 namespace {
 
+using radioarchive::Conclusion;
 using radioarchive::wire::AudioHeader;
 namespace wire = radioarchive::wire;
 
@@ -113,6 +121,8 @@ struct SystemInfo {
   std::string short_name;
   std::string type;
   bool supported = false;
+  double min_tx_s = 0;        // minTransmissionDuration
+  double min_duration_s = 0;  // minDuration
 };
 
 // What the plugin remembers about one call, keyed by (sys_num, call_num).
@@ -121,6 +131,12 @@ struct CallState {
   uint32_t last_unit = 0;  // the unit in the last transmission sent, 0 if none
   std::vector<long> patched;  // from the last call_start, read on the main thread
   int64_t touched_ms = 0;
+  // Set on the main thread while the call is RECORDING (call_start and
+  // calls_active), for calls_active to tell how it was concluded.
+  Recorder *recorder = nullptr;
+  long talkgroup = 0;
+  bool encrypted = false;
+  bool concluded = false;  // concluded with a recording: call_end is on its way
 };
 
 class RadioArchivePlugin : public Plugin_Api {
@@ -219,6 +235,7 @@ class RadioArchivePlugin : public Plugin_Api {
       std::lock_guard<std::mutex> lock(mu_);
       CallState &st = state_for(call);
       st.patched = patched;
+      remember(st, call);
       if (src > 0 && uint32_t(src) != st.last_unit) {
         st.last_unit = uint32_t(src);
         tx = transmission_json(call, st, *sys);
@@ -341,6 +358,90 @@ class RadioArchivePlugin : public Plugin_Api {
     return 0;
   }
 
+  // Runs on trunk-recorder's main thread with every call it still holds,
+  // whenever that list changes: after manage_calls concludes and deletes
+  // calls (monitor_systems.cc:316-343) and after a grant
+  // (monitor_systems.cc:554-555). So a call the plugin saw RECORDING that's
+  // gone, or listed but superseded, has been concluded (call_impl.cc:133-195,
+  // call_concluder.cc:1199-1239). trunk-recorder runs call_end only for a
+  // call it hands to a worker; the others, a call with no transmissions
+  // among them, end with no recording and no plugin callback. The plugin
+  // works out which way each went from what conclude_call read (its
+  // recorder's transmission list, still there because the recorder was
+  // stopped and not yet given another call) and sends call_withdraw for a
+  // dropped one (ADR 0053).
+  int calls_active(std::vector<Call *> calls) override {
+    std::map<std::pair<int, long>, Call *> listed;
+    std::set<Recorder *> busy;
+    for (Call *c : calls) {
+      listed[{c->get_sys_num(), c->get_call_num()}] = c;
+      if (c->get_state() == RECORDING && c->get_recorder()) busy.insert(c->get_recorder());
+    }
+
+    std::vector<std::string> withdrawals;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      for (auto it = calls_.begin(); it != calls_.end();) {
+        CallState &st = it->second;
+        if (st.concluded || !st.recorder) {
+          ++it;
+          continue;
+        }
+        const SystemInfo *sys = system_of(it->first.first);
+        auto l = listed.find(it->first);
+        Call *c = l == listed.end() ? nullptr : l->second;
+        if (c && c->get_state() == RECORDING) {
+          remember(st, c);
+          ++it;
+          continue;
+        }
+        Conclusion how;
+        if (c) {
+          if (c->get_state() != MONITORING || c->get_monitoring_state() != SUPERSEDED) {
+            ++it;  // not concluded
+            continue;
+          }
+          how = Conclusion::kSuperseded;
+        } else if (!sys || busy.count(st.recorder) || st.recorder->is_active()) {
+          // Its recorder has another call already, so its list isn't this
+          // call's. Can't tell: wait for call_end, as before ADR 0053.
+          st.concluded = true;
+          ++it;
+          continue;
+        } else {
+          std::vector<radioarchive::Span> spans;
+          for (const Transmission &t : st.recorder->get_transmission_list()) {
+            spans.push_back({int64_t(t.start_time_ms), int64_t(t.stop_time_ms)});
+          }
+          how = radioarchive::conclude(false, st.encrypted, spans, sys->min_tx_s, sys->min_duration_s);
+        }
+        if (how == Conclusion::kCallEnd) {
+          st.concluded = true;
+          ++it;
+          continue;
+        }
+        const long call_num = it->first.second;
+        if (sys) {
+          json j = {
+              {"sys_num", it->first.first},
+              {"call_num", int64_t(call_num)},
+              {"start_time", st.start_time},
+              {"short_name", sys->short_name},
+              {"talkgroup", int64_t(st.talkgroup)},
+              {"time_ms", now_ms()},
+              {"reason", radioarchive::reason(how)},
+          };
+          withdrawals.push_back(j.dump());
+          BOOST_LOG_TRIVIAL(info) << kLog << "[" << sys->short_name << "] call " << call_num << " on talkgroup " << st.talkgroup
+                                  << " was concluded without a recording (" << radioarchive::reason(how) << "); withdrawing it";
+        }
+        it = calls_.erase(it);
+      }
+    }
+    for (const std::string &w : withdrawals) send(wire::kTypeCallWithdraw, w);
+    return 0;
+  }
+
   // About every 3 s from the main loop, before trunk-recorder resets the
   // systems' message counts (monitor_systems.cc:770-777, 949-952).
   int system_rates(std::vector<System *> systems, float timeDiff) override {
@@ -373,6 +474,8 @@ class RadioArchivePlugin : public Plugin_Api {
       SystemInfo info;
       info.short_name = s->get_short_name();
       info.type = s->get_system_type();
+      info.min_tx_s = s->get_min_tx_duration();
+      info.min_duration_s = s->get_min_duration();
       if (info.type != "p25") {
         BOOST_LOG_TRIVIAL(warning) << kLog << "[" << info.short_name << "] system type " << info.type
                                    << " isn't supported (v1 is P25 trunked systems only); its calls aren't sent";
@@ -453,6 +556,14 @@ class RadioArchivePlugin : public Plugin_Api {
     }
     it->second.touched_ms = now;
     return it->second;
+  }
+
+  // mu_ held, on the main thread, with call RECORDING: what calls_active
+  // needs to tell how the call is concluded.
+  void remember(CallState &st, Call *call) {
+    st.recorder = call->get_recorder();
+    st.talkgroup = call->get_talkgroup();
+    st.encrypted = call->get_encrypted();
   }
 
   // mu_ held.
