@@ -5,8 +5,8 @@
 	//   box with how many talkgroups are on, All on, All off and what's on,
 	//   then a tile per group and per tag (ADR 0048). Single talkgroups are
 	//   found by the search. The talkgroups on, with their priority marks
-	//   (R43), Remove and the share link, fold away at the foot of the page,
-	//   drawn only when opened.
+	//   (R43) and the share link, are chips at the foot of the page (POC):
+	//   priority first, then by agency, each agency folded until opened.
 	// - A share link (R41): /?set=… carries the set and its marks; opening
 	//   one offers to replace this browser's set. What isn't public any more
 	//   is dropped without a word (R33).
@@ -20,6 +20,7 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
+	import OnList from '#lib/listening/OnList.svelte';
 	import Picker from '#lib/listening/Picker.svelte';
 	import Tiles from '#lib/listening/Tiles.svelte';
 	import { listeningState } from '#lib/listening/state.svelte.ts';
@@ -157,9 +158,13 @@
 
 	const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 
-	// The talkgroups on, folded away: with every talkgroup on there are over
-	// a thousand rows, so they're drawn only when opened.
-	let setOpen = $state(false);
+	// The talkgroups on, as chips (POC), grouped by agency and folded away
+	// per agency. Kept on the page once the set has had anything in it, so a
+	// last chip tapped off can be tapped back on.
+	let hadSet = $state(false);
+	$effect(() => {
+		if (set.length) hadSet = true;
+	});
 </script>
 
 <svelte:head><title>Listen · RadioArchive</title></svelte:head>
@@ -233,25 +238,11 @@
 		<Picker {ix} {listening} />
 	</section>
 
-	{#if set.length}
-		<details class="on-list" bind:open={setOpen}>
-			<summary>Talkgroups on ({set.length.toLocaleString('en-AU')}): priority, remove and share</summary>
-			{#if setOpen}
-			<ul class="rows" aria-label="Your listening set">
-				{#each set as r (`${r.talkgroup.system ?? 0}.${r.talkgroup.id}`)}
-					<li class="row">
-						<span class="name">{r.talkgroup.name}</span>
-						{#if r.talkgroup.label && r.talkgroup.label !== r.talkgroup.name}<span class="meta">{r.talkgroup.label}</span>{/if}
-						<span class="row-actions">
-							<label class="prio">
-								<input type="checkbox" checked={r.priority} aria-label="Priority: {r.talkgroup.name}" onchange={(e) => listening.setPriority(r.talkgroup, e.currentTarget.checked)} />
-								Priority
-							</label>
-							<button type="button" class="ghost" aria-label="Remove {r.talkgroup.name}" onclick={() => listening.remove(r.talkgroup)}>Remove</button>
-						</span>
-					</li>
-				{/each}
-			</ul>
+	{#if set.length || hadSet}
+		<section class="on-list" aria-labelledby="on-heading">
+			<h2 id="on-heading">Talkgroups on <span class="count">({set.length.toLocaleString('en-AU')})</span></h2>
+			<OnList {ix} {listening} />
+			{#if shareLink}
 			<div class="share">
 				<div class="field">
 					<label for="share-link">Share link</label>
@@ -262,7 +253,7 @@
 				<p class="status copied" role="status">{copied === 'copied' ? 'Link copied.' : copied === 'failed' ? "Couldn't copy it. Copy the link from the box." : ''}</p>
 			</div>
 			{/if}
-		</details>
+		</section>
 	{/if}
 {/if}
 
@@ -336,14 +327,6 @@
 	.row-actions {
 		margin-left: auto;
 	}
-	.prio {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--space-xs);
-		min-height: var(--target);
-		padding: 0 var(--space-sm);
-		cursor: pointer;
-	}
 	.share {
 		margin-top: var(--space-lg);
 		max-width: var(--field-search);
@@ -354,13 +337,9 @@
 	.on-list {
 		margin-top: var(--space-2xl);
 	}
-	/* A list item still, so it keeps its disclosure mark. */
-	.on-list summary {
-		padding: var(--space-sm) 0;
-		cursor: pointer;
-		font-weight: var(--weight-strong);
-	}
-	.on-list[open] summary {
-		margin-bottom: var(--space-sm);
+	.on-list .count {
+		color: var(--muted);
+		font-weight: var(--weight-normal);
+		font-variant-numeric: tabular-nums;
 	}
 </style>
