@@ -108,6 +108,8 @@ func TestIntegrationRecentCalls(t *testing.T) {
 		{around(t0, "talkgroups", fmt.Sprintf("%d.1002", e.sys+1)), []string{}},
 		{around(t0, "talkgroups", "4711"), []string{}},
 		{around(t0, "talkgroups", ""), []string{c, b, a}}, // none named: every public talkgroup
+		// Every public talkgroup named, and one that doesn't exist: no filter (ADR 0049).
+		{around(t0, "talkgroups", fmt.Sprintf("1001,%d.1002,4711,1003", e.sys)), []string{c, b, a}},
 		{around(t0, "unit", "5001"), []string{c, a}},
 		{around(t0, "unit", "5123", "talkgroups", "1001"), []string{}},
 		{around(t0, "unit", fmt.Sprintf("%d.5123", e.sys)), []string{b}},
@@ -515,9 +517,10 @@ func TestIntegrationRecentCallsBody(t *testing.T) {
 		}
 	}
 
-	// A listening set of 1,000 talkgroups in several systems: about 15 KB
-	// as a query string, past nginx's 8 KB request line, and one request
-	// as a body.
+	// A listening set of MaxTalkgroups (10,000) talkgroups in several
+	// systems, each with a 5-digit system and a 10-digit ID: about 190 KB as
+	// a body, inside MaxSearchBody, and one request (ADR 0049). The 1,214 of
+	// the owner's set were refused at ADR 0013's 1,000.
 	set := make([]string, 0, public.MaxTalkgroups)
 	set = append(set, fmt.Sprintf("%d.1001", e.sys))
 	for i := 1; len(set) < public.MaxTalkgroups; i++ {
@@ -527,11 +530,21 @@ func TestIntegrationRecentCallsBody(t *testing.T) {
 	if n := len(public.RecentCallsPath + "?" + q.Encode()); n <= 8192 {
 		t.Fatalf("the set's URL is only %d bytes", n)
 	}
-	got := e.pub(t, "QUERY", public.RecentCallsPath, searchBody(q))
-	if got.status != 200 {
-		t.Fatalf("QUERY with 1,000 talkgroups: %s", got)
+	for _, method := range []string{"QUERY", "POST"} {
+		got := e.pub(t, method, public.RecentCallsPath, searchBody(q))
+		if got.status != 200 {
+			t.Fatalf("%s with %d talkgroups: %s", method, len(set), got)
+		}
+		if r := decodeJSON[public.RecentCallsResponse](t, got.body); !slices.Equal(ids(r.Calls), []string{a}) {
+			t.Errorf("%s with %d talkgroups: %v, want %v", method, len(set), ids(r.Calls), []string{a})
+		}
 	}
-	if r := decodeJSON[public.RecentCallsResponse](t, got.body); !slices.Equal(ids(r.Calls), []string{a}) {
-		t.Errorf("QUERY with 1,000 talkgroups: %v, want %v", ids(r.Calls), []string{a})
+	// One more is refused, naming the limit.
+	q.Set("talkgroups", q.Get("talkgroups")+",1002")
+	got := e.pub(t, "POST", public.RecentCallsPath, searchBody(q))
+	var refusal struct{ Error, Message string }
+	_ = json.Unmarshal(got.body, &refusal)
+	if got.status != 400 || refusal.Error != "too_many_talkgroups" || !strings.Contains(refusal.Message, strconv.Itoa(public.MaxTalkgroups)) {
+		t.Errorf("POST with %d talkgroups: %s, want 400 too_many_talkgroups", public.MaxTalkgroups+1, got)
 	}
 }

@@ -20,7 +20,9 @@
 // The search sent to the API names the talkgroups those resolve to in the
 // catalogue, the range as instants (rangeBounds), and the rest as they are.
 // A set of talkgroups too long for a URL behind a default nginx goes as a
-// POST body instead (ADR 0016); the address keeps only what was chosen.
+// POST body instead (ADR 0016), up to the API's 10,000 (ADR 0049); a
+// listening set holding every public talkgroup names none. The address
+// keeps only what was chosen.
 
 import { rangeBounds } from 'archiveux/dates.js';
 import { decodeSet, keyOf, linkEntries, resolve, type Index, type Span, type Talkgroup } from '#lib/listening/set.ts';
@@ -131,7 +133,11 @@ export function searchOf(f: Filters, ix: Index, listening: Talkgroup[], timeZone
 		if (!ts.length) return undefined;
 		s.talkgroups = ts.map(keyOf);
 	} else if (f.scope === 'set' && listening.length) {
-		s.talkgroups = [...new Set(listening.map(keyOf))];
+		const keys = new Set(listening.map(keyOf));
+		// A set with every public talkgroup in it (All on) finds what no
+		// filter finds, so it names none, however long it is (ADR 0049).
+		const every = ix.catalogue.talkgroups.every((t) => keys.has(keyOf(t)));
+		if (!every) s.talkgroups = [...keys];
 	}
 	const b = rangeBounds({ from: f.from, to: f.to, fromTime: f.fromTime, toTime: f.toTime }, timeZone);
 	if (b) {

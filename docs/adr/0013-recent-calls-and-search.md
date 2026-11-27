@@ -13,7 +13,7 @@ Recent calls and search are one public route, `GET /api/v1/recent-calls`, readin
 | Part | Choice |
 |---|---|
 | **Route** | `GET /api/v1/recent-calls` (and `HEAD`), in `internal/public`, through `gate.RecentCalls`, which reads `public_calls` only (ADR 0004). `Cache-Control: no-store` |
-| **Parameters** | `talkgroups` (comma-separated `[system.]id`, at most 1,000), `from` and `to` (RFC 3339; `from` included, `to` not), `unit` (`[system.]radio ID`), `order` (`newest`, the default, or `oldest`), `cursor`, `limit` (1-100, default 100). Any other parameter is refused |
+| **Parameters** | `talkgroups` (comma-separated `[system.]id`, at most 1,000; 10,000 since ADR 0049), `from` and `to` (RFC 3339; `from` included, `to` not), `unit` (`[system.]radio ID`), `order` (`newest`, the default, or `oldest`), `cursor`, `limit` (1-100, default 100). Any other parameter is refused |
 | **Answer** | `{"calls": [...], "next": "<cursor>" \| null}`. Each call is exactly the call details' call (ADR 0004): one shape for the browser to render |
 | **The default** | No talkgroup named: every public talkgroup. No range: the 31 days up to now; `from` alone runs 31 days on from it; `to` alone, 31 days up to it |
 | **Talkgroup filter** | A call matches when its own talkgroup or any in its patch is named (R16, ADR 0007). Names are read against the catalogue: only public talkgroups match anything, so a hidden or ignored talkgroup's ID is a talkgroup that doesn't exist |

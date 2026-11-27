@@ -75,6 +75,19 @@ test('the search: the listening set by default, every talkgroup when it is empty
 	});
 });
 
+test('a listening set holding every public talkgroup (All on) names none, however many; one short of that names them all (ADR 0049)', () => {
+	const big: Catalogue = { tags: [], groups: [], talkgroups: Array.from({ length: 1214 }, (_, i) => tg(2001 + i, `Talkgroup ${i}`, 1 + (i % 2))) };
+	const bix = indexOf(big);
+	const all = big.talkgroups;
+	expect(searchOf(noFilters(), bix, all, zone)).toEqual({});
+	expect(searchOf(noFilters(), bix, [...all, ...all], zone)).toEqual({});
+	const most = all.slice(2);
+	const s = searchOf(noFilters(), bix, most, zone)!;
+	expect(s.talkgroups).toHaveLength(1212);
+	// Past a URL: a POST body, which the API takes up to 10,000.
+	expect(requestOf(s).init.method).toBe('POST');
+});
+
 test('chosen talkgroups are read against the catalogue: hidden or unknown ones are dropped, and naming only those asks nothing', () => {
 	const f = readFilters(new URLSearchParams('talkgroups=1003,1001-1001,4711'));
 	expect(chosenOf(ix, f).map((t) => t.id)).toEqual([1001]);
