@@ -1,5 +1,5 @@
 <script lang="ts">
-	// Avoid's toast (ADR 0054): "Avoided <talkgroup> · Undo", in the frame's
+	// Avoid's toast (ADR 0055): "Avoided <talkgroup> · Undo", in the frame's
 	// notice place above the dock, whose status role announces it politely,
 	// once, as it appears; it never takes the focus. It follows ArchiveUx's
 	// timing for a notice that leaves by itself (section 4), but stays

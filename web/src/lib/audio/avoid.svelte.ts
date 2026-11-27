@@ -1,4 +1,4 @@
-// Avoid (SPEC.md R44; ADR 0054): one press turns the playing call's
+// Avoid (SPEC.md R44; ADR 0055): one press turns the playing call's
 // talkgroup off, as its chip's tap would, and skips the call. The set
 // changes as for any other change, so it's saved, and saved to the account
 // when signed in (ADR 0009), and the player takes that talkgroup's calls

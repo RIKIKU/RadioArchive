@@ -211,7 +211,7 @@ async function barChecks(page: Page, shots: string) {
 	await check('desktop', 1280);
 
 	// A narrower desktop: short names under the icons, still one row, with
-	// Share and Add to basket in Actions, as on a phone (ADR 0054).
+	// Share and Add to basket in Actions, as on a phone (ADR 0055).
 	await page.setViewportSize({ width: 1024, height: 768 });
 	expect(await rows(), 'one row at 1,024 px').toBe(1);
 	expect(await names()).toEqual(['Pause', 'Previous', 'Skip', 'Catch up to live', 'Hold', 'Avoid Dispatch North', 'Stop listening', 'More actions: Dispatch North']);
@@ -227,7 +227,7 @@ async function barChecks(page: Page, shots: string) {
 	await controls.getByRole('button', { name: 'Resume' }).click();
 
 	// A phone: short names under the icons; Share, Add to basket and Stop
-	// listening in Actions (ADR 0054).
+	// listening in Actions (ADR 0055).
 	await page.setViewportSize({ width: 375, height: 812 });
 	expect(await names()).toEqual(['Pause', 'Previous', 'Skip', 'Catch up to live', 'Hold', 'Avoid Dispatch North', 'More actions: Dispatch North']);
 	await expect(controls.getByText('Actions', { exact: true })).toBeVisible();

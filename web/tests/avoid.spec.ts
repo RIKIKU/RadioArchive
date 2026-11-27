@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // Turning talkgroups off dequeues their calls, and Avoid (SPEC.md R43, R44;
-// A44; ADR 0054), with the whole stack: the fake recorder's calls through
+// A48; ADR 0055), with the whole stack: the fake recorder's calls through
 // the recorder client and the binary's live feed to the player.
 //
 // scripts/ci/e2e-web.sh runs these with the playback tests, one at a time.
@@ -27,7 +27,7 @@ async function finally_(sending: Promise<unknown>, body: () => Promise<void>) {
 	}
 }
 
-test('@live A44: a queue built while paused empties when All off is pressed, the call playing stops, and All on brings none of it back', async ({ page }) => {
+test('@live A48: a queue built while paused empties when All off is pressed, the call playing stops, and All on brings none of it back', async ({ page }) => {
 	test.setTimeout(2 * 60_000);
 	await listen(page, 'webcodecs', [{ id: 1001 }, { id: 1002 }]);
 	const sending = sendCalls([
@@ -59,7 +59,7 @@ test('@live A44: a queue built while paused empties when All off is pressed, the
 	await playedFrom(page, 5804, 'live');
 });
 
-test("@live A44: turning one agency's tile off takes only its calls out of the queue, and stops its call playing", async ({ page }) => {
+test("@live A48: turning one agency's tile off takes only its calls out of the queue, and stops its call playing", async ({ page }) => {
 	test.setTimeout(2 * 60_000);
 	await listen(page, 'webcodecs', [{ id: 1001 }, { id: 1002 }]);
 	const sending = sendCalls([
@@ -86,7 +86,7 @@ test("@live A44: turning one agency's tile off takes only its calls out of the q
 	expect(await units(page)).toEqual([5811, 5812]);
 });
 
-test('@live A44: turning the held talkgroup off from the search lets hold go', async ({ page }) => {
+test('@live A48: turning the held talkgroup off from the search lets hold go', async ({ page }) => {
 	test.setTimeout(2 * 60_000);
 	await listen(page, 'webcodecs', [{ id: 1001 }, { id: 1002 }]);
 	const sending = sendCalls([{ unit: 5821, atMs: 200, pcm: seconds(10) }]);
@@ -110,7 +110,7 @@ test('@live A44: turning the held talkgroup off from the search lets hold go', a
 	await playedFrom(page, 5822, 'live');
 });
 
-test('@live A44: Avoid turns the talkgroup playing off, skips its call and takes its calls out of the queue; Undo turns it back on, priority mark and all', async ({ page }) => {
+test('@live A48: Avoid turns the talkgroup playing off, skips its call and takes its calls out of the queue; Undo turns it back on, priority mark and all', async ({ page }) => {
 	test.setTimeout(3 * 60_000);
 	await listen(page, 'webcodecs', [{ id: 1001, priority: true }, { id: 1002 }]);
 	// Nothing playing: nothing to avoid.
@@ -186,7 +186,7 @@ test('@live A44: Avoid turns the talkgroup playing off, skips its call and takes
 	});
 });
 
-test('@live A44: Previous still plays a call of a talkgroup turned off since; the calls it plays forward through stay too', async ({ page }) => {
+test('@live A48: Previous still plays a call of a talkgroup turned off since; the calls it plays forward through stay too', async ({ page }) => {
 	test.setTimeout(2 * 60_000);
 	await listen(page, 'webcodecs', [{ id: 1001 }, { id: 1002 }]);
 	await sendCalls([

@@ -12,7 +12,7 @@
 //   recording.
 // - Nothing is dropped automatically. A withdrawn call (R31) leaves the
 //   queue, and stops at once if it's playing.
-// - Turning talkgroups off (ADR 0054), by any path that changes the set the
+// - Turning talkgroups off (ADR 0055), by any path that changes the set the
 //   live feed hears (a chip, a tile, All off, the search, a share link or
 //   the account's set taking this browser's place, Avoid): every queued
 //   call none of whose talkgroups is still heard leaves the queue, the
@@ -36,7 +36,7 @@
 //   radioarchive:played       {call_id, path, source, frames, peak}   a call has finished playing
 //   radioarchive:ended        {call_id, how, at}                      a call stopped or left the queue unplayed:
 //                                                                     how is skipped, cleared (Catch up), withdrawn
-//                                                                     or off (its talkgroups turned off, ADR 0054)
+//                                                                     or off (its talkgroups turned off, ADR 0055)
 //   radioarchive:previous     {call_id, steps}                        Previous's presses have settled on a call
 //   radioarchive:alert        {call_id, alert}                        a talkgroup's alert sound played (R22)
 
@@ -305,7 +305,7 @@ export class Player {
 	}
 
 	/**
-	 * The set the live feed hears has changed (ADR 0054). The calls queued
+	 * The set the live feed hears has changed (ADR 0055). The calls queued
 	 * on talkgroups no longer in it leave the queue, the call playing stops
 	 * if it's one of them, and hold is let go if its talkgroup is off. What
 	 * Previous queued or is playing stays: the listener asked for it.
@@ -637,7 +637,7 @@ export class Player {
 	/**
 	 * A new call joins the queue, unless hold keeps it out (A9), or its
 	 * talkgroups have just been turned off and the feed sent it before it
-	 * heard the new set (ADR 0054). A call that starts (live, or released
+	 * heard the new set (ADR 0055). A call that starts (live, or released
 	 * from its delay) sounds its talkgroup's alert (R22); one missed while
 	 * away doesn't.
 	 */

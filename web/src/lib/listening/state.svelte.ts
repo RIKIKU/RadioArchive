@@ -31,7 +31,7 @@ function write(storage: () => Storage, key: string, entries: Entry[]) {
 	}
 }
 
-/** A talkgroup Avoid turned off (ADR 0054): its entry, priority mark and all, and where it was on. */
+/** A talkgroup Avoid turned off (ADR 0055): its entry, priority mark and all, and where it was on. */
 export interface Avoided {
 	entry: Entry;
 	from: 'set' | 'session';
@@ -169,7 +169,7 @@ export class ListeningState {
 	}
 
 	/**
-	 * Turns one talkgroup off wherever it's on (Avoid, ADR 0054): out of the
+	 * Turns one talkgroup off wherever it's on (Avoid, ADR 0055): out of the
 	 * set, as a chip's tap does, or out of the session's additions. Says
 	 * what it was, priority mark and all, for Undo; undefined if it was in
 	 * neither (a call heard only through a patch).

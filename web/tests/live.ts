@@ -196,7 +196,7 @@ export async function listen(page: Page, path: 'webcodecs' | 'wasm' = 'webcodecs
 /** The frame's dock, "Player": the controls (ADR 0051). */
 export const dock = (page: Page) => page.getByRole('region', { name: 'Player' });
 
-/** Presses Stop listening: in the bar, or on a phone in Actions (ADR 0054). */
+/** Presses Stop listening: in the bar, or on a phone in Actions (ADR 0055). */
 export async function stopListening(page: Page) {
 	const stop = dock(page).getByRole('button', { name: 'Stop listening' });
 	if (!(await stop.isVisible())) await dock(page).getByRole('group', { name: 'Player controls' }).getByRole('button', { name: /^More actions/ }).click();

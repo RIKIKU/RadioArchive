@@ -44,7 +44,7 @@ test("hold lets through only the held talkgroup's calls, its patches included", 
 	expect(nextIndex([call(1002, '01.000')], () => false, held)).toBe(-1);
 });
 
-test('the set hears a call on any talkgroup of its patch; an entry with no system names that ID in any system (ADR 0054)', () => {
+test('the set hears a call on any talkgroup of its patch; an entry with no system names that ID in any system (ADR 0055)', () => {
 	expect(heardBy(call(1001, '01.000'), [{ id: 1001 }])).toBe(true);
 	expect(heardBy(call(1001, '01.000'), [{ id: 1002 }])).toBe(false);
 	expect(heardBy(call(1001, '01.000'), [])).toBe(false);

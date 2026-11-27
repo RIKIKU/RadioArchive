@@ -65,7 +65,7 @@
 		player.replay.stop();
 	});
 	providePlayer(player);
-	// Avoid (ADR 0054): the dock's button, and its toast with Undo in the
+	// Avoid (ADR 0055): the dock's button, and its toast with Undo in the
 	// notice place.
 	const avoid = new Avoid(player, listening);
 
@@ -185,7 +185,7 @@
 			<!-- A refused socket (R71; ADR 0037, 0039): the feed tries again by itself. -->
 			{#if player.notices.radio_full}<p class="feed-notice limit">The radio is full right now. Trying again…</p>{/if}
 			{#if player.notices.too_many_live}<p class="feed-notice limit">{tryingAgain(player.liveLimit)}</p>{/if}
-			<!-- Avoid's toast (ADR 0054), a fresh one for each press. -->
+			<!-- Avoid's toast (ADR 0055), a fresh one for each press. -->
 			{#if avoid.toast}{#key avoid.toast.n}<AvoidToast name={avoid.toast.name} onundo={() => avoid.undo()} ondismiss={() => avoid.dismiss()} />{/key}{/if}
 		</div>
 	{/snippet}
