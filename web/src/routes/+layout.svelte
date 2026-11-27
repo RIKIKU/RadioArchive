@@ -6,12 +6,14 @@
 	// phones, and the account menu, where the look and theme are chosen
 	// (R82) signed in or out, and where a listener signs in to save their
 	// preferences (R103, R110; ADR 0009). No app switcher until the combined
-	// deployment (M7, R102). The dock holds the player (R44, R45, R81; ADR
-	// 0012) on every page, and the live feed's notices sit above it.
+	// deployment (M7, R102). The dock, "Player", holds the player's controls
+	// (R44, R81; ADR 0012, 0051) on every page, and the live feed's notices
+	// sit above it; what's playing is at the top of the page (R45, R113).
 	import { AccountMenu, BottomBar, Frame, Menu } from 'archiveux/components';
 	import { onDestroy, onMount } from 'svelte';
 	import { Player } from '#lib/audio/player.svelte.ts';
 	import Dock from '#lib/audio/Dock.svelte';
+	import NowPlaying from '#lib/audio/NowPlaying.svelte';
 	import { providePlayer } from '#lib/audio/context.ts';
 	import { keyOf } from '#lib/listening/set.ts';
 	import { page } from '$app/state';
@@ -156,7 +158,7 @@
 	let noticeRoom = $state(0);
 </script>
 
-<Frame dockLabel="Now playing">
+<Frame dockLabel="Player">
 	{#snippet menu()}<Menu {brand} current={page.url.pathname} {top} {groups} open={opened} ontoggle={(id, was) => (opened = { ...opened, [id]: !was })} />{/snippet}
 	{#snippet start()}<a class="brand" href="/">RadioArchive</a>{/snippet}
 	{#snippet dock()}<Dock {player} />{/snippet}
@@ -201,6 +203,15 @@
 		</AccountMenu>
 	{/snippet}
 	{#snippet bottomBar()}<BottomBar entries={bar} {groups} current={page.url.pathname} />{/snippet}
+
+	<!-- Now playing at the top (R45, R113; ADR 0051): the whole display on the
+	     Listen page, idle too when not listening; a slim line on the others
+	     while listening. The dock holds the controls. -->
+	{#if page.url.pathname === '/'}
+		<NowPlaying {player} />
+	{:else if player.phase !== 'stopped'}
+		<NowPlaying {player} variant="slim" />
+	{/if}
 
 	{#if notice === 'signin-failed'}
 		<p class="alert" role="alert">Couldn't sign you in. Try again from the account menu. Listening works as before.</p>

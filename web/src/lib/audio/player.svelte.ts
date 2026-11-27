@@ -107,6 +107,8 @@ const FORGET_AFTER_MS = 10 * 60_000;
 const HISTORY = 50;
 /** Presses of Previous closer together than this count as steps of one move: audio changes once, after the last. */
 const PREVIOUS_SETTLE_MS = 400;
+/** How many recent calls the now-playing display offers to play again (ADR 0051): 4 on a desktop, 3 of them on a phone. */
+export const RECENT_SHOWN = 4;
 
 const recordingURL = (id: string) => `/api/v1/calls/${encodeURIComponent(id)}/recording`;
 
@@ -195,6 +197,33 @@ export class Player {
 	canPrevious = $state(false);
 	/** How many steps back the presses still settling have asked for. */
 	stepsBack = $state(0);
+	/**
+	 * The last few calls of the history, newest first, for the rows under
+	 * the now-playing display (ADR 0051): RECENT_SHOWN of them, and one
+	 * more, since the display leaves out the call playing.
+	 */
+	recent: { seq: number; info: CallInfo }[] = $state([]);
+
+	#recentNow() {
+		this.recent = this.#history
+			.slice(-(RECENT_SHOWN + 1))
+			.reverse()
+			.map((h) => ({ seq: h.seq, info: h.info }));
+	}
+
+	/**
+	 * Plays a call of the history again, from a recent row (ADR 0051): as
+	 * Previous does when its presses settle on it, so the calls after it
+	 * play in order, then the queue, then live (ADR 0048).
+	 */
+	playHeard(seq: number) {
+		if (this.phase !== 'listening' || !this.#history.some((h) => h.seq === seq)) return;
+		clearTimeout(this.#settle);
+		this.#settle = undefined;
+		this.#cursor = seq;
+		this.stepsBack = 0;
+		this.#goBack();
+	}
 
 	constructor(opts: PlayerOptions = {}) {
 		this.#opts = opts;
@@ -522,11 +551,13 @@ export class Player {
 			const old = this.#history.shift()!;
 			if (this.#onAir.get(old.info.callId) === old) this.#onAir.delete(old.info.callId);
 		}
+		this.#recentNow();
 	}
 
 	/** A withdrawn call (R31) leaves the history: Previous never plays it. */
 	#unremember(id: string) {
 		this.#history = this.#history.filter((h) => h.info.callId !== id);
+		this.#recentNow();
 		this.#onAir.delete(id);
 	}
 
@@ -629,8 +660,10 @@ export class Player {
 	}
 
 	#withdraw(id: string) {
-		// Gone from Previous's history too, and any of its calls Previous has queued or is playing.
+		// Gone from Previous's history too, and any of its calls Previous has
+		// queued or is playing, and from the display as the last call heard.
 		this.#unremember(id);
+		if (this.last?.callId === id) this.last = undefined;
 		const again = (q: Call) => q.back !== undefined && q.info.callId === id;
 		for (const q of this.#queue) if (again(q)) this.#leave(q, 'withdrawn');
 		this.#queue = this.#queue.filter((q) => !again(q));
