@@ -112,6 +112,10 @@ _Avoid_: Favourite, preempt, emergency talkgroup
 A listener's temporary narrowing to only the talkgroup of the call playing now, lasting until they release it; it leaves the listening set unchanged.
 _Avoid_: Lock, pin, solo
 
+**Now-playing display**:
+The fixed panel at the top of the Listen page that shows the call playing, or the last one heard, in fields that never move; on other pages it shrinks to one line while listening. The player's controls are in the dock, apart from it.
+_Avoid_: Now playing bar, LCD, header (the frame's top bar)
+
 **Replay**:
 Playing a call from the archive because a listener chose it, apart from live listening, which waits meanwhile and carries on by itself afterwards.
 _Avoid_: Playback (that's any call's audio), rewind, catch-up
