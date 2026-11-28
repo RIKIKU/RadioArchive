@@ -22,6 +22,7 @@ import (
 	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/public"
 	"github.com/RIKIKU/RadioArchive/internal/server"
+	"github.com/RIKIKU/RadioArchive/web"
 )
 
 // The A10 harness (SPEC.md A10, R32, ADR 0004): every public route,
@@ -113,6 +114,11 @@ var a10Probes = map[string][]a10Probe{
 	"GET /robots.txt": {
 		{"robots.txt", func(f *a10World, id string) *http.Request { return f.req("GET", "/robots.txt", "") }},
 	},
+	// Android App Links (ADR 0058): the deployment's setting, never data.
+	"GET " + web.AssetLinksPath: {
+		{"assetlinks.json", func(f *a10World, id string) *http.Request { return f.req("GET", web.AssetLinksPath, "") }},
+		{"HEAD", func(f *a10World, id string) *http.Request { return f.req("HEAD", web.AssetLinksPath, "") }},
+	},
 	// The catalogue and search name no call: their probes ignore the ID,
 	// so every answer must be the same, and none may name 1003 or 1005.
 	"GET " + public.CataloguePath: {
@@ -172,6 +178,26 @@ var a10Probes = map[string][]a10Probe{
 			return f.req("HEAD", public.FiregroundURL(f.fireground(id)), "")
 		}},
 	},
+	// Several numbers at once (ADR 0057): the same number alone, and twice
+	// beside one no talkgroup has. A hidden or ignored number's answer must
+	// equal the deleted call's, which names no talkgroup.
+	"GET " + public.FiregroundsPath: {
+		{"one number", func(f *a10World, id string) *http.Request { return f.firegrounds(f.fireground(id)) }},
+		{"twice, beside an unknown one", func(f *a10World, id string) *http.Request {
+			n := f.fireground(id)
+			return f.firegrounds("98", n, "0"+n)
+		}},
+		{"HEAD", func(f *a10World, id string) *http.Request {
+			r := f.firegrounds(f.fireground(id))
+			r.Method = "HEAD"
+			return r
+		}},
+	},
+}
+
+// firegrounds asks the several-number fireground lookup for ns.
+func (f *a10World) firegrounds(ns ...string) *http.Request {
+	return f.req("GET", public.FiregroundsPath+"?"+url.Values{public.FiregroundsParam: ns}.Encode(), "")
 }
 
 // recentProbes search recent calls (R46) around one call: a range holding
@@ -313,6 +339,10 @@ var appBuild = fstest.MapFS{
 <body><div style="display: contents"></div></body></html>`)},
 	"_app/immutable/start.js": {Data: []byte(`export const admin = { id: "admin", label: "Admin", entries: ["Recorders", "Settings"] };` + "\n")},
 }
+
+// testAppLinks are the test server's Android App Links (ADR 0058).
+var testAppLinks = []web.AppLink{{Package: "io.example.radio",
+	Fingerprints: []string{"15:75:26:74:5E:C7:11:23:68:1E:1D:2C:2A:2D:BF:49:C3:1E:83:4B:C7:8B:0B:BF:95:7D:56:0A:60:FA:A8:CB"}}}
 
 // appChrome is the app's own files under _app, as built: the UI chrome
 // every page ships, the same whoever asks and whatever a path names. A10's

@@ -89,7 +89,7 @@ A talkgroup used for firefighting operations at an incident, as opposed to a dis
 _Avoid_: Fireground talkgroup, ops channel
 
 **Fireground link**:
-A link shown with a page that names a fireground channel, which opens the radio and adds that channel's talkgroup to the listener's listening set for the session.
+A link shown with a page that names a fireground channel, which opens the radio and adds that channel's talkgroup to the listener's listening set for the session. One link can name several channels, such as a page's dispatch channel and its fireground channels, and adds them all at once.
 _Avoid_: Listen link, radio link
 
 **Call link**:

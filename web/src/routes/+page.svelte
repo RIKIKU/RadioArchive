@@ -18,7 +18,10 @@
 	//   talkgroup for the session (R47), then offers Start listening. A
 	//   number that names no public talkgroup, hidden, ignored or unknown,
 	//   shows one "This channel isn't available", names nothing and adds
-	//   nothing.
+	//   nothing. One link can name several, ?fireground=8&fireground=41
+	//   (ADR 0057): every one available is added at once, in one notice
+	//   naming them, which counts those that aren't without naming them.
+	//   The link leaves the address once it's read.
 	// - Start listening (R44) is in the dock, with the player (the layout's),
 	//   on every page.
 	import { onMount } from 'svelte';
@@ -46,6 +49,7 @@
 		type Index,
 		type Talkgroup
 	} from '#lib/listening/set.ts';
+	import { FIREGROUND_PARAM, firegroundsURL, linkNumbers } from '#lib/listening/fireground.ts';
 	import { limitText, refusedBy } from '#lib/limits.ts';
 	import { sendListeningSet } from '#lib/live/listening-set.ts';
 	import { knowZone } from '#lib/zone.svelte.ts';
@@ -61,8 +65,13 @@
 	// A limit's message for what failed (ADR 0039), in place of the page's own.
 	let limited: string | undefined = $state();
 
-	// A fireground link's outcome.
-	type Fireground = { kind: 'added' | 'in-set'; talkgroup: Talkgroup } | { kind: 'unavailable' } | { kind: 'failed' };
+	// A fireground link's outcome: one channel, as ever; several, what was
+	// added, what was in the set already and how many aren't available.
+	type Fireground =
+		| { kind: 'added' | 'in-set'; talkgroup: Talkgroup }
+		| { kind: 'several'; added: Talkgroup[]; inSet: Talkgroup[]; unavailable: number }
+		| { kind: 'unavailable' }
+		| { kind: 'failed' };
 	let fireground: Fireground | undefined = $state();
 
 	// A share link waiting for the listener's answer.
@@ -131,25 +140,51 @@
 		if (next !== ix) ix = next;
 	});
 
-	async function openFireground(number: string, at: Index | undefined) {
+	async function openFireground(values: string[], at: Index | undefined) {
 		// Digits only, as the server reads them; anything else is no channel.
-		if (!/^\d{1,16}$/.test(number)) {
+		const { numbers, asked } = linkNumbers(values);
+		if (!numbers.length) {
 			fireground = { kind: 'unavailable' };
 			return;
 		}
 		try {
-			const r = await fetch(`/api/v1/fireground/${number}`, { headers: { Accept: 'application/json' } });
-			if (r.status === 404) {
+			// One request for them all (ADR 0057), so 10 channels cost one
+			// of the listener's requests (R73).
+			const r = await fetch(firegroundsURL(numbers), { headers: { Accept: 'application/json' } });
+			if (!r.ok) throw await refusedBy(r);
+			const body = (await r.json()) as { talkgroups: Talkgroup[] };
+			const found = body.talkgroups.map((t) => (at && find(at, t)) ?? t);
+			if (!found.length) {
 				fireground = { kind: 'unavailable' };
 				return;
 			}
-			if (!r.ok) throw await refusedBy(r);
-			const body = (await r.json()) as { talkgroup: Talkgroup };
-			const t = (at && find(at, body.talkgroup)) ?? body.talkgroup;
-			fireground = { kind: listening.addForSession(t), talkgroup: t };
+			const kinds = found.map((t) => listening.addForSession(t));
+			if (asked === 1) {
+				fireground = { kind: kinds[0], talkgroup: found[0] };
+				return;
+			}
+			fireground = {
+				kind: 'several',
+				added: found.filter((_, i) => kinds[i] === 'added'),
+				inSet: found.filter((_, i) => kinds[i] === 'in-set'),
+				unavailable: asked - found.length
+			};
 		} catch (err) {
 			limited = limitText(err);
 			fireground = { kind: 'failed' };
+		}
+	}
+
+	// The link has been read: reloading the page doesn't read it again, and
+	// the address bar doesn't keep a job's channels.
+	function forgetFireground() {
+		const url = new URL(page.url.href);
+		if (!url.searchParams.has(FIREGROUND_PARAM)) return;
+		url.searchParams.delete(FIREGROUND_PARAM);
+		try {
+			replaceState(url, page.state);
+		} catch {
+			// The router isn't ready: the link stays in the address.
 		}
 	}
 
@@ -208,9 +243,16 @@
 		const at = await loadCatalogue();
 		const share = params.get(SHARE_PARAM);
 		if (share !== null && at) openShare(share, at);
-		const number = params.get('fireground');
-		if (number !== null) await openFireground(number, at);
+		const numbers = params.getAll(FIREGROUND_PARAM);
+		if (numbers.length) {
+			await openFireground(numbers, at);
+			// A lookup that failed keeps the link, so a reload tries again.
+			if (fireground?.kind !== 'failed') forgetFireground();
+		}
 	}
+
+	// How many of a link's channels aren't available, named by none of them (R33).
+	const notAvailable = (n: number) => (n === 1 ? "1 channel isn't available." : `${n.toLocaleString('en-AU')} channels aren't available.`);
 
 	const plural = (n: number, one: string) => `${n.toLocaleString('en-AU')} ${one}${n === 1 ? '' : 's'}`;
 
@@ -233,6 +275,15 @@
 	<p class="alert" role="status">This channel isn't available.</p>
 {:else if fireground?.kind === 'failed'}
 	<p class="error" role="alert">{limited ?? "Couldn't look up that channel. Reload the page to try again."}</p>
+{:else if fireground?.kind === 'several'}
+	{@const heard = fireground.added.length + fireground.inSet.length}
+	<div class="ok" role="status">
+		<!-- One line each, so no stray space lands in the sentence. -->
+		<p>
+			{#if fireground.added.length}Added for this session: {#each fireground.added as t, i (`${t.system ?? 0}.${t.id}`)}{#if i}{', '}{/if}<strong>{t.name}</strong>{/each}.{' '}{/if}{#if fireground.inSet.length}Already in your listening set: {#each fireground.inSet as t, i (`${t.system ?? 0}.${t.id}`)}{#if i}{', '}{/if}<strong>{t.name}</strong>{/each}.{' '}{/if}Start listening to hear {heard === 1 ? 'it' : 'them'}.
+		</p>
+		{#if fireground.unavailable}<p class="note">{notAvailable(fireground.unavailable)}</p>{/if}
+	</div>
 {:else if fireground}
 	<p class="ok" role="status">
 		{#if fireground.kind === 'added'}
@@ -321,6 +372,14 @@
 	}
 	.ok {
 		margin: 0 0 var(--space-md);
+	}
+	.ok p {
+		margin: 0;
+	}
+	.ok .note {
+		margin-top: var(--space-xs);
+		color: var(--muted);
+		font-size: var(--text-sm);
 	}
 	.offer {
 		padding: var(--space-lg);

@@ -22,7 +22,7 @@ A talkgroup with no alert or LED colour of its own takes its **tag's**, then its
 | **Groups** | Named on a talkgroup by name, and created on first use, as tags are (ADR 0003). Also `GET`/`POST /groups`, `PATCH /groups/{id}`; `GET /tags`, `PATCH /tags/{id}` for their settings |
 | **The catalogue's data** | The view `public_talkgroups`: talkgroups whose `call_state(system, talkgroup, '{}')` is public (ADR 0003's one rule). The gate's catalogue query reads that view, never `talkgroups` |
 | **Freshness** | `catalogue_generation`, one row, moved by deferred triggers at the commit of any change to talkgroups, their groups, groups, tags or systems. The gate reads it on every request and rebuilds when it has moved |
-| **Endpoints** | `GET /api/v1/catalogue`, `GET /api/v1/catalogue/search?q=`, `GET /api/v1/fireground/{number}`. All `Cache-Control: no-store` |
+| **Endpoints** | `GET /api/v1/catalogue`, `GET /api/v1/catalogue/search?q=`, `GET /api/v1/fireground/{number}`, and `GET /api/v1/fireground?n=…&n=…` for several at once ([ADR 0057](0057-several-fireground-channels-in-one-link.md)). All `Cache-Control: no-store` |
 
 ## How a talkgroup takes its settings
 
@@ -72,7 +72,9 @@ The public package keeps the encoded catalogue for the catalogue it was built fr
 
 ## The fireground lookup (R100, R101, R33)
 
-`GET /api/v1/fireground/{number}` reads the number as decimal digits only, leading zeros not counting, up to 16 digits. A number a public talkgroup has answers `200` with the talkgroup as the catalogue shows it. Anything else (no talkgroup has it, its talkgroup is hidden or ignored, or it isn't a number) answers one `404 {"error": "channel_unavailable", "message": "This channel isn't available."}` with the same headers. Every case is one lookup in the same in-memory map, which never holds a hidden talkgroup's number, so there's no second query or file for a hidden number to cost. The frontend's `?fireground=` link (R101, issue #56) uses it.
+`GET /api/v1/fireground/{number}` reads the number as decimal digits only, leading zeros not counting, up to 16 digits. A number a public talkgroup has answers `200` with the talkgroup as the catalogue shows it. Anything else (no talkgroup has it, its talkgroup is hidden or ignored, or it isn't a number) answers one `404 {"error": "channel_unavailable", "message": "This channel isn't available."}` with the same headers. Every case is one lookup in the same in-memory map, which never holds a hidden talkgroup's number, so there's no second query or file for a hidden number to cost. The frontend's `?fireground=` link (R101, issue #56) used it.
+
+**Amended by [ADR 0057](0057-several-fireground-channels-in-one-link.md) (2026-11-28):** a link may name several channels, `?fireground=508&fireground=540`, of which the first 10 values are read. The page looks them all up in one request, `GET /api/v1/fireground?n=508&n=540`, which reads each number as above, answers `200` with the public talkgroups among them in the order asked, each once, and leaves the rest out without a trace, so a hidden number's presence changes nothing in the answer. The page now uses it for a single number too; the single-number endpoint is unchanged.
 
 A duplicate number is refused in the admin API with `409 fireground_channel_taken`, naming the talkgroup that has it: `Fireground channel 41 is already talkgroup 1002 "Fireground 41" in system EX.` The check runs in the edit's transaction; a race between two edits is caught by the unique index and answered the same way.
 

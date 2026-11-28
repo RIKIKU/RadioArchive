@@ -104,6 +104,9 @@ services:
       PAGERARCHIVE_URL: ${PAGERARCHIVE_URL:-}
       PAGERARCHIVE_NAME: ${PAGERARCHIVE_NAME:-}
       LOOK_COOKIE_DOMAIN: ${LOOK_COOKIE_DOMAIN:-}
+      # Android App Links (ADR 0058): package:fingerprint[;fingerprint…]
+      # for /.well-known/assetlinks.json. Empty answers 404.
+      ANDROID_APP_LINKS: ${ANDROID_APP_LINKS:-}
       # Heavy-use limits (SPEC.md section 6.11, ADR 0036). Empty is the SPEC's
       # default. Every request here comes from Docker's bridge, one
       # address, so scripts/dev-env.sh raises them for the test stack.

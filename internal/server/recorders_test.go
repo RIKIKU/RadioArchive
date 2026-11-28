@@ -164,7 +164,7 @@ func newEnvAt(t *testing.T, serverVersion string, more ...server.Option) *env {
 	}
 	admin.WithRetention(e.job).WithRecorders(e.rs).WithClock(e.clock.now).WithQuiet(e.gate)
 	e.api = server.New(st, log, append([]server.Option{server.WithRecorders(e.rs), server.WithAdmin(admin),
-		server.WithPublic(public.New(e.gate, log, public.WithLocation(deploymentTZ(t)))), server.WithApp(web.Serve(appBuild))}, more...)...)
+		server.WithPublic(public.New(e.gate, log, public.WithLocation(deploymentTZ(t)))), server.WithApp(web.Serve(appBuild).AppLinks(testAppLinks))}, more...)...)
 	e.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a := r.Header.Get("X-Test-Remote"); a != "" {
 			r.RemoteAddr = a

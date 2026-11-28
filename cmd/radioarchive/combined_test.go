@@ -84,3 +84,20 @@ func TestCombinedSettings(t *testing.T) {
 		t.Error("operations took a PAGERARCHIVE_URL that isn't one")
 	}
 }
+
+// ADR 0058: ANDROID_APP_LINKS reaches the app, and one that isn't stops the
+// server at start, naming it.
+func TestAppLinksFromEnv(t *testing.T) {
+	const fp = "15:75:26:74:5E:C7:11:23:68:1E:1D:2C:2A:2D:BF:49:C3:1E:83:4B:C7:8B:0B:BF:95:7D:56:0A:60:FA:A8:CB"
+	if ops, err := operationsFromEnv(environ{}.get); err != nil || ops.appLinks != nil {
+		t.Errorf("unset: %v, %v", ops.appLinks, err)
+	}
+	ops, err := operationsFromEnv(environ{"ANDROID_APP_LINKS": "io.github.rikiku.radioarchive:" + fp}.get)
+	if err != nil || len(ops.appLinks) != 1 || ops.appLinks[0].Package != "io.github.rikiku.radioarchive" ||
+		len(ops.appLinks[0].Fingerprints) != 1 || ops.appLinks[0].Fingerprints[0] != fp {
+		t.Errorf("set: %+v, %v", ops.appLinks, err)
+	}
+	if _, err := operationsFromEnv(environ{"ANDROID_APP_LINKS": fp}.get); err == nil || !strings.Contains(err.Error(), "ANDROID_APP_LINKS") {
+		t.Errorf("no package: %v", err)
+	}
+}
