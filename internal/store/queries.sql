@@ -112,7 +112,7 @@ SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.u
              WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
              ORDER BY x.sort_order, x.name)::text[] AS groups,
        t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel, t.type, t.frequency,
-       t.created_at, t.updated_at
+       t.created_at, t.updated_at, t.always_show
 FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
 WHERE t.system_id = sqlc.arg(system_id)
 ORDER BY t.talkgroup_id;
@@ -123,7 +123,7 @@ SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.u
              WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
              ORDER BY x.sort_order, x.name)::text[] AS groups,
        t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel, t.type, t.frequency,
-       t.created_at, t.updated_at
+       t.created_at, t.updated_at, t.always_show
 FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
 WHERE t.system_id = sqlc.arg(system_id) AND t.talkgroup_id = sqlc.arg(talkgroup_id);
 
@@ -136,16 +136,17 @@ RETURNING id;
 -- An admin's add or full edit. It marks the talkgroup reviewed. Its groups
 -- are set apart (ClearTalkgroupGroups, AddTalkgroupGroups).
 INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state,
-                        delay_minutes, alert, led_colour, sort_order, fireground_channel, type, frequency)
+                        delay_minutes, alert, led_colour, sort_order, fireground_channel, type, frequency,
+                        always_show)
 VALUES (sqlc.arg(system_id), sqlc.arg(talkgroup_id), sqlc.arg(label), sqlc.arg(name),
         sqlc.arg(tag_id), sqlc.arg(state), sqlc.arg(delay_minutes), sqlc.narg(alert),
         sqlc.narg(led_colour), sqlc.arg(sort_order), sqlc.narg(fireground_channel),
-        sqlc.arg(type), sqlc.narg(frequency))
+        sqlc.arg(type), sqlc.narg(frequency), sqlc.arg(always_show))
 ON CONFLICT (system_id, talkgroup_id) DO UPDATE
 SET label = EXCLUDED.label, name = EXCLUDED.name, tag_id = EXCLUDED.tag_id, state = EXCLUDED.state,
     delay_minutes = EXCLUDED.delay_minutes, alert = EXCLUDED.alert, led_colour = EXCLUDED.led_colour,
     sort_order = EXCLUDED.sort_order, fireground_channel = EXCLUDED.fireground_channel,
-    type = EXCLUDED.type, frequency = EXCLUDED.frequency,
+    type = EXCLUDED.type, frequency = EXCLUDED.frequency, always_show = EXCLUDED.always_show,
     unreviewed = false, updated_at = now();
 
 -- name: PatchTalkgroup :execrows
@@ -166,6 +167,7 @@ SET label = COALESCE(sqlc.narg(label), label),
         THEN sqlc.narg(fireground_channel)::integer ELSE fireground_channel END,
     type = COALESCE(sqlc.narg(type), type),
     frequency = CASE WHEN sqlc.arg(set_frequency)::bool THEN sqlc.narg(frequency)::bigint ELSE frequency END,
+    always_show = COALESCE(sqlc.narg(always_show)::bool, always_show),
     unreviewed = false,
     updated_at = now()
 WHERE system_id = sqlc.arg(system_id) AND talkgroup_id = sqlc.arg(talkgroup_id);
@@ -176,18 +178,19 @@ WHERE system_id = sqlc.arg(system_id) AND talkgroup_id = sqlc.arg(talkgroup_id);
 -- A talkgroup the import creates: every field the file gives, state and
 -- unreviewed included (owner, 2026-11-25). Its groups are set apart.
 INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state, unreviewed,
-                        delay_minutes, alert, led_colour, sort_order, fireground_channel, type, frequency)
+                        delay_minutes, alert, led_colour, sort_order, fireground_channel, type, frequency,
+                        always_show)
 VALUES (sqlc.arg(system_id), sqlc.arg(talkgroup_id), sqlc.arg(label), sqlc.arg(name),
         sqlc.narg(tag_id), sqlc.arg(state), sqlc.arg(unreviewed), sqlc.arg(delay_minutes), sqlc.narg(alert),
         sqlc.narg(led_colour), sqlc.arg(sort_order), sqlc.narg(fireground_channel),
-        sqlc.arg(type), sqlc.narg(frequency));
+        sqlc.arg(type), sqlc.narg(frequency), sqlc.arg(always_show));
 
 -- name: ImportUpdateTalkgroup :exec
 -- A talkgroup the import changes: R52's fields (label, name, tag,
 -- fireground channel number, and sort order when given; groups apart),
--- and with the import's update option its delay, alert, LED colour, type
--- and frequency too; the caller passes what it has for those it keeps.
--- Never state or unreviewed (owner, 2026-11-25; ADR 0035).
+-- and with the import's update option its delay, alert, LED colour, type,
+-- frequency and always show too; the caller passes what it has for those
+-- it keeps. Never state or unreviewed (owner, 2026-11-25; ADR 0035).
 UPDATE talkgroups
 SET label = sqlc.arg(label),
     name = sqlc.arg(name),
@@ -199,6 +202,7 @@ SET label = sqlc.arg(label),
     led_colour = sqlc.narg(led_colour),
     type = sqlc.arg(type),
     frequency = sqlc.narg(frequency),
+    always_show = sqlc.arg(always_show),
     updated_at = now()
 WHERE system_id = sqlc.arg(system_id) AND talkgroup_id = sqlc.arg(talkgroup_id);
 
@@ -216,7 +220,7 @@ SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.u
              WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
              ORDER BY x.sort_order, x.name)::text[] AS groups,
        t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel, t.type, t.frequency,
-       t.created_at, t.updated_at
+       t.created_at, t.updated_at, t.always_show
 FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
 ORDER BY t.system_id, t.talkgroup_id;
 
@@ -231,9 +235,9 @@ INSERT INTO units (system_id, first_id, last_id, alias)
 VALUES (sqlc.arg(system_id), sqlc.arg(first_id), sqlc.arg(last_id), sqlc.arg(alias));
 
 -- name: CreateTag :one
-INSERT INTO tags (name, alert, led_colour, sort_order)
-VALUES (sqlc.arg(name), sqlc.narg(alert), sqlc.narg(led_colour), sqlc.arg(sort_order))
-RETURNING id, name, alert, led_colour, sort_order;
+INSERT INTO tags (name, alert, led_colour, sort_order, always_show)
+VALUES (sqlc.arg(name), sqlc.narg(alert), sqlc.narg(led_colour), sqlc.arg(sort_order), sqlc.arg(always_show))
+RETURNING id, name, alert, led_colour, sort_order, always_show;
 
 -- name: LockImport :exec
 -- One import at a time. The two-key form keeps clear of the audit log's
@@ -284,16 +288,17 @@ WHERE id = sqlc.arg(id)
 RETURNING id, name, alert, led_colour, sort_order;
 
 -- name: ListTags :many
-SELECT id, name, alert, led_colour, sort_order FROM tags ORDER BY sort_order, name;
+SELECT id, name, alert, led_colour, sort_order, always_show FROM tags ORDER BY sort_order, name;
 
 -- name: UpdateTag :one
 UPDATE tags
 SET name = COALESCE(sqlc.narg(name), name),
     sort_order = COALESCE(sqlc.narg(sort_order)::integer, sort_order),
     alert = CASE WHEN sqlc.arg(set_alert)::bool THEN sqlc.narg(alert)::text ELSE alert END,
-    led_colour = CASE WHEN sqlc.arg(set_led_colour)::bool THEN sqlc.narg(led_colour)::text ELSE led_colour END
+    led_colour = CASE WHEN sqlc.arg(set_led_colour)::bool THEN sqlc.narg(led_colour)::text ELSE led_colour END,
+    always_show = COALESCE(sqlc.narg(always_show)::bool, always_show)
 WHERE id = sqlc.arg(id)
-RETURNING id, name, alert, led_colour, sort_order;
+RETURNING id, name, alert, led_colour, sort_order, always_show;
 
 -- Units (R26): a radio ID, or a range of them, with an alias in its system
 -- (migration 00016, ADR 0019).
@@ -688,6 +693,7 @@ SELECT p.system_id, s.label AS system_label, s.name AS system_name,
        s.alert AS system_alert, s.led_colour AS system_led_colour,
        p.talkgroup_id, p.label, p.name, p.delay_minutes, p.alert, p.led_colour, p.fireground_channel,
        g.name AS tag, g.sort_order AS tag_sort_order, g.alert AS tag_alert, g.led_colour AS tag_led_colour,
+       (p.always_show OR COALESCE(g.always_show, false))::bool AS always_show,
        COALESCE((SELECT jsonb_agg(jsonb_build_object('name', x.name, 'sort_order', x.sort_order,
                                                      'alert', x.alert, 'led_colour', x.led_colour)
                                   ORDER BY x.sort_order, x.name)
@@ -743,17 +749,67 @@ CROSS JOIN LATERAL (
 
 -- name: TouchTalkgroupsHeard :exec
 -- Records that these talkgroups of the system were heard at the given
--- time. IDs the system doesn't list are skipped; it never moves back.
--- In ID order, so two calls touching the same talkgroups lock them in the
--- same order.
-INSERT INTO talkgroup_last_heard (system_id, talkgroup_id, last_heard_at)
-SELECT t.system_id, t.talkgroup_id, sqlc.arg(at)::timestamptz
+-- time, and, when the call's patch is wholly public, heard publicly (the
+-- quiet talkgroups', migration 00030). IDs the system doesn't list are
+-- skipped; neither time moves back (greatest skips a NULL). In ID order,
+-- so two calls touching the same talkgroups lock them in the same order.
+INSERT INTO talkgroup_last_heard (system_id, talkgroup_id, last_heard_at, public_heard_at)
+SELECT t.system_id, t.talkgroup_id, sqlc.arg(at)::timestamptz,
+       CASE WHEN sqlc.arg(public)::bool THEN sqlc.arg(at)::timestamptz END
 FROM talkgroups t
 WHERE t.system_id = sqlc.arg(system_id) AND t.talkgroup_id = ANY (sqlc.arg(talkgroups)::integer[])
 ORDER BY t.talkgroup_id
 ON CONFLICT (system_id, talkgroup_id) DO UPDATE
-SET last_heard_at = EXCLUDED.last_heard_at
-WHERE talkgroup_last_heard.last_heard_at < EXCLUDED.last_heard_at;
+SET last_heard_at = greatest(talkgroup_last_heard.last_heard_at, EXCLUDED.last_heard_at),
+    public_heard_at = greatest(talkgroup_last_heard.public_heard_at, EXCLUDED.public_heard_at)
+WHERE talkgroup_last_heard.last_heard_at < EXCLUDED.last_heard_at
+   OR (EXCLUDED.public_heard_at IS NOT NULL
+       AND (talkgroup_last_heard.public_heard_at IS NULL
+            OR talkgroup_last_heard.public_heard_at < EXCLUDED.public_heard_at));
+
+-- Quiet talkgroups (R114-R117; migration 00030, ADR 0054).
+
+-- name: QuietHeard :many
+-- When each talkgroup was last heard publicly. Whether it's public, exempt
+-- or delayed is the catalogue's.
+SELECT system_id, talkgroup_id, public_heard_at::timestamptz AS heard_at
+FROM talkgroup_last_heard WHERE public_heard_at IS NOT NULL;
+
+-- name: QuietReceiving :many
+-- The spans each system was receiving that end after since, newest first.
+SELECT system_id, started_at, ended_at FROM system_receiving
+WHERE ended_at > sqlc.arg(since)
+ORDER BY system_id, ended_at DESC;
+
+-- name: ExtendReceiving :exec
+-- The system is receiving at at: its span that ended within gap before is
+-- extended to at, else a span starts at at. A span ending after at (a
+-- second server's, ahead) is left.
+WITH extended AS (
+    UPDATE system_receiving r SET ended_at = sqlc.arg(at)::timestamptz
+    WHERE r.system_id = sqlc.arg(system_id)
+      AND r.ended_at >= sqlc.arg(at)::timestamptz - sqlc.arg(gap)::interval
+      AND r.ended_at <= sqlc.arg(at)::timestamptz
+    RETURNING 1
+)
+INSERT INTO system_receiving (system_id, started_at, ended_at)
+SELECT sqlc.arg(system_id), sqlc.arg(at)::timestamptz, sqlc.arg(at)::timestamptz
+WHERE NOT EXISTS (SELECT 1 FROM extended)
+  AND NOT EXISTS (SELECT 1 FROM system_receiving r
+                  WHERE r.system_id = sqlc.arg(system_id) AND r.ended_at > sqlc.arg(at)::timestamptz
+                    AND r.started_at <= sqlc.arg(at)::timestamptz)
+ON CONFLICT (system_id, started_at) DO NOTHING;
+
+-- name: PruneReceiving :execrows
+DELETE FROM system_receiving WHERE ended_at < sqlc.arg(before);
+
+-- name: ListAttachedSystems :many
+-- Each active recorder's attached shortNames and the systems they're
+-- filed under, for whether a system is receiving.
+SELECT a.recorder_id, a.short_name, a.system_id
+FROM attachments a JOIN recorders r ON r.id = a.recorder_id
+WHERE r.retired_at IS NULL
+ORDER BY a.recorder_id, a.short_name;
 
 -- name: AdminTalkgroupTable :many
 -- Every talkgroup of every system, with its last heard and how often it
@@ -787,7 +843,7 @@ SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.u
              WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
              ORDER BY x.sort_order, x.name)::text[] AS groups,
        t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel, t.type, t.frequency,
-       t.created_at, t.updated_at,
+       t.created_at, t.updated_at, t.always_show,
        l.last_heard_at, COALESCE(n.calls, 0)::bigint AS calls_since
 FROM talkgroups t
 LEFT JOIN tags g ON g.id = t.tag_id
@@ -1012,7 +1068,7 @@ DELETE FROM listener_profiles WHERE issuer = sqlc.arg(issuer) AND subject = sqlc
 SELECT id, name, alert, led_colour, sort_order FROM groups WHERE id = sqlc.arg(id);
 
 -- name: GetTag :one
-SELECT id, name, alert, led_colour, sort_order FROM tags WHERE id = sqlc.arg(id);
+SELECT id, name, alert, led_colour, sort_order, always_show FROM tags WHERE id = sqlc.arg(id);
 
 -- name: GetAttachment :one
 SELECT a.system_id, s.label AS system_label

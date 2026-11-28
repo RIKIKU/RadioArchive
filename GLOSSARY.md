@@ -60,6 +60,10 @@ _Avoid_: Private talkgroup, blocked talkgroup
 A talkgroup whose calls are not recorded at all.
 _Avoid_: Blacklisted talkgroup, rejected talkgroup
 
+**Quiet talkgroup**:
+A public talkgroup not heard within the quiet window (7 days unless an admin changes it), counting only the time its system's recorders were receiving, so listeners' lists leave it out until its next call brings it back. Worked out, never set, and only a view: it stays in a listening set and plays, unlike a hidden talkgroup. Always show, on the talkgroup or its tag, keeps one from ever being quiet. Not the recorder signal quiet, which is a recorder with no calls.
+_Avoid_: Dormant, inactive, dead talkgroup
+
 **Unreviewed talkgroup**:
 A talkgroup created automatically the first time a call is heard on it, which no admin has named or checked yet.
 _Avoid_: Unknown talkgroup, placeholder

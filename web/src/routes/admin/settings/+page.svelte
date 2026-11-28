@@ -3,7 +3,8 @@
 	// an admin page: the retention period in days, the recordings volume's
 	// state, how long the audit log keeps its entries (owner, 2026-11-25),
 	// which asks first only when a shorter period deletes entries, naming
-	// how many, and the setup export's download.
+	// how many, the quiet talkgroups' window (R114; ADR 0054), and the
+	// setup export's download.
 	//
 	// Lengthening the period just saves. Shortening it is answered 409
 	// confirm_shorter_retention with how many recordings the next nightly
@@ -68,10 +69,76 @@
 		auditTyped = String(a.body.days);
 	}
 
+	// Quiet talkgroups (R114-R116; ADR 0054): the window, and how long each
+	// system has received towards it, since nothing of a system is quiet
+	// until it has received for a whole window.
+	interface QuietSettings {
+		window_days: number;
+		default_days: number;
+		min_days: number;
+		max_days: number;
+		quiet: number;
+		systems: { id: number; label: string; received_hours: number; full: boolean }[];
+	}
+	let quiet: QuietSettings | undefined = $state();
+	let quietTyped = $state('');
+	let quietProblem = $state('');
+	let quietStatus = $state('');
+	let quietSaving = $state(false);
+
+	async function loadQuiet() {
+		const a = await admin<QuietSettings>('GET', '/quiet');
+		if (a.access !== 'open' || !a.body) return;
+		quiet = a.body;
+		quietTyped = String(a.body.window_days);
+	}
+
+	async function saveQuiet(e: SubmitEvent) {
+		e.preventDefault();
+		if (!quiet) return;
+		quietStatus = '';
+		const raw = quietTyped.trim();
+		const days = Number(raw);
+		if (raw === '') quietProblem = 'Enter the quiet window in days.';
+		else if (!/^\d+$/.test(raw) || days < quiet.min_days || days > quiet.max_days) quietProblem = `Enter whole days from ${quiet.min_days} to ${quiet.max_days}.`;
+		else quietProblem = '';
+		if (quietProblem) {
+			await tick();
+			document.getElementById('quiet-days')?.focus();
+			return;
+		}
+		if (days === quiet.window_days) {
+			quietStatus = `Nothing to change: the quiet window is ${plural(days, 'day')}.`;
+			return;
+		}
+		quietSaving = true;
+		const a = await admin<QuietSettings | AdminError>('PUT', '/quiet', { window_days: days });
+		quietSaving = false;
+		if (a.access === 'sign-in' || a.access === 'not-admin') {
+			access = a.access;
+			return;
+		}
+		if (a.status === 400) {
+			quietProblem = (a.body as AdminError | undefined)?.message ?? "That isn't a number of days.";
+			return;
+		}
+		if (a.access !== 'open' || !a.body || 'error' in a.body) {
+			quietStatus = "Couldn't save just now. Nothing changed. Try again in a minute.";
+			return;
+		}
+		quiet = a.body;
+		quietTyped = String(quiet.window_days);
+		quietStatus = `Saved: the quiet window is ${plural(quiet.window_days, 'day')}. ${plural(quiet.quiet, 'talkgroup is', 'talkgroups are')} quiet now.`;
+	}
+
+	const receivedWords = (s: { received_hours: number; full: boolean }, window: number) =>
+		s.full ? 'a whole window' : `${(s.received_hours / 24).toLocaleString('en-AU', { maximumFractionDigits: 1 })} of ${plural(window, 'day')} so far`;
+
 	onMount(() => {
 		void deploymentZone().then((z) => (timeZone = z));
 		void load();
 		void loadAudit();
+		void loadQuiet();
 	});
 
 	async function focusAudit() {
@@ -305,6 +372,35 @@
 			<p class="audit-status" role="status">{auditStatus}</p>
 		{/if}
 
+		{#if quiet}
+			<h2>Quiet talkgroups</h2>
+			<form class="retention" novalidate onsubmit={saveQuiet}>
+				<div class="field">
+					<label for="quiet-days">Quiet after (days) <span class="required">required</span></label>
+					<input
+						id="quiet-days"
+						type="text"
+						inputmode="numeric"
+						pattern="[0-9]*"
+						autocomplete="off"
+						required
+						bind:value={quietTyped}
+						aria-invalid={quietProblem ? 'true' : undefined}
+						aria-describedby="quiet-days-hint{quietProblem ? ' quiet-days-error' : ''}"
+					/>
+					<p class="field-hint" id="quiet-days-hint">
+						From {quiet.min_days} to {quiet.max_days} days; {quiet.default_days} by default. A talkgroup not heard for this long, counting only the time its system's recorders were receiving, leaves listeners' lists until its next call. Admin pages show every talkgroup. {plural(quiet.quiet, 'talkgroup is', 'talkgroups are')} quiet now.
+					</p>
+					{#if quietProblem}<p class="field-error" id="quiet-days-error">{quietProblem}</p>{/if}
+				</div>
+				<button type="submit" disabled={quietSaving} aria-label="Save the quiet window">Save</button>
+			</form>
+			{#if quiet.systems.some((s) => !s.full)}
+				<p class="meta export">{`Nothing of a system is quiet until it has received for a whole window: ${quiet.systems.map((s) => `${s.label}, ${receivedWords(s, quiet!.window_days)}`).join('; ')}.`}</p>
+			{/if}
+			<p class="quiet-status" role="status">{quietStatus}</p>
+		{/if}
+
 		<h2>Setup export</h2>
 		<p class="export">
 			Every system with its talkgroups and units, and the groups and tags, with every field, as one JSON file: the file the PowerShell module's Import-RadioArchiveSetup reads, here or on another radio. Recorders, accounts, calls and the audit log aren't in it.
@@ -329,11 +425,13 @@
 		width: var(--field-narrow);
 	}
 	.status,
-	.audit-status {
+	.audit-status,
+	.quiet-status {
 		margin: var(--space-sm) 0 var(--space-xl);
 	}
 	.status:empty,
-	.audit-status:empty {
+	.audit-status:empty,
+	.quiet-status:empty {
 		display: none;
 	}
 </style>

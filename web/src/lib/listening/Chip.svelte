@@ -223,12 +223,18 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+	/* A note ("Not heard in 12 days") goes to a second line rather than
+	   being cut off; each part stays whole. */
 	.meta {
 		display: flex;
-		gap: var(--space-xs);
+		flex-wrap: wrap;
+		column-gap: var(--space-xs);
 		color: var(--muted);
 		font-family: var(--font-meta);
 		font-size: var(--text-xxs);
+		overflow: hidden;
+	}
+	.meta > span {
 		overflow: hidden;
 		white-space: nowrap;
 		text-overflow: ellipsis;

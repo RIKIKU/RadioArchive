@@ -148,7 +148,7 @@ func newEnvAt(t *testing.T, serverVersion string, more ...server.Option) *env {
 	go e.live.Run(ctx)
 	e.rs, err = server.NewRecorders(st, log, server.RecordersConfig{
 		RecordingsDir: e.dir, Live: tee{e.sink, e.live}, ServerVersion: serverVersion,
-		Notice: e.live, Now: e.clock.now, FreshMetrics: true})
+		Notice: e.live, Now: e.clock.now, FreshMetrics: true, Heard: e.gate})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func newEnvAt(t *testing.T, serverVersion string, more ...server.Option) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin.WithRetention(e.job).WithRecorders(e.rs).WithClock(e.clock.now)
+	admin.WithRetention(e.job).WithRecorders(e.rs).WithClock(e.clock.now).WithQuiet(e.gate)
 	e.api = server.New(st, log, append([]server.Option{server.WithRecorders(e.rs), server.WithAdmin(admin),
 		server.WithPublic(public.New(e.gate, log, public.WithLocation(deploymentTZ(t)))), server.WithApp(web.Serve(appBuild))}, more...)...)
 	e.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

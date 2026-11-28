@@ -216,6 +216,7 @@ type PublicTalkgroup struct {
 	LedColour         *string
 	SortOrder         int32
 	FiregroundChannel *int32
+	AlwaysShow        bool
 }
 
 type Recorder struct {
@@ -262,12 +263,19 @@ type System struct {
 	SortOrder  int32
 }
 
+type SystemReceiving struct {
+	SystemID  int64
+	StartedAt pgtype.Timestamptz
+	EndedAt   pgtype.Timestamptz
+}
+
 type Tag struct {
-	ID        int64
-	Name      string
-	Alert     *string
-	LedColour *string
-	SortOrder int32
+	ID         int64
+	Name       string
+	Alert      *string
+	LedColour  *string
+	SortOrder  int32
+	AlwaysShow bool
 }
 
 type Talkgroup struct {
@@ -287,6 +295,7 @@ type Talkgroup struct {
 	FiregroundChannel *int32
 	Type              string
 	Frequency         *int64
+	AlwaysShow        bool
 }
 
 type TalkgroupGroup struct {
@@ -296,9 +305,10 @@ type TalkgroupGroup struct {
 }
 
 type TalkgroupLastHeard struct {
-	SystemID    int64
-	TalkgroupID int32
-	LastHeardAt pgtype.Timestamptz
+	SystemID      int64
+	TalkgroupID   int32
+	LastHeardAt   pgtype.Timestamptz
+	PublicHeardAt pgtype.Timestamptz
 }
 
 type Transmission struct {

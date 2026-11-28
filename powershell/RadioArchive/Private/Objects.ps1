@@ -127,6 +127,8 @@ function ConvertTo-RaTalkgroup {
         FiregroundChannel = $Row.fireground_channel
         Type              = [string](Get-RaProperty -Row $Row -Name 'type')
         Frequency         = Get-RaProperty -Row $Row -Name 'frequency'
+        AlwaysShow        = [bool](Get-RaProperty -Row $Row -Name 'always_show')
+        Quiet             = [bool](Get-RaProperty -Row $Row -Name 'quiet')
         LastHeardAt       = ConvertTo-RaTime -Value (Get-RaProperty -Row $Row -Name 'last_heard_at')
         Calls30Days       = if ($null -ne $calls) { [long]$calls } else { $null }
         CreatedAt         = ConvertTo-RaTime -Value (Get-RaProperty -Row $Row -Name 'created_at')
@@ -182,6 +184,9 @@ function ConvertTo-RaLabel {
     $o.Alert = $Row.alert
     $o.LedColour = $Row.led_colour
     $o.SortOrder = [int]$Row.sort_order
+    if ($Kind -eq 'Tag') {
+        $o.AlwaysShow = [bool](Get-RaProperty -Row $Row -Name 'always_show')
+    }
     [pscustomobject]$o
 }
 

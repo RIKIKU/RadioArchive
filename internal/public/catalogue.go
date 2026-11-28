@@ -61,26 +61,40 @@ type CatalogueTalkgroup struct {
 	Alert             *string  `json:"alert"`
 	DelayMinutes      int32    `json:"delay_minutes"`
 	FiregroundChannel *int32   `json:"fireground_channel"`
+	// Quiet: not heard in the quiet window while its system was receiving
+	// (R114, ADR 0054). Listeners' lists leave it out; it's here so a
+	// client can find it by an exact search, and a listening set naming
+	// it keeps it. NotHeardDays is how many whole days it hasn't been
+	// heard, given only when it's quiet: at least the window, and the
+	// window itself when it's never been heard.
+	Quiet        bool `json:"quiet"`
+	NotHeardDays int  `json:"not_heard_days,omitempty"`
 }
 
 // Catalogue is GET /api/v1/catalogue: every public talkgroup in the
 // catalogue's order (system, then sort order, then ID), and the tags and
 // groups they name, in their order. TimeZone is the deployment's (TZ), an
 // IANA name, which the browser shows times in (SPEC.md section 13; ADR
-// 0016).
+// 0016). QuietWindowDays is the quiet window (R114).
 type Catalogue struct {
-	TimeZone   string               `json:"time_zone"`
-	Systems    []CatalogueSystem    `json:"systems,omitempty"`
-	Tags       []string             `json:"tags"`
-	Groups     []string             `json:"groups"`
-	Talkgroups []CatalogueTalkgroup `json:"talkgroups"`
+	TimeZone        string               `json:"time_zone"`
+	QuietWindowDays int                  `json:"quiet_window_days"`
+	Systems         []CatalogueSystem    `json:"systems,omitempty"`
+	Tags            []string             `json:"tags"`
+	Groups          []string             `json:"groups"`
+	Talkgroups      []CatalogueTalkgroup `json:"talkgroups"`
 }
 
-// SearchResponse is the talkgroups a search finds, best first.
+// SearchResponse is the talkgroups a search finds, best first. Quiet ones
+// are left out unless the query is exactly one's number, name or label, or
+// the search asks for them with include_quiet=true (R114).
 type SearchResponse struct {
 	Systems    []CatalogueSystem    `json:"systems,omitempty"`
 	Talkgroups []CatalogueTalkgroup `json:"talkgroups"`
 }
+
+// IncludeQuiet is the search's parameter that keeps quiet talkgroups in.
+const IncludeQuiet = "include_quiet"
 
 // FiregroundResponse is the talkgroup a fireground channel number names.
 type FiregroundResponse struct {
@@ -101,9 +115,10 @@ func zoneName(loc *time.Location) string {
 // catalogueBody keeps the last catalogue's encoded answer, so the same
 // catalogue isn't encoded again for every request.
 type catalogueBody struct {
-	mu   sync.Mutex
-	of   *gate.Catalogue
-	body []byte
+	mu    sync.Mutex
+	of    *gate.Catalogue
+	quiet *gate.Quiet
+	body  []byte
 }
 
 func systemsOf(c *gate.Catalogue) []CatalogueSystem {
@@ -117,9 +132,10 @@ func systemsOf(c *gate.Catalogue) []CatalogueSystem {
 	return out
 }
 
-func talkgroupOf(c *gate.Catalogue, t gate.CatalogueTalkgroup) CatalogueTalkgroup {
+func talkgroupOf(c *gate.Catalogue, q *gate.Quiet, t gate.CatalogueTalkgroup) CatalogueTalkgroup {
 	out := CatalogueTalkgroup{ID: t.ID, Label: t.Label, Name: t.Name, Tag: t.Tag, Groups: t.Groups,
 		DelayMinutes: t.DelayMinutes, FiregroundChannel: t.Fireground}
+	out.Quiet, out.NotHeardDays = q.Of(t)
 	if len(c.Systems) > 1 {
 		id := t.System.ID
 		out.System = &id
@@ -135,51 +151,76 @@ func talkgroupOf(c *gate.Catalogue, t gate.CatalogueTalkgroup) CatalogueTalkgrou
 	return out
 }
 
-func talkgroupsOf(c *gate.Catalogue, ts []gate.CatalogueTalkgroup) []CatalogueTalkgroup {
+func talkgroupsOf(c *gate.Catalogue, q *gate.Quiet, ts []gate.CatalogueTalkgroup) []CatalogueTalkgroup {
 	out := make([]CatalogueTalkgroup, 0, len(ts))
 	for _, t := range ts {
-		out = append(out, talkgroupOf(c, t))
+		out = append(out, talkgroupOf(c, q, t))
 	}
 	return out
 }
 
-func (a *API) catalogue(w http.ResponseWriter, r *http.Request) {
+// catalogueAndQuiet reads the catalogue and which of its talkgroups are
+// quiet.
+func (a *API) catalogueAndQuiet(r *http.Request) (*gate.Catalogue, *gate.Quiet, error) {
 	c, err := a.g.Catalogue(r.Context())
+	if err != nil {
+		return nil, nil, err
+	}
+	q, err := a.g.Quiet(r.Context())
+	if err != nil {
+		return nil, nil, err
+	}
+	return c, q, nil
+}
+
+func (a *API) catalogue(w http.ResponseWriter, r *http.Request) {
+	c, q, err := a.catalogueAndQuiet(r)
 	if err != nil {
 		a.failed(w, r, err)
 		return
 	}
 	a.cat.mu.Lock()
 	defer a.cat.mu.Unlock()
-	if a.cat.of != c {
-		b, err := json.Marshal(Catalogue{TimeZone: zoneName(a.loc), Systems: systemsOf(c), Tags: c.Tags, Groups: c.Groups,
-			Talkgroups: talkgroupsOf(c, c.Talkgroups)})
+	if a.cat.of != c || a.cat.quiet != q {
+		b, err := json.Marshal(Catalogue{TimeZone: zoneName(a.loc), QuietWindowDays: q.WindowDays, Systems: systemsOf(c),
+			Tags: c.Tags, Groups: c.Groups, Talkgroups: talkgroupsOf(c, q, c.Talkgroups)})
 		if err != nil {
 			a.failed(w, r, err)
 			return
 		}
-		a.cat.of, a.cat.body = c, append(b, '\n')
+		a.cat.of, a.cat.quiet, a.cat.body = c, q, append(b, '\n')
 	}
 	writeBody(w, http.StatusOK, a.cat.body)
 }
 
 func (a *API) search(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("q")
-	if len(q) > MaxQuery {
+	query := r.URL.Query().Get("q")
+	if len(query) > MaxQuery {
 		writeJSON(w, http.StatusBadRequest, apiError{Code: "query_too_long",
 			Message: fmt.Sprintf("Search for at most %d characters.", MaxQuery)})
 		return
 	}
-	c, err := a.g.Catalogue(r.Context())
+	include := false
+	switch v := r.URL.Query().Get(IncludeQuiet); v {
+	case "", "false":
+	case "true":
+		include = true
+	default:
+		writeJSON(w, http.StatusBadRequest, apiError{Code: "invalid_" + IncludeQuiet,
+			Message: IncludeQuiet + " must be true or false."})
+		return
+	}
+	c, q, err := a.catalogueAndQuiet(r)
 	if err != nil {
 		a.failed(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, SearchResponse{Systems: systemsOf(c), Talkgroups: talkgroupsOf(c, c.Search(q))})
+	writeJSON(w, http.StatusOK, SearchResponse{Systems: systemsOf(c),
+		Talkgroups: talkgroupsOf(c, q, q.Shown(query, c.Search(query), include))})
 }
 
 func (a *API) fireground(w http.ResponseWriter, r *http.Request) {
-	c, err := a.g.Catalogue(r.Context())
+	c, q, err := a.catalogueAndQuiet(r)
 	if err != nil {
 		a.failed(w, r, err)
 		return
@@ -193,5 +234,5 @@ func (a *API) fireground(w http.ResponseWriter, r *http.Request) {
 		a.failed(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, FiregroundResponse{Systems: systemsOf(c), Talkgroup: talkgroupOf(c, t)})
+	writeJSON(w, http.StatusOK, FiregroundResponse{Systems: systemsOf(c), Talkgroup: talkgroupOf(c, q, t)})
 }

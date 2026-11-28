@@ -222,6 +222,8 @@ func serve(log *slog.Logger) error {
 		// The recorder notice goes out on the live feed (R15).
 		Notice:      g.Live(),
 		NoticeAfter: noticeAfter,
+		// A quiet talkgroup comes back at its first call (R117).
+		Heard: g,
 	})
 	if err != nil {
 		return err
@@ -305,7 +307,7 @@ func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate
 		return nil, nil, nil, err
 	}
 	// The deployment's clock: the talkgroup table's 30 days (ADR 0026).
-	admin.WithClock(time.Now).WithRetention(job).WithRecorders(rs).WithListenerSessions(acc).WithAccounts(acc)
+	admin.WithClock(time.Now).WithRetention(job).WithRecorders(rs).WithListenerSessions(acc).WithAccounts(acc).WithQuiet(g)
 	reg := telemetry.NewRegistry(telemetry.All)
 	reg.Add(telemetry.Process(version.Version, time.Now()), rs, g.Live(), lim, job)
 	if ops.backup != nil {

@@ -98,6 +98,9 @@ type SetupTalkgroup struct {
 	LEDColour         *string  `json:"led_colour"`
 	SortOrder         int32    `json:"sort_order"`
 	FiregroundChannel *int32   `json:"fireground_channel"`
+	// AlwaysShow is given only when it's set (ADR 0054), so a setup that
+	// uses none reads as it did.
+	AlwaysShow bool `json:"always_show,omitempty"`
 }
 
 // SetupUnit is a unit in the setup: one radio (from = to) or a range.
@@ -113,12 +116,15 @@ type SetupLabel struct {
 	Alert     *string `json:"alert"`
 	LEDColour *string `json:"led_colour"`
 	SortOrder int32   `json:"sort_order"`
+	// AlwaysShow is a tag's, given only when it's set (ADR 0054).
+	AlwaysShow bool `json:"always_show,omitempty"`
 }
 
 func setupTalkgroup(t Talkgroup) SetupTalkgroup {
 	return SetupTalkgroup{ID: t.ID, Label: t.Label, Name: t.Name, Tag: t.Tag, Groups: t.Groups, State: t.State,
 		Unreviewed: t.Unreviewed, Type: t.Type, Frequency: t.Frequency, DelayMinutes: t.DelayMinutes,
-		Alert: t.Alert, LEDColour: t.LEDColour, SortOrder: t.SortOrder, FiregroundChannel: t.FiregroundChannel}
+		Alert: t.Alert, LEDColour: t.LEDColour, SortOrder: t.SortOrder, FiregroundChannel: t.FiregroundChannel,
+		AlwaysShow: t.AlwaysShow}
 }
 
 func setupLabel(name string, alert, led *string, sort int32) SetupLabel {
@@ -176,7 +182,9 @@ func (a *Admin) readSetup(ctx context.Context) (Setup, error) {
 		out.Groups = append(out.Groups, setupLabel(g.Name, g.Alert, g.LedColour, g.SortOrder))
 	}
 	for _, t := range tags {
-		out.Tags = append(out.Tags, setupLabel(t.Name, t.Alert, t.LedColour, t.SortOrder))
+		l := setupLabel(t.Name, t.Alert, t.LedColour, t.SortOrder)
+		l.AlwaysShow = t.AlwaysShow
+		out.Tags = append(out.Tags, l)
 	}
 	// By name in bytes, not the database's collation, so the order is the
 	// same on every deployment.
@@ -258,6 +266,13 @@ type importUnit struct {
 type importLabel struct {
 	Name string `json:"name"`
 	settingsFields
+	// AlwaysShow is a tag's (ADR 0054); a group's is read and left.
+	AlwaysShow *bool `json:"always_show"`
+}
+
+// tagDiffers says whether, with update, a tag's row changes the tag t.
+func (l importLabel) tagDiffers(t db.Tag) bool {
+	return l.differ(t.Alert, t.LedColour, t.SortOrder) || (l.AlwaysShow != nil && *l.AlwaysShow != t.AlwaysShow)
 }
 
 // Why the import skips a talkgroup's row (R52, section 4).
@@ -668,7 +683,8 @@ func (r *importTalkgroup) writes(t Talkgroup, update bool) bool {
 		r.Alert.Set && !equalPtr(r.Alert.Value, t.Alert),
 		r.LEDColour.Set && !equalPtr(r.LEDColour.Value, t.LEDColour),
 		r.Type != nil && *r.Type != t.Type,
-		r.Frequency.Set && !equalPtr(r.Frequency.Value, t.Frequency):
+		r.Frequency.Set && !equalPtr(r.Frequency.Value, t.Frequency),
+		r.AlwaysShow != nil && *r.AlwaysShow != t.AlwaysShow:
 		return true
 	}
 	return false
@@ -801,7 +817,7 @@ func (x *importRun) lock() error {
 			}
 		}
 		for _, l := range x.in.Tags {
-			if t, ok := x.tags[l.Name]; ok && l.differ(t.Alert, t.LedColour, t.SortOrder) {
+			if t, ok := x.tags[l.Name]; ok && l.tagDiffers(t) {
 				things = append(things, thing{store.AuditTag, strconv.FormatInt(t.ID, 10)})
 			}
 		}
@@ -887,16 +903,15 @@ func (x *importRun) updateExisting(systems []importSystem, made map[int64]bool) 
 	ctx, q := x.ctx, x.q
 	for _, l := range x.in.Tags {
 		was, ok := x.tags[l.Name]
-		if !ok || x.tagsMade[l.Name] || !l.differ(was.Alert, was.LedColour, was.SortOrder) {
+		if !ok || x.tagsMade[l.Name] || !l.tagDiffers(was) {
 			continue
 		}
 		t, err := q.UpdateTag(ctx, db.UpdateTagParams{ID: was.ID, SortOrder: l.SortOrder, SetAlert: l.Alert.Set,
-			Alert: l.Alert.Value, SetLedColour: l.LEDColour.Set, LedColour: l.LEDColour.Value})
+			Alert: l.Alert.Value, SetLedColour: l.LEDColour.Set, LedColour: l.LEDColour.Value, AlwaysShow: l.AlwaysShow})
 		if err != nil {
 			return failed("import tag", err)
 		}
-		before, after := labelOf(was.ID, was.Name, was.Alert, was.LedColour, was.SortOrder),
-			labelOf(t.ID, t.Name, t.Alert, t.LedColour, t.SortOrder)
+		before, after := tagLabel(was), tagLabel(t)
 		ch, err := store.Changes(before, after)
 		if err != nil {
 			return err
@@ -1004,13 +1019,16 @@ func (x *importRun) run() (ImportReport, error) {
 		if l.SortOrder != nil {
 			p.SortOrder = *l.SortOrder
 		}
+		if l.AlwaysShow != nil {
+			p.AlwaysShow = *l.AlwaysShow
+		}
 		t, err := q.CreateTag(ctx, p)
 		if err != nil {
 			return rep, failed("import tag", err)
 		}
 		x.tagsMade[l.Name] = true
 		if err := x.au.Record(store.Change{Kind: store.AuditTag, Thing: strconv.FormatInt(t.ID, 10), Label: t.Name,
-			After: labelOf(t.ID, t.Name, t.Alert, t.LedColour, t.SortOrder)}); err != nil {
+			After: tagLabel(t)}); err != nil {
 			return rep, failed("import audit", err)
 		}
 		x.tags[l.Name] = t
@@ -1143,7 +1161,9 @@ func (x *importRun) run() (ImportReport, error) {
 	}, x.groupNames())
 	x.labels(&rep, store.AuditTag, x.in.Tags, x.tagsMade, x.tagsChanged, func(name string) SetupLabel {
 		t := x.tags[name]
-		return setupLabel(t.Name, t.Alert, t.LedColour, t.SortOrder)
+		l := setupLabel(t.Name, t.Alert, t.LedColour, t.SortOrder)
+		l.AlwaysShow = t.AlwaysShow
+		return l
 	}, x.tagNames())
 	return rep, rep.plan()
 }
@@ -1220,10 +1240,13 @@ func (x *importRun) talkgroups(rep *ImportReport, s *importSystem) error {
 			p := db.ImportUpdateTalkgroupParams{SystemID: k.sys, TalkgroupID: k.id, Label: before.Label,
 				Name: before.Name, TagID: tagID, SortOrder: before.SortOrder, FiregroundChannel: before.FiregroundChannel,
 				DelayMinutes: before.DelayMinutes, Alert: before.Alert, LedColour: before.LEDColour, Type: before.Type,
-				Frequency: before.Frequency}
+				Frequency: before.Frequency, AlwaysShow: before.AlwaysShow}
 			if x.update {
 				if r.DelayMinutes != nil {
 					p.DelayMinutes = *r.DelayMinutes
+				}
+				if r.AlwaysShow != nil {
+					p.AlwaysShow = *r.AlwaysShow
 				}
 				if r.Alert.Set {
 					p.Alert = r.Alert.Value
@@ -1283,6 +1306,9 @@ func (x *importRun) talkgroups(rep *ImportReport, s *importSystem) error {
 			}
 			if r.Type != nil {
 				p.Type = *r.Type
+			}
+			if r.AlwaysShow != nil {
+				p.AlwaysShow = *r.AlwaysShow
 			}
 			if err := q.ImportTalkgroup(ctx, p); err != nil {
 				return failed("import talkgroup", err)
@@ -1344,6 +1370,9 @@ func (x *importRun) talkgroups(rep *ImportReport, s *importSystem) error {
 			}
 			if r.LEDColour.Set {
 				nc = notChanged(nc, "led_colour", before.LEDColour, r.LEDColour.Value)
+			}
+			if r.AlwaysShow != nil {
+				nc = notChanged(nc, "always_show", before.AlwaysShow, *r.AlwaysShow)
 			}
 			res.NotChanged = nc
 		}
@@ -1474,6 +1503,9 @@ func (x *importRun) labels(rep *ImportReport, kind string, rows []importLabel, m
 		} else {
 			res.Result = ImportUnchanged
 			res.NotChanged = x.settingsNotChanged(nil, l.settingsFields, now.Alert, now.LEDColour, now.SortOrder)
+			if kind == store.AuditTag && l.AlwaysShow != nil {
+				res.NotChanged = notChanged(res.NotChanged, "always_show", now.AlwaysShow, *l.AlwaysShow)
+			}
 		}
 		rep.add(res)
 	}

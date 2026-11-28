@@ -61,6 +61,15 @@ type RecordersConfig struct {
 	// FreshMetrics makes every scrape read the database afresh, rather
 	// than reusing a read for up to a few minutes (ADR 0040). For tests.
 	FreshMetrics bool
+	// Heard is told of talkgroups heard on a call whose patch is wholly
+	// public, so a quiet one comes back at once (R117). The gate is the
+	// one in the binary. Optional.
+	Heard HeardSink
+}
+
+// HeardSink is told of talkgroups heard publicly.
+type HeardSink interface {
+	TalkgroupsHeard(system int64, talkgroups []int32)
 }
 
 // Counters are the recorder endpoints' totals, for metrics (R90) and tests.
@@ -123,6 +132,9 @@ type Recorders struct {
 
 	sig     *signals
 	metrics *metricsCache
+
+	receivingMu sync.Mutex // one RecordReceiving at a time
+	pruned      time.Time  // when RecordReceiving last pruned the spans
 
 	mu       sync.Mutex
 	sessions map[int64]*session // by recorder ID: one connection per client key

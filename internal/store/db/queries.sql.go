@@ -217,7 +217,7 @@ SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.u
              WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
              ORDER BY x.sort_order, x.name)::text[] AS groups,
        t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel, t.type, t.frequency,
-       t.created_at, t.updated_at,
+       t.created_at, t.updated_at, t.always_show,
        l.last_heard_at, COALESCE(n.calls, 0)::bigint AS calls_since
 FROM talkgroups t
 LEFT JOIN tags g ON g.id = t.tag_id
@@ -249,6 +249,7 @@ type AdminTalkgroupTableRow struct {
 	Frequency         *int64
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
+	AlwaysShow        bool
 	LastHeardAt       pgtype.Timestamptz
 	CallsSince        int64
 }
@@ -286,6 +287,7 @@ func (q *Queries) AdminTalkgroupTable(ctx context.Context, arg AdminTalkgroupTab
 			&i.Frequency,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AlwaysShow,
 			&i.LastHeardAt,
 			&i.CallsSince,
 		); err != nil {
@@ -654,16 +656,17 @@ func (q *Queries) CreateSystem(ctx context.Context, arg CreateSystemParams) (Cre
 }
 
 const createTag = `-- name: CreateTag :one
-INSERT INTO tags (name, alert, led_colour, sort_order)
-VALUES ($1, $2, $3, $4)
-RETURNING id, name, alert, led_colour, sort_order
+INSERT INTO tags (name, alert, led_colour, sort_order, always_show)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, name, alert, led_colour, sort_order, always_show
 `
 
 type CreateTagParams struct {
-	Name      string
-	Alert     *string
-	LedColour *string
-	SortOrder int32
+	Name       string
+	Alert      *string
+	LedColour  *string
+	SortOrder  int32
+	AlwaysShow bool
 }
 
 func (q *Queries) CreateTag(ctx context.Context, arg CreateTagParams) (Tag, error) {
@@ -672,6 +675,7 @@ func (q *Queries) CreateTag(ctx context.Context, arg CreateTagParams) (Tag, erro
 		arg.Alert,
 		arg.LedColour,
 		arg.SortOrder,
+		arg.AlwaysShow,
 	)
 	var i Tag
 	err := row.Scan(
@@ -680,6 +684,7 @@ func (q *Queries) CreateTag(ctx context.Context, arg CreateTagParams) (Tag, erro
 		&i.Alert,
 		&i.LedColour,
 		&i.SortOrder,
+		&i.AlwaysShow,
 	)
 	return i, err
 }
@@ -964,7 +969,7 @@ SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.u
              WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
              ORDER BY x.sort_order, x.name)::text[] AS groups,
        t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel, t.type, t.frequency,
-       t.created_at, t.updated_at
+       t.created_at, t.updated_at, t.always_show
 FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
 ORDER BY t.system_id, t.talkgroup_id
 `
@@ -987,6 +992,7 @@ type ExportTalkgroupsRow struct {
 	Frequency         *int64
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
+	AlwaysShow        bool
 }
 
 // Every talkgroup of every system, by system and ID, as GetTalkgroup reads
@@ -1018,6 +1024,7 @@ func (q *Queries) ExportTalkgroups(ctx context.Context) ([]ExportTalkgroupsRow, 
 			&i.Frequency,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AlwaysShow,
 		); err != nil {
 			return nil, err
 		}
@@ -1086,6 +1093,37 @@ func (q *Queries) ExtendLivePatch(ctx context.Context, arg ExtendLivePatchParams
 	return state, err
 }
 
+const extendReceiving = `-- name: ExtendReceiving :exec
+WITH extended AS (
+    UPDATE system_receiving r SET ended_at = $2::timestamptz
+    WHERE r.system_id = $1
+      AND r.ended_at >= $2::timestamptz - $3::interval
+      AND r.ended_at <= $2::timestamptz
+    RETURNING 1
+)
+INSERT INTO system_receiving (system_id, started_at, ended_at)
+SELECT $1, $2::timestamptz, $2::timestamptz
+WHERE NOT EXISTS (SELECT 1 FROM extended)
+  AND NOT EXISTS (SELECT 1 FROM system_receiving r
+                  WHERE r.system_id = $1 AND r.ended_at > $2::timestamptz
+                    AND r.started_at <= $2::timestamptz)
+ON CONFLICT (system_id, started_at) DO NOTHING
+`
+
+type ExtendReceivingParams struct {
+	SystemID int64
+	At       pgtype.Timestamptz
+	Gap      pgtype.Interval
+}
+
+// The system is receiving at at: its span that ended within gap before is
+// extended to at, else a span starts at at. A span ending after at (a
+// second server's, ahead) is left.
+func (q *Queries) ExtendReceiving(ctx context.Context, arg ExtendReceivingParams) error {
+	_, err := q.db.Exec(ctx, extendReceiving, arg.SystemID, arg.At, arg.Gap)
+	return err
+}
+
 const firegroundHolder = `-- name: FiregroundHolder :one
 SELECT t.system_id, s.label AS system_label, t.talkgroup_id, t.label, t.name
 FROM talkgroups t JOIN systems s ON s.id = t.system_id
@@ -1127,6 +1165,7 @@ SELECT p.system_id, s.label AS system_label, s.name AS system_name,
        s.alert AS system_alert, s.led_colour AS system_led_colour,
        p.talkgroup_id, p.label, p.name, p.delay_minutes, p.alert, p.led_colour, p.fireground_channel,
        g.name AS tag, g.sort_order AS tag_sort_order, g.alert AS tag_alert, g.led_colour AS tag_led_colour,
+       (p.always_show OR COALESCE(g.always_show, false))::bool AS always_show,
        COALESCE((SELECT jsonb_agg(jsonb_build_object('name', x.name, 'sort_order', x.sort_order,
                                                      'alert', x.alert, 'led_colour', x.led_colour)
                                   ORDER BY x.sort_order, x.name)
@@ -1156,6 +1195,7 @@ type GateCatalogueRow struct {
 	TagSortOrder      *int32
 	TagAlert          *string
 	TagLedColour      *string
+	AlwaysShow        bool
 	Groups            []byte
 }
 
@@ -1187,6 +1227,7 @@ func (q *Queries) GateCatalogue(ctx context.Context) ([]GateCatalogueRow, error)
 			&i.TagSortOrder,
 			&i.TagAlert,
 			&i.TagLedColour,
+			&i.AlwaysShow,
 			&i.Groups,
 		); err != nil {
 			return nil, err
@@ -1943,7 +1984,7 @@ func (q *Queries) GetSystem(ctx context.Context, id int64) (GetSystemRow, error)
 }
 
 const getTag = `-- name: GetTag :one
-SELECT id, name, alert, led_colour, sort_order FROM tags WHERE id = $1
+SELECT id, name, alert, led_colour, sort_order, always_show FROM tags WHERE id = $1
 `
 
 func (q *Queries) GetTag(ctx context.Context, id int64) (Tag, error) {
@@ -1955,6 +1996,7 @@ func (q *Queries) GetTag(ctx context.Context, id int64) (Tag, error) {
 		&i.Alert,
 		&i.LedColour,
 		&i.SortOrder,
+		&i.AlwaysShow,
 	)
 	return i, err
 }
@@ -1965,7 +2007,7 @@ SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.u
              WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
              ORDER BY x.sort_order, x.name)::text[] AS groups,
        t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel, t.type, t.frequency,
-       t.created_at, t.updated_at
+       t.created_at, t.updated_at, t.always_show
 FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
 WHERE t.system_id = $1 AND t.talkgroup_id = $2
 `
@@ -1993,6 +2035,7 @@ type GetTalkgroupRow struct {
 	Frequency         *int64
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
+	AlwaysShow        bool
 }
 
 func (q *Queries) GetTalkgroup(ctx context.Context, arg GetTalkgroupParams) (GetTalkgroupRow, error) {
@@ -2016,6 +2059,7 @@ func (q *Queries) GetTalkgroup(ctx context.Context, arg GetTalkgroupParams) (Get
 		&i.Frequency,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AlwaysShow,
 	)
 	return i, err
 }
@@ -2071,11 +2115,12 @@ func (q *Queries) IgnoredInPatch(ctx context.Context, arg IgnoredInPatchParams) 
 const importTalkgroup = `-- name: ImportTalkgroup :exec
 
 INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state, unreviewed,
-                        delay_minutes, alert, led_colour, sort_order, fireground_channel, type, frequency)
+                        delay_minutes, alert, led_colour, sort_order, fireground_channel, type, frequency,
+                        always_show)
 VALUES ($1, $2, $3, $4,
         $5, $6, $7, $8, $9,
         $10, $11, $12,
-        $13, $14)
+        $13, $14, $15)
 `
 
 type ImportTalkgroupParams struct {
@@ -2093,6 +2138,7 @@ type ImportTalkgroupParams struct {
 	FiregroundChannel *int32
 	Type              string
 	Frequency         *int64
+	AlwaysShow        bool
 }
 
 // The setup's import and export (R52, R53; issue #115, ADR 0030).
@@ -2114,6 +2160,7 @@ func (q *Queries) ImportTalkgroup(ctx context.Context, arg ImportTalkgroupParams
 		arg.FiregroundChannel,
 		arg.Type,
 		arg.Frequency,
+		arg.AlwaysShow,
 	)
 	return err
 }
@@ -2154,8 +2201,9 @@ SET label = $1,
     led_colour = $8,
     type = $9,
     frequency = $10,
+    always_show = $11,
     updated_at = now()
-WHERE system_id = $11 AND talkgroup_id = $12
+WHERE system_id = $12 AND talkgroup_id = $13
 `
 
 type ImportUpdateTalkgroupParams struct {
@@ -2169,15 +2217,16 @@ type ImportUpdateTalkgroupParams struct {
 	LedColour         *string
 	Type              string
 	Frequency         *int64
+	AlwaysShow        bool
 	SystemID          int64
 	TalkgroupID       int32
 }
 
 // A talkgroup the import changes: R52's fields (label, name, tag,
 // fireground channel number, and sort order when given; groups apart),
-// and with the import's update option its delay, alert, LED colour, type
-// and frequency too; the caller passes what it has for those it keeps.
-// Never state or unreviewed (owner, 2026-11-25; ADR 0035).
+// and with the import's update option its delay, alert, LED colour, type,
+// frequency and always show too; the caller passes what it has for those
+// it keeps. Never state or unreviewed (owner, 2026-11-25; ADR 0035).
 func (q *Queries) ImportUpdateTalkgroup(ctx context.Context, arg ImportUpdateTalkgroupParams) error {
 	_, err := q.db.Exec(ctx, importUpdateTalkgroup,
 		arg.Label,
@@ -2190,6 +2239,7 @@ func (q *Queries) ImportUpdateTalkgroup(ctx context.Context, arg ImportUpdateTal
 		arg.LedColour,
 		arg.Type,
 		arg.Frequency,
+		arg.AlwaysShow,
 		arg.SystemID,
 		arg.TalkgroupID,
 	)
@@ -2293,6 +2343,41 @@ func (q *Queries) ListAccounts(ctx context.Context, issuer string) ([]Account, e
 			&i.LastSignedInAt,
 			&i.AuthentikPending,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAttachedSystems = `-- name: ListAttachedSystems :many
+SELECT a.recorder_id, a.short_name, a.system_id
+FROM attachments a JOIN recorders r ON r.id = a.recorder_id
+WHERE r.retired_at IS NULL
+ORDER BY a.recorder_id, a.short_name
+`
+
+type ListAttachedSystemsRow struct {
+	RecorderID int64
+	ShortName  string
+	SystemID   int64
+}
+
+// Each active recorder's attached shortNames and the systems they're
+// filed under, for whether a system is receiving.
+func (q *Queries) ListAttachedSystems(ctx context.Context) ([]ListAttachedSystemsRow, error) {
+	rows, err := q.db.Query(ctx, listAttachedSystems)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAttachedSystemsRow
+	for rows.Next() {
+		var i ListAttachedSystemsRow
+		if err := rows.Scan(&i.RecorderID, &i.ShortName, &i.SystemID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2691,7 +2776,7 @@ func (q *Queries) ListSystems(ctx context.Context) ([]ListSystemsRow, error) {
 }
 
 const listTags = `-- name: ListTags :many
-SELECT id, name, alert, led_colour, sort_order FROM tags ORDER BY sort_order, name
+SELECT id, name, alert, led_colour, sort_order, always_show FROM tags ORDER BY sort_order, name
 `
 
 func (q *Queries) ListTags(ctx context.Context) ([]Tag, error) {
@@ -2709,6 +2794,7 @@ func (q *Queries) ListTags(ctx context.Context) ([]Tag, error) {
 			&i.Alert,
 			&i.LedColour,
 			&i.SortOrder,
+			&i.AlwaysShow,
 		); err != nil {
 			return nil, err
 		}
@@ -2727,7 +2813,7 @@ SELECT t.system_id, t.talkgroup_id, t.label, t.name, g.name AS tag, t.state, t.u
              WHERE m.system_id = t.system_id AND m.talkgroup_id = t.talkgroup_id
              ORDER BY x.sort_order, x.name)::text[] AS groups,
        t.delay_minutes, t.alert, t.led_colour, t.sort_order, t.fireground_channel, t.type, t.frequency,
-       t.created_at, t.updated_at
+       t.created_at, t.updated_at, t.always_show
 FROM talkgroups t LEFT JOIN tags g ON g.id = t.tag_id
 WHERE t.system_id = $1
 ORDER BY t.talkgroup_id
@@ -2751,6 +2837,7 @@ type ListTalkgroupsRow struct {
 	Frequency         *int64
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
+	AlwaysShow        bool
 }
 
 // Talkgroups (R21, R22).
@@ -2781,6 +2868,7 @@ func (q *Queries) ListTalkgroups(ctx context.Context, systemID int64) ([]ListTal
 			&i.Frequency,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AlwaysShow,
 		); err != nil {
 			return nil, err
 		}
@@ -2994,9 +3082,10 @@ SET label = COALESCE($1, label),
         THEN $12::integer ELSE fireground_channel END,
     type = COALESCE($13, type),
     frequency = CASE WHEN $14::bool THEN $15::bigint ELSE frequency END,
+    always_show = COALESCE($16::bool, always_show),
     unreviewed = false,
     updated_at = now()
-WHERE system_id = $16 AND talkgroup_id = $17
+WHERE system_id = $17 AND talkgroup_id = $18
 `
 
 type PatchTalkgroupParams struct {
@@ -3015,6 +3104,7 @@ type PatchTalkgroupParams struct {
 	Type                 *string
 	SetFrequency         bool
 	Frequency            *int64
+	AlwaysShow           *bool
 	SystemID             int64
 	TalkgroupID          int32
 }
@@ -3040,6 +3130,7 @@ func (q *Queries) PatchTalkgroup(ctx context.Context, arg PatchTalkgroupParams) 
 		arg.Type,
 		arg.SetFrequency,
 		arg.Frequency,
+		arg.AlwaysShow,
 		arg.SystemID,
 		arg.TalkgroupID,
 	)
@@ -3081,6 +3172,18 @@ func (q *Queries) PruneAuditLog(ctx context.Context) (PruneAuditLogRow, error) {
 	return i, err
 }
 
+const pruneReceiving = `-- name: PruneReceiving :execrows
+DELETE FROM system_receiving WHERE ended_at < $1
+`
+
+func (q *Queries) PruneReceiving(ctx context.Context, before pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneReceiving, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const pruneRejectedCalls = `-- name: PruneRejectedCalls :execrows
 DELETE FROM rejected_calls WHERE rejected_at < $1
 `
@@ -3096,16 +3199,17 @@ func (q *Queries) PruneRejectedCalls(ctx context.Context, cutoff pgtype.Timestam
 
 const putTalkgroup = `-- name: PutTalkgroup :exec
 INSERT INTO talkgroups (system_id, talkgroup_id, label, name, tag_id, state,
-                        delay_minutes, alert, led_colour, sort_order, fireground_channel, type, frequency)
+                        delay_minutes, alert, led_colour, sort_order, fireground_channel, type, frequency,
+                        always_show)
 VALUES ($1, $2, $3, $4,
         $5, $6, $7, $8,
         $9, $10, $11,
-        $12, $13)
+        $12, $13, $14)
 ON CONFLICT (system_id, talkgroup_id) DO UPDATE
 SET label = EXCLUDED.label, name = EXCLUDED.name, tag_id = EXCLUDED.tag_id, state = EXCLUDED.state,
     delay_minutes = EXCLUDED.delay_minutes, alert = EXCLUDED.alert, led_colour = EXCLUDED.led_colour,
     sort_order = EXCLUDED.sort_order, fireground_channel = EXCLUDED.fireground_channel,
-    type = EXCLUDED.type, frequency = EXCLUDED.frequency,
+    type = EXCLUDED.type, frequency = EXCLUDED.frequency, always_show = EXCLUDED.always_show,
     unreviewed = false, updated_at = now()
 `
 
@@ -3123,6 +3227,7 @@ type PutTalkgroupParams struct {
 	FiregroundChannel *int32
 	Type              string
 	Frequency         *int64
+	AlwaysShow        bool
 }
 
 // An admin's add or full edit. It marks the talkgroup reviewed. Its groups
@@ -3142,6 +3247,7 @@ func (q *Queries) PutTalkgroup(ctx context.Context, arg PutTalkgroupParams) erro
 		arg.FiregroundChannel,
 		arg.Type,
 		arg.Frequency,
+		arg.AlwaysShow,
 	)
 	return err
 }
@@ -3172,6 +3278,68 @@ func (q *Queries) PutUnit(ctx context.Context, arg PutUnitParams) (bool, error) 
 	var created bool
 	err := row.Scan(&created)
 	return created, err
+}
+
+const quietHeard = `-- name: QuietHeard :many
+
+SELECT system_id, talkgroup_id, public_heard_at::timestamptz AS heard_at
+FROM talkgroup_last_heard WHERE public_heard_at IS NOT NULL
+`
+
+type QuietHeardRow struct {
+	SystemID    int64
+	TalkgroupID int32
+	HeardAt     pgtype.Timestamptz
+}
+
+// Quiet talkgroups (R114-R117; migration 00030, ADR 0054).
+// When each talkgroup was last heard publicly. Whether it's public, exempt
+// or delayed is the catalogue's.
+func (q *Queries) QuietHeard(ctx context.Context) ([]QuietHeardRow, error) {
+	rows, err := q.db.Query(ctx, quietHeard)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []QuietHeardRow
+	for rows.Next() {
+		var i QuietHeardRow
+		if err := rows.Scan(&i.SystemID, &i.TalkgroupID, &i.HeardAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const quietReceiving = `-- name: QuietReceiving :many
+SELECT system_id, started_at, ended_at FROM system_receiving
+WHERE ended_at > $1
+ORDER BY system_id, ended_at DESC
+`
+
+// The spans each system was receiving that end after since, newest first.
+func (q *Queries) QuietReceiving(ctx context.Context, since pgtype.Timestamptz) ([]SystemReceiving, error) {
+	rows, err := q.db.Query(ctx, quietReceiving, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SystemReceiving
+	for rows.Next() {
+		var i SystemReceiving
+		if err := rows.Scan(&i.SystemID, &i.StartedAt, &i.EndedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const recordRejection = `-- name: RecordRejection :execrows
@@ -3721,18 +3889,24 @@ func (q *Queries) TouchRecorderCall(ctx context.Context, arg TouchRecorderCallPa
 
 const touchTalkgroupsHeard = `-- name: TouchTalkgroupsHeard :exec
 
-INSERT INTO talkgroup_last_heard (system_id, talkgroup_id, last_heard_at)
-SELECT t.system_id, t.talkgroup_id, $1::timestamptz
+INSERT INTO talkgroup_last_heard (system_id, talkgroup_id, last_heard_at, public_heard_at)
+SELECT t.system_id, t.talkgroup_id, $1::timestamptz,
+       CASE WHEN $2::bool THEN $1::timestamptz END
 FROM talkgroups t
-WHERE t.system_id = $2 AND t.talkgroup_id = ANY ($3::integer[])
+WHERE t.system_id = $3 AND t.talkgroup_id = ANY ($4::integer[])
 ORDER BY t.talkgroup_id
 ON CONFLICT (system_id, talkgroup_id) DO UPDATE
-SET last_heard_at = EXCLUDED.last_heard_at
+SET last_heard_at = greatest(talkgroup_last_heard.last_heard_at, EXCLUDED.last_heard_at),
+    public_heard_at = greatest(talkgroup_last_heard.public_heard_at, EXCLUDED.public_heard_at)
 WHERE talkgroup_last_heard.last_heard_at < EXCLUDED.last_heard_at
+   OR (EXCLUDED.public_heard_at IS NOT NULL
+       AND (talkgroup_last_heard.public_heard_at IS NULL
+            OR talkgroup_last_heard.public_heard_at < EXCLUDED.public_heard_at))
 `
 
 type TouchTalkgroupsHeardParams struct {
 	At         pgtype.Timestamptz
+	Public     bool
 	SystemID   int64
 	Talkgroups []int32
 }
@@ -3740,11 +3914,17 @@ type TouchTalkgroupsHeardParams struct {
 // The admin table (R50; ADR 0026): every talkgroup, last heard and calls
 // in the last 30 days, and a talkgroup's calls whatever their state (R34).
 // Records that these talkgroups of the system were heard at the given
-// time. IDs the system doesn't list are skipped; it never moves back.
-// In ID order, so two calls touching the same talkgroups lock them in the
-// same order.
+// time, and, when the call's patch is wholly public, heard publicly (the
+// quiet talkgroups', migration 00030). IDs the system doesn't list are
+// skipped; neither time moves back (greatest skips a NULL). In ID order,
+// so two calls touching the same talkgroups lock them in the same order.
 func (q *Queries) TouchTalkgroupsHeard(ctx context.Context, arg TouchTalkgroupsHeardParams) error {
-	_, err := q.db.Exec(ctx, touchTalkgroupsHeard, arg.At, arg.SystemID, arg.Talkgroups)
+	_, err := q.db.Exec(ctx, touchTalkgroupsHeard,
+		arg.At,
+		arg.Public,
+		arg.SystemID,
+		arg.Talkgroups,
+	)
 	return err
 }
 
@@ -3962,9 +4142,10 @@ UPDATE tags
 SET name = COALESCE($1, name),
     sort_order = COALESCE($2::integer, sort_order),
     alert = CASE WHEN $3::bool THEN $4::text ELSE alert END,
-    led_colour = CASE WHEN $5::bool THEN $6::text ELSE led_colour END
-WHERE id = $7
-RETURNING id, name, alert, led_colour, sort_order
+    led_colour = CASE WHEN $5::bool THEN $6::text ELSE led_colour END,
+    always_show = COALESCE($7::bool, always_show)
+WHERE id = $8
+RETURNING id, name, alert, led_colour, sort_order, always_show
 `
 
 type UpdateTagParams struct {
@@ -3974,6 +4155,7 @@ type UpdateTagParams struct {
 	Alert        *string
 	SetLedColour bool
 	LedColour    *string
+	AlwaysShow   *bool
 	ID           int64
 }
 
@@ -3985,6 +4167,7 @@ func (q *Queries) UpdateTag(ctx context.Context, arg UpdateTagParams) (Tag, erro
 		arg.Alert,
 		arg.SetLedColour,
 		arg.LedColour,
+		arg.AlwaysShow,
 		arg.ID,
 	)
 	var i Tag
@@ -3994,6 +4177,7 @@ func (q *Queries) UpdateTag(ctx context.Context, arg UpdateTagParams) (Tag, erro
 		&i.Alert,
 		&i.LedColour,
 		&i.SortOrder,
+		&i.AlwaysShow,
 	)
 	return i, err
 }

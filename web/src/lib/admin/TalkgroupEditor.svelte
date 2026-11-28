@@ -244,6 +244,10 @@
 				<p class="field-hint" id="{id('fireground_channel')}-hint">One talkgroup per number, across every system.</p>
 				{#if problems.fireground_channel}<p class="field-error" id="{id('fireground_channel')}-error">{problems.fireground_channel}</p>{/if}
 			</div>
+			<div class="field check">
+				<label><input id={id('always_show')} type="checkbox" bind:checked={form.always_show} aria-describedby="{id('always_show')}-hint" /> Always show</label>
+				<p class="field-hint" id="{id('always_show')}-hint">Never quiet: listeners see it even when it hasn't been heard for the quiet window. A tag can say this for all its talkgroups.</p>
+			</div>
 		</div>
 		{#if failed}<p class="field-error" role="alert">{failed}</p>{/if}
 		<div class="buttons">
@@ -281,9 +285,15 @@
 		grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-wide)), 1fr));
 		gap: 0 var(--space-lg);
 	}
-	.grid input,
+	.grid input:not([type='checkbox']),
 	.grid select {
 		width: 100%;
+	}
+	.check label {
+		display: flex;
+		align-items: center;
+		gap: var(--space-xs);
+		min-height: var(--target);
 	}
 	.buttons {
 		display: flex;

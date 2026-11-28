@@ -65,12 +65,18 @@ type Admission struct {
 	// doesn't list may be among them.
 	HeardSystem     int64
 	HeardTalkgroups []int32
+	// HeardPublic says the call's patch was wholly public when it was
+	// heard, so its talkgroups were heard publicly too: what brings a quiet
+	// talkgroup back (R117; ADR 0054). A call patched with a hidden
+	// talkgroup never does, or listeners would learn that it happened (P1).
+	HeardPublic bool
 }
 
 // heard is an admission of a call on talkgroup, patched with patched, in
-// system.
-func heard(system int64, talkgroup int32, patched []int32) Admission {
-	return Admission{SystemID: system, HeardSystem: system, HeardTalkgroups: union([]int32{talkgroup}, patched)}
+// system, whose patch's state is state.
+func heard(system int64, talkgroup int32, patched []int32, state TalkgroupState) Admission {
+	return Admission{SystemID: system, HeardSystem: system, HeardTalkgroups: union([]int32{talkgroup}, patched),
+		HeardPublic: state == Public}
 }
 
 // Admit decides whether the server takes a call and under which system. It's
@@ -110,21 +116,21 @@ func Admit(ctx context.Context, q *db.Queries, c HeardCall) (Admission, error) {
 		}
 		return Admission{Rejected: why, Counted: n == 1}, nil
 	}
-	ignored := func(system int64) (Admission, bool, error) {
+	ignored := func(system int64) (Admission, TalkgroupState, bool, error) {
 		state, err := q.CallState(ctx, db.CallStateParams{SystemID: system, Talkgroup: c.Talkgroup, Patched: patched})
 		if err != nil {
-			return Admission{}, false, dbErr("call state", err)
+			return Admission{}, state, false, dbErr("call state", err)
 		}
 		if state != Ignored {
-			return Admission{}, false, nil
+			return Admission{}, state, false, nil
 		}
 		tg, err := q.IgnoredInPatch(ctx, db.IgnoredInPatchParams{SystemID: system, Talkgroup: c.Talkgroup, Patched: patched})
 		if err != nil {
-			return Admission{}, false, dbErr("ignored talkgroup", err)
+			return Admission{}, state, false, dbErr("ignored talkgroup", err)
 		}
 		a, err := reject(&system, tg, IgnoredTalkgroup)
 		a.HeardSystem, a.HeardTalkgroups = system, []int32{tg}
-		return a, true, err
+		return a, state, true, err
 	}
 
 	row, err := q.CallForAdmission(ctx, db.CallForAdmissionParams{RecorderID: k.RecorderID, SysNum: sysNum,
@@ -135,12 +141,12 @@ func Admit(ctx context.Context, q *db.Queries, c HeardCall) (Admission, error) {
 			return Admission{SystemID: row.SystemID}, nil
 		}
 		patched = union(row.PatchedTalkgroups, patched)
-		a, refused, err := ignored(row.SystemID)
+		a, state, refused, err := ignored(row.SystemID)
 		if err != nil {
 			return Admission{}, err
 		}
 		if !refused {
-			return heard(row.SystemID, c.Talkgroup, patched), nil
+			return heard(row.SystemID, c.Talkgroup, patched, state), nil
 		}
 		if err := q.DeleteUnrecordedCall(ctx, row.ID); err != nil {
 			return Admission{}, dbErr("delete refused call", err)
@@ -171,10 +177,11 @@ func Admit(ctx context.Context, q *db.Queries, c HeardCall) (Admission, error) {
 		}
 	}
 
-	if a, refused, err := ignored(sys.ID); err != nil || refused {
+	a, state, refused, err := ignored(sys.ID)
+	if err != nil || refused {
 		return a, err
 	}
-	return heard(sys.ID, c.Talkgroup, patched), nil
+	return heard(sys.ID, c.Talkgroup, patched, state), nil
 }
 
 func dbErr(what string, err error) error {

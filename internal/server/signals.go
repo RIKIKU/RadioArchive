@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	cp "github.com/RIKIKU/RadioArchive/internal/clientproto"
+	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/store"
 	"github.com/RIKIKU/RadioArchive/internal/store/db"
 )
@@ -270,6 +271,8 @@ func (g *signals) evaluate(rows []db.ListRecorderSignalsRow, now time.Time) []st
 func (rs *Recorders) watch(ctx context.Context) {
 	t := time.NewTicker(signalTick)
 	defer t.Stop()
+	rt := time.NewTicker(receivingTick)
+	defer rt.Stop()
 	for {
 		rs.check(ctx)
 		select {
@@ -277,6 +280,8 @@ func (rs *Recorders) watch(ctx context.Context) {
 			return
 		case <-t.C:
 		case <-rs.sig.kick:
+		case <-rt.C:
+			rs.RecordReceiving(ctx)
 		}
 	}
 }
@@ -509,8 +514,85 @@ func (rs *Recorders) touchHeard(ctx context.Context, adm store.Admission, startM
 		at = t
 	}
 	err := rs.st.TouchTalkgroupsHeard(ctx, db.TouchTalkgroupsHeardParams{SystemID: adm.HeardSystem,
-		Talkgroups: adm.HeardTalkgroups, At: pgtype.Timestamptz{Time: at.UTC(), Valid: true}})
+		Talkgroups: adm.HeardTalkgroups, At: pgtype.Timestamptz{Time: at.UTC(), Valid: true}, Public: adm.HeardPublic})
 	if err != nil {
 		rs.log.Warn("couldn't record when talkgroups were last heard", "system", adm.HeardSystem, "error", store.SafeError(err))
+		return
+	}
+	// A quiet talkgroup comes back at its first call (R117).
+	if h := rs.cfg.Heard; h != nil && adm.HeardPublic {
+		h.TalkgroupsHeard(adm.HeardSystem, adm.HeardTalkgroups)
+	}
+}
+
+// receivingTick is how often a system receiving is recorded (ADR 0054),
+// and receivingGap the longest gap between two records that still
+// continues a span: a missed tick or two, not an outage.
+const (
+	receivingTick = time.Minute
+	receivingGap  = 150 * time.Second
+	// beatStale is how old a client's last heartbeat (every 5 s) may be
+	// for its systems to count as receiving.
+	beatStale = 30 * time.Second
+)
+
+// receiving is the systems this process's recorders are receiving now: a
+// recorder connected, with a fresh heartbeat relaying the system's
+// attached shortName, and, for a trunked system, its control channel
+// decoding (R14's deaf signal clear for it). Called with g.mu held.
+func (g *signals) receiving(atts []db.ListAttachedSystemsRow, now time.Time) map[int64]bool {
+	out := map[int64]bool{}
+	for _, a := range atts {
+		st := g.recs[a.RecorderID]
+		if st == nil || !st.connected || !st.heartbeat || !st.downSince.IsZero() || now.Sub(st.beatAt) > beatStale {
+			continue
+		}
+		s, ok := st.systems[a.ShortName]
+		if !ok {
+			continue
+		}
+		if _, zero := st.zeroSince[a.ShortName]; zero && !conventional(s.SystemType) {
+			continue
+		}
+		out[a.SystemID] = true
+	}
+	return out
+}
+
+// RecordReceiving records each system this process's recorders are
+// receiving now, extending its span (migration 00030), and once an hour
+// prunes spans past ReceivingKept. The watch loop calls it every
+// receivingTick; tests call it on their clock. A failure is logged; the
+// next tick tries again, and a missed minute only shortens a span.
+func (rs *Recorders) RecordReceiving(ctx context.Context) {
+	rs.receivingMu.Lock()
+	defer rs.receivingMu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	atts, err := rs.st.ListAttachedSystems(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			rs.log.Warn("receiving: couldn't read the attachments", "error", store.SafeError(err))
+		}
+		return
+	}
+	g := rs.sig
+	now := g.now()
+	g.mu.Lock()
+	systems := g.receiving(atts, now)
+	g.mu.Unlock()
+	at := pgtype.Timestamptz{Time: now.UTC(), Valid: true}
+	gap := pgtype.Interval{Microseconds: receivingGap.Microseconds(), Valid: true}
+	for sys := range systems {
+		if err := rs.st.ExtendReceiving(ctx, db.ExtendReceivingParams{SystemID: sys, At: at, Gap: gap}); err != nil {
+			rs.log.Warn("receiving: couldn't record it", "system", sys, "error", store.SafeError(err))
+		}
+	}
+	if now.Sub(rs.pruned) >= time.Hour {
+		rs.pruned = now
+		before := pgtype.Timestamptz{Time: now.Add(-gate.ReceivingKept).UTC(), Valid: true}
+		if _, err := rs.st.PruneReceiving(ctx, before); err != nil {
+			rs.log.Warn("receiving: couldn't prune", "error", store.SafeError(err))
+		}
 	}
 }

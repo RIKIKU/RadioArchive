@@ -65,6 +65,10 @@ type Gate struct {
 	catMu sync.Mutex
 	cat   *Catalogue // the last built, at its generation
 
+	quietMu    sync.Mutex
+	quiet      *Quiet // the last read (quiet.go)
+	quietStale bool   // a talkgroup it holds quiet has been heard since
+
 	live *Live
 }
 

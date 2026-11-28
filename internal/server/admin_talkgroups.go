@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/RIKIKU/RadioArchive/internal/gate"
 	"github.com/RIKIKU/RadioArchive/internal/store/db"
 )
 
@@ -30,6 +31,11 @@ type TableRow struct {
 	Talkgroup
 	LastHeardAt *time.Time `json:"last_heard_at"`
 	Calls30Days int64      `json:"calls_30_days"`
+	// Quiet: listeners' lists leave it out (R114; ADR 0054). Only a
+	// public talkgroup is ever quiet. NotHeardDays is the catalogue's,
+	// given when it's quiet.
+	Quiet        bool `json:"quiet"`
+	NotHeardDays int  `json:"not_heard_days,omitempty"`
 }
 
 // Table is GET /api/v1/admin/talkgroups.
@@ -53,16 +59,25 @@ func (a *Admin) talkgroupTable(r *http.Request, _ string) (int, any, error) {
 	if err != nil {
 		return 0, nil, dbErr("talkgroup table", err)
 	}
+	var quiet map[gate.TalkgroupKey]int
+	if a.quiet != nil {
+		if quiet, _, err = a.quiet.QuietTalkgroups(r.Context()); err != nil {
+			return 0, nil, dbErr("quiet talkgroups", err)
+		}
+	}
 	out := Table{CallsSince: since, Talkgroups: make([]TableRow, 0, len(rows))}
 	for _, t := range rows {
+		days, q := quiet[gate.TalkgroupKey{System: t.SystemID, Talkgroup: t.TalkgroupID}]
 		out.Talkgroups = append(out.Talkgroups, TableRow{
 			Talkgroup: talkgroupOf(db.GetTalkgroupRow{SystemID: t.SystemID, TalkgroupID: t.TalkgroupID,
 				Label: t.Label, Name: t.Name, Tag: t.Tag, State: t.State, Unreviewed: t.Unreviewed,
 				Groups: t.Groups, DelayMinutes: t.DelayMinutes, Alert: t.Alert, LedColour: t.LedColour,
 				SortOrder: t.SortOrder, FiregroundChannel: t.FiregroundChannel, Type: t.Type, Frequency: t.Frequency,
-				CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt}),
-			LastHeardAt: ts(t.LastHeardAt),
-			Calls30Days: t.CallsSince,
+				CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt, AlwaysShow: t.AlwaysShow}),
+			LastHeardAt:  ts(t.LastHeardAt),
+			Calls30Days:  t.CallsSince,
+			Quiet:        q,
+			NotHeardDays: days,
 		})
 	}
 	return http.StatusOK, out, nil
