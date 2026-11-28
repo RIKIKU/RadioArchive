@@ -51,6 +51,8 @@ type App struct {
 	routes   []Route
 	index    []byte   // the app's one page; nil when the app wasn't built
 	combined Combined // beside PagerArchive (combined.go); zero standalone
+	// assetLinks is /.well-known/assetlinks.json (applinks.go); nil answers 404.
+	assetLinks []byte
 }
 
 // Routes are the app's routes, for the server to mount.
@@ -71,6 +73,7 @@ func Serve(root fs.FS) *App {
 	}
 	a.routes = []Route{
 		{"GET /robots.txt", http.HandlerFunc(robots)},
+		{"GET " + AssetLinksPath, http.HandlerFunc(a.assetLinksFile)},
 		{"GET /", a.shell(root)},
 	}
 	return a

@@ -319,25 +319,27 @@ func apiHandler(st *store.Store, log *slog.Logger, rs *server.Recorders, g *gate
 		reg.Add(ops.upgrade)
 	}
 	return server.New(st, log, server.WithRecorders(rs), server.WithPublic(public.New(g, log, public.WithLocation(deploymentZone()))),
-		server.WithAccount(acc), server.WithAdmin(admin), server.WithApp(web.New().Combined(ops.combined)),
+		server.WithAccount(acc), server.WithAdmin(admin), server.WithApp(web.New().Combined(ops.combined).AppLinks(ops.appLinks)),
 		// Admins are exempt, by the same check as the admin API's (R70).
 		server.WithLimits(lim, acc), server.WithMetrics(reg, ops.metricsToken)), acc, admin, nil
 }
 
 // operations are the settings for running the deployment: the metrics
 // token (ADR 0040), the backup's status file and the setup export's
-// folder (ADR 0041), and how the app runs beside PagerArchive (ADR 0056).
+// folder (ADR 0041), how the app runs beside PagerArchive (ADR 0056), and
+// the Android apps that may open its links (ADR 0058).
 type operations struct {
 	metricsToken string
 	backup       *backup.Reader
 	exportDir    string
 	upgrade      *upgrade.Reader
 	combined     web.Combined
+	appLinks     []web.AppLink
 }
 
 // operationsFromEnv reads METRICS_TOKEN (or its file), BACKUP_STATUS_FILE,
-// SETUP_EXPORT_DIR, AUTO_UPGRADE_STATUS_FILE and the combined deployment's
-// settings (combinedFromEnv).
+// SETUP_EXPORT_DIR, AUTO_UPGRADE_STATUS_FILE, ANDROID_APP_LINKS and the
+// combined deployment's settings (combinedFromEnv).
 func operationsFromEnv(getenv func(string) string) (operations, error) {
 	mt, err := metricsToken(getenv)
 	if err != nil {
@@ -347,7 +349,11 @@ func operationsFromEnv(getenv func(string) string) (operations, error) {
 	if err != nil {
 		return operations{}, err
 	}
-	ops := operations{metricsToken: mt, exportDir: getenv("SETUP_EXPORT_DIR"), combined: cb}
+	al, err := web.ParseAppLinks(getenv("ANDROID_APP_LINKS"))
+	if err != nil {
+		return operations{}, err
+	}
+	ops := operations{metricsToken: mt, exportDir: getenv("SETUP_EXPORT_DIR"), combined: cb, appLinks: al}
 	if f := getenv("BACKUP_STATUS_FILE"); f != "" {
 		ops.backup = backup.New(f, nil)
 	}

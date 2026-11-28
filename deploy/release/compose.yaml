@@ -97,6 +97,9 @@ services:
       PAGERARCHIVE_URL: ${PAGERARCHIVE_URL:-}
       PAGERARCHIVE_NAME: ${PAGERARCHIVE_NAME:-}
       LOOK_COOKIE_DOMAIN: ${LOOK_COOKIE_DOMAIN:-}
+      # Android App Links: package:fingerprint[;fingerprint…] for
+      # /.well-known/assetlinks.json. Empty answers 404.
+      ANDROID_APP_LINKS: ${ANDROID_APP_LINKS:-}
       # Heavy-use limits (SPEC.md section 6.11). Empty is the default.
       TRUSTED_PROXY: ${TRUSTED_PROXY:-}
       LIMIT_REQUESTS: ${LIMIT_REQUESTS:-}

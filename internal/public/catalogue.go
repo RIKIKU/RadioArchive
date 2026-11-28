@@ -27,10 +27,21 @@ const (
 	SearchPath = "/api/v1/catalogue/search"
 	// FiregroundPath finds the talkgroup with a fireground channel number.
 	FiregroundPath = "/api/v1/fireground/{number}"
+	// FiregroundsPath finds the talkgroups with several fireground channel
+	// numbers at once: ?n=508&n=540 (ADR 0057).
+	FiregroundsPath = "/api/v1/fireground"
 )
 
 // FiregroundURL is the path that looks up a fireground channel number.
 func FiregroundURL(number string) string { return "/api/v1/fireground/" + number }
+
+// FiregroundsParam is the several-number lookup's parameter, and
+// MaxFiregrounds how many of its values are read: those after are ignored,
+// as a fireground link's are (R101).
+const (
+	FiregroundsParam = "n"
+	MaxFiregrounds   = 10
+)
 
 // MaxQuery is the longest search query, in bytes.
 const MaxQuery = 100
@@ -100,6 +111,16 @@ const IncludeQuiet = "include_quiet"
 type FiregroundResponse struct {
 	Systems   []CatalogueSystem  `json:"systems,omitempty"`
 	Talkgroup CatalogueTalkgroup `json:"talkgroup"`
+}
+
+// FiregroundsResponse is the talkgroups several fireground channel numbers
+// name: one for each number a public talkgroup has, in the order the
+// numbers were asked, each once. A number that names none (unknown, hidden,
+// ignored or not a number) is simply not there, so an answer with one is
+// byte for byte the answer without it (R33).
+type FiregroundsResponse struct {
+	Systems    []CatalogueSystem    `json:"systems,omitempty"`
+	Talkgroups []CatalogueTalkgroup `json:"talkgroups"`
 }
 
 // zoneName is a time zone's IANA name. Go names the zone TZ set "Local", so
@@ -235,4 +256,39 @@ func (a *API) fireground(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, FiregroundResponse{Systems: systemsOf(c), Talkgroup: talkgroupOf(c, q, t)})
+}
+
+// firegrounds looks up the first MaxFiregrounds values of ?n=, each read
+// as the one-number lookup reads it, in one request, so a link naming 10
+// channels costs one of the listener's requests, not 10 (R73). It always
+// answers 200, with no talkgroups when none is public.
+func (a *API) firegrounds(w http.ResponseWriter, r *http.Request) {
+	c, q, err := a.catalogueAndQuiet(r)
+	if err != nil {
+		a.failed(w, r, err)
+		return
+	}
+	ns := r.URL.Query()[FiregroundsParam]
+	if len(ns) > MaxFiregrounds {
+		ns = ns[:MaxFiregrounds]
+	}
+	out := FiregroundsResponse{Systems: systemsOf(c), Talkgroups: []CatalogueTalkgroup{}}
+	seen := map[int32]bool{}
+	for _, s := range ns {
+		n, ok := gate.ParseFireground(s)
+		if !ok || seen[n] {
+			continue
+		}
+		seen[n] = true
+		t, err := c.Fireground(s)
+		if errors.Is(err, gate.ErrChannelUnavailable) {
+			continue
+		}
+		if err != nil {
+			a.failed(w, r, err)
+			return
+		}
+		out.Talkgroups = append(out.Talkgroups, talkgroupOf(c, q, t))
+	}
+	writeJSON(w, http.StatusOK, out)
 }

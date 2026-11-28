@@ -293,6 +293,71 @@ func TestIntegrationFireground(t *testing.T) {
 	}
 }
 
+// TestIntegrationFiregrounds: several fireground numbers in one request
+// (ADR 0057) answer the public talkgroups they name, once each, in the
+// order asked; the first 10 values are read and the rest ignored; and a
+// hidden, ignored, unknown or malformed number is simply left out, so the
+// answer is byte for byte the one without it (R33, R101).
+func TestIntegrationFiregrounds(t *testing.T) {
+	e := newEnv(t)
+	sys := e.fixture(t)
+	tg := func(id int) string { return fmt.Sprintf("/systems/%d/talkgroups/%d", sys, id) }
+	e.mustAdmin(t, "PATCH", tg(1001), map[string]any{"fireground_channel": 8}, 200)
+	e.mustAdmin(t, "PATCH", tg(1003), map[string]any{"fireground_channel": 43}, 200)
+	e.mustAdmin(t, "PATCH", tg(1004), map[string]any{"fireground_channel": 44}, 200)
+	ask := func(ns ...string) answer {
+		t.Helper()
+		return e.pub(t, "GET", public.FiregroundsPath+"?"+url.Values{public.FiregroundsParam: ns}.Encode(), "")
+	}
+	ids := func(a answer) []int32 {
+		t.Helper()
+		got := decodeJSON[public.FiregroundsResponse](t, a.body)
+		out := []int32{}
+		for _, x := range got.Talkgroups {
+			out = append(out, x.ID)
+		}
+		return out
+	}
+
+	a := ask("41", "008")
+	if a.status != 200 || a.header.Get("Cache-Control") != "no-store" || !slices.Equal(ids(a), []int32{1002, 1001}) {
+		t.Errorf("41 and 8: %s", a)
+	}
+	if got := ids(ask("8", "41")); !slices.Equal(got, []int32{1001, 1002}) {
+		t.Errorf("8 and 41: %v, want the order asked", got)
+	}
+	// Duplicates, leading zeros not counting, answer once.
+	if b := ask("41", "041", "8", "41", "0008"); b.String() != a.String() {
+		t.Errorf("duplicates answer\n%s\nnot\n%s", b, a)
+	}
+	// What names no public talkgroup is left out without a trace.
+	if b := ask("41", "43", "8", "44", "99", "x", "-1", "", "99999999999999999999"); b.String() != a.String() {
+		t.Errorf("with unavailable numbers\n%s\nnot\n%s", b, a)
+	}
+	none := ask("99")
+	if none.status != 200 || len(ids(none)) != 0 || !strings.Contains(string(none.body), `"talkgroups":[]`) {
+		t.Errorf("none: %s", none)
+	}
+	for _, ns := range [][]string{{"43"}, {"44"}, {"043", "44", "x"}, {}} {
+		if b := ask(ns...); b.String() != none.String() {
+			t.Errorf("%q answers\n%s\nbut an unknown number answers\n%s", ns, b, none)
+		}
+	}
+	// Only the first 10 values are read: 41 as the 11th is ignored.
+	ten := []string{"8", "1", "2", "3", "4", "5", "6", "7", "9", "10"}
+	if got := ids(ask(append(ten, "41")...)); !slices.Equal(got, []int32{1001}) {
+		t.Errorf("41 eleventh: %v, want only 1001", got)
+	}
+	if got := ids(ask(append(ten[:9], "41", "41")...)); !slices.Equal(got, []int32{1001, 1002}) {
+		t.Errorf("41 tenth: %v, want 1001 and 1002", got)
+	}
+	// Hiding 1002 drops it at the next request.
+	e.mustAdmin(t, "PATCH", tg(1002), map[string]any{"state": "hidden"}, 200)
+	if got := ids(ask("41", "8")); !slices.Equal(got, []int32{1001}) {
+		t.Errorf("41 hidden: %v", got)
+	}
+}
+
 // TestIntegrationFiregroundUnique: a fireground channel number is unique
 // across the deployment, leading zeros not counting; a duplicate is refused
 // naming the talkgroup that has it (R100, A25).

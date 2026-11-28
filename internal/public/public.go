@@ -100,6 +100,7 @@ func New(g *gate.Gate, log *slog.Logger, opts ...Option) *API {
 	a.handle("GET "+CataloguePath, LimitRequests, a.catalogue)
 	a.handle("GET "+SearchPath, LimitRequests, a.search)
 	a.handle("GET "+FiregroundPath, LimitRequests, a.fireground)
+	a.handle("GET "+FiregroundsPath, LimitRequests, a.firegrounds)
 	a.handle("GET "+UnitSearchPath, LimitRequests, a.unitSearch)
 	a.handle("GET "+LivePath, LimitLive, a.live)
 	a.handle("GET "+RecentCallsPath, LimitRequests, a.recentCalls)

@@ -121,7 +121,8 @@ real_ip_recursive on;
 To keep the radio private for a while, for example behind Authentik's forward auth in your proxy, gate everything except:
 
 - `/api/v1/recorder/`, which recorder clients reach with their client key and no browser;
-- `/healthz`, if anything checks it from outside.
+- `/healthz`, if anything checks it from outside;
+- `/.well-known/assetlinks.json`, if `ANDROID_APP_LINKS` is set ([Android App Links](#android-app-links)). Android fetches it with no sign-in and refuses a redirect, so a gate's redirect to its sign-in page breaks the app's links.
 
 Everything else, the live socket and zips included, can sit behind the gate. A gate that signs people in to the same Authentik as the radio means one sign-in: the radio's own **Sign in** then completes without a second password. A recorder host on your network can skip the proxy and reach the API directly, through a port that serves only `/api/v1/recorder/`.
 
@@ -340,6 +341,18 @@ For example, for `radio.example.org` (its `APP_URL`) beside `pager.example.org`:
 PAGERARCHIVE_URL=https://pager.example.org
 LOOK_COOKIE_DOMAIN=example.org
 ```
+
+## Android App Links
+
+With the RadioArchive Android app installed, a link to the radio, such as PagerArchive's **Listen** link, can open in the app instead of the browser. Android checks that the host allows it by fetching `https://radio.example.org/.well-known/assetlinks.json` ([ADR 0058](adr/0058-android-app-links.md)). Set `ANDROID_APP_LINKS` in `.env` to the app's package name, a colon, and its signing certificate's SHA-256 fingerprint, then `docker compose up -d`:
+
+```sh
+ANDROID_APP_LINKS=io.github.rikiku.radioarchive:15:75:26:74:5E:C7:11:23:68:1E:1D:2C:2A:2D:BF:49:C3:1E:83:4B:C7:8B:0B:BF:95:7D:56:0A:60:FA:A8:CB
+```
+
+More fingerprints follow after a comma or a semicolon, such as Play App Signing's beside the upload key's; a later `package:fingerprint` names another app. The file is served as `application/json`, cacheable for an hour. Unset, the path answers 404. A value that isn't one stops the API at start, naming the setting.
+
+**The path must be reachable without any sign-in gate.** Android fetches it anonymously, at install and now and then after, and treats a redirect or a sign-in page as a failure: it then opens the links in the browser. If the radio is behind a gate ([Behind a sign-in gate](#behind-a-sign-in-gate)), exempt exactly `/.well-known/assetlinks.json`, and nothing else under `/.well-known/`. Check it from outside the network with `curl -i https://radio.example.org/.well-known/assetlinks.json`: it must answer `200` with the JSON, not a `302`.
 
 ## What's left to you
 
