@@ -12,6 +12,14 @@
 //   recording.
 // - Nothing is dropped automatically. A withdrawn call (R31) leaves the
 //   queue, and stops at once if it's playing.
+// - Turning talkgroups off (ADR 0055), by any path that changes the set the
+//   live feed hears (a chip, a tile, All off, the search, a share link or
+//   the account's set taking this browser's place, Avoid): every queued
+//   call none of whose talkgroups is still heard leaves the queue, the
+//   call playing stops if it's one of them, and hold is let go if its
+//   talkgroup is off. What Previous queued, and the calls it plays forward
+//   through, stay: the listener asked for those by name. Turning a
+//   talkgroup on again brings none of them back.
 //
 // The controls (R44; ADR 0048): nothing queues before Start listening;
 // Previous goes back through the calls heard, one call a press, then plays
@@ -27,15 +35,16 @@
 //   radioarchive:first-frame  {call_id, unit, path, source, at}       a call's first decoded frame (at: Unix ms)
 //   radioarchive:played       {call_id, path, source, frames, peak}   a call has finished playing
 //   radioarchive:ended        {call_id, how, at}                      a call stopped or left the queue unplayed:
-//                                                                     how is skipped, cleared (Catch up) or withdrawn
+//                                                                     how is skipped, cleared (Catch up), withdrawn
+//                                                                     or off (its talkgroups turned off, ADR 0055)
 //   radioarchive:previous     {call_id, steps}                        Previous's presses have settled on a call
 //   radioarchive:alert        {call_id, alert}                        a talkgroup's alert sound played (R22)
 
-import { attachFeed } from '#lib/live/listening-set.ts';
+import { attachFeed, type LiveTalkgroup } from '#lib/live/listening-set.ts';
 import { LiveFeed, type CallEvent, type EventTalkgroup, type NoticeKind } from '#lib/live/feed.ts';
 import { decoding, type Decoding, type DecodePath, type OpusStream, type Pcm } from './decoder.ts';
 import { readOggOpus } from './ogg.ts';
-import { heldThrough, nextIndex, type TalkgroupKey } from './queue.ts';
+import { heardBy, heldThrough, keyIn, nextIndex, type TalkgroupKey } from './queue.ts';
 import { playAlert } from './alerts.ts';
 import { Replay, type MoreCalls, type ReplayItem } from './replay.svelte.ts';
 import { LIVE_WITHIN } from 'archiveux/live.js';
@@ -177,8 +186,10 @@ export class Player {
 	#calls = new Map<string, Call>();
 	#queue: Call[] = [];
 	#current: Call | undefined;
-	/** Calls that have left (played, skipped, cleared, withdrawn or held out), and when. */
+	/** Calls that have left (played, skipped, cleared, withdrawn, held out or turned off), and when. */
 	#gone = new Map<string, number>();
+	/** The talkgroups the live feed hears: the set plus the session's additions, as last handed to it. */
+	#set: LiveTalkgroup[] = [];
 
 	/** Live listening was paused by a replay, not by the listener: it resumes when the replay is over (ADR 0023). */
 	#pausedForReplay = false;
@@ -284,7 +295,35 @@ export class Player {
 			noticeOff: (kind) => this.#opts.noticeOff?.(kind)
 		});
 		this.#feed = feed;
-		feed.start(attachFeed(feed));
+		this.#set = attachFeed({
+			setTalkgroups: (set) => {
+				feed.setTalkgroups(set);
+				this.#narrow(set);
+			}
+		});
+		feed.start(this.#set);
+	}
+
+	/**
+	 * The set the live feed hears has changed (ADR 0055). The calls queued
+	 * on talkgroups no longer in it leave the queue, the call playing stops
+	 * if it's one of them, and hold is let go if its talkgroup is off. What
+	 * Previous queued or is playing stays: the listener asked for it.
+	 */
+	#narrow(set: LiveTalkgroup[]) {
+		this.#set = set;
+		if (this.phase !== 'listening') return;
+		const off = (c: Call) => c.back === undefined && !heardBy(c.info, set);
+		for (const q of this.#queue) if (off(q)) this.#leave(q, 'off');
+		this.#queue = this.#queue.filter((q) => !off(q));
+		if (this.hold && !keyIn(this.hold.key, set)) this.hold = undefined;
+		const c = this.#current;
+		if (c && off(c)) {
+			this.#leave(c, 'off');
+			this.#current = undefined;
+			this.playing = undefined;
+		}
+		this.#pump();
 	}
 
 	/** Stops listening: the feed closes and the audio stops. */
@@ -596,12 +635,14 @@ export class Player {
 	};
 
 	/**
-	 * A new call joins the queue, unless hold keeps it out (A9). A call that
-	 * starts (live, or released from its delay) sounds its talkgroup's alert
-	 * (R22); one missed while away doesn't.
+	 * A new call joins the queue, unless hold keeps it out (A9), or its
+	 * talkgroups have just been turned off and the feed sent it before it
+	 * heard the new set (ADR 0055). A call that starts (live, or released
+	 * from its delay) sounds its talkgroup's alert (R22); one missed while
+	 * away doesn't.
 	 */
 	#enqueue(info: CallInfo, ended: boolean, recording?: string, starts = true) {
-		if (!heldThrough(info, this.hold?.key)) {
+		if (!heldThrough(info, this.hold?.key) || !heardBy(info, this.#set)) {
 			this.#forget(info.callId);
 			return;
 		}
@@ -842,8 +883,8 @@ export class Player {
 		this.#pump();
 	}
 
-	/** A call stops, or leaves the queue, unplayed: skipped, cleared or withdrawn. */
-	#leave(c: Call, how: 'skipped' | 'cleared' | 'withdrawn') {
+	/** A call stops, or leaves the queue, unplayed: skipped, cleared, withdrawn or turned off. */
+	#leave(c: Call, how: 'skipped' | 'cleared' | 'withdrawn' | 'off') {
 		this.#silence(c);
 		this.#release(c);
 		announce('radioarchive:ended', { call_id: c.info.callId, how, at: Date.now() });

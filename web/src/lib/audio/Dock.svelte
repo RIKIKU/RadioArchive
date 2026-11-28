@@ -5,15 +5,17 @@
 	// now-playing display (NowPlaying.svelte, ADR 0051): the dock holds only
 	// the controls, so its height never changes while listening.
 	//
-	// Controls (R44; ADR 0048, 0051), in this order: Pause or Resume,
-	// Previous, Skip, Catch up, Hold, Stop, then Share (R45, ADR 0017) and
-	// Add to basket (ADR 0018), which act on the playing call. Previous is
-	// the skip icon facing the other way. Catch up is always there, enabled
-	// only when behind: calls queued, or the call playing further back than
-	// Live allows (and not a delayed talkgroup's). Each control has its name
-	// in words beside its icon when there's room for them all in one row,
-	// and a short name under its icon when there isn't. On a phone, Share
-	// and Add to basket go in an Actions menu, which opens upwards.
+	// Controls (R44; ADR 0048, 0051, 0055), in this order: Pause or Resume,
+	// Previous, Skip, Catch up, Hold, Avoid, Stop, then Share (R45, ADR 0017)
+	// and Add to basket (ADR 0018), which act on the playing call, as Avoid
+	// does. Previous is the skip icon facing the other way. Catch up is
+	// always there, enabled only when behind: calls queued, or the call
+	// playing further back than Live allows (and not a delayed talkgroup's).
+	// Each control has its name in words beside its icon when there's room
+	// for them all in one row, and a short name under its icon when there
+	// isn't. When even the short names don't fit (a narrow window, a phone),
+	// Share and Add to basket go in an Actions menu, which opens upwards; on
+	// a phone Stop listening goes in it too (ADR 0055).
 	//
 	// What comes and goes, Previous's "Back 3 calls…" and what an Actions
 	// menu's action did, shows in a small label above the controls, over
@@ -30,18 +32,19 @@
 	// listening's controls. On a phone (ADR 0023, "On a phone") the replay's
 	// name sits beside its controls and the rest under both. On a desktop
 	// the replay's details and controls share its row; they no longer sit
-	// beside live listening's, which need the room for eight controls (ADR
+	// beside live listening's, which need the room for nine controls (ADR
 	// 0051).
 	import { Icon, MoreActions } from 'archiveux/components';
 	import { LIVE_WITHIN } from 'archiveux/live.js';
 	import type { Player, CallInfo } from './player.svelte.ts';
+	import type { Avoid } from './avoid.svelte.ts';
 	import { dockIcons } from './icons.ts';
 	import ShareButton from '#lib/share/ShareButton.svelte';
 	import AddToBasket from '#lib/basket/AddToBasket.svelte';
 	import { callLink, copyText } from '#lib/share/link.ts';
 	import { basketState } from '#lib/basket/state.svelte.ts';
 
-	let { player }: { player: Player } = $props();
+	let { player, avoid }: { player: Player; avoid: Avoid } = $props();
 
 	const basket = basketState();
 	// Behind the radio: calls waiting, or the call playing further back than
@@ -149,10 +152,27 @@
 				<button type="button" class="secondary" aria-pressed={!!player.hold} disabled={!c && !player.hold} onclick={() => player.setHold(!player.hold)}
 					><Icon svg={dockIcons.hold} /><span class="label">Hold</span></button
 				>
-				<button type="button" class="secondary" onclick={() => player.stop()}
+				<button type="button" class="secondary" disabled={!c} onclick={() => avoid.avoid()}
+					><Icon svg={dockIcons.avoid} /><span class="label">Avoid<span class="visually-hidden">{c ? ` ${c.talkgroup.name}` : ''}</span></span></button
+				>
+				<button type="button" class="secondary bar-stop" onclick={() => player.stop()}
 					><Icon svg={dockIcons.stop} /><span class="label">Stop<span class="long">{' listening'}</span></span></button
 				>
-				{#if c}{@render actions('player', c.callId, c.talkgroup.name)}{/if}
+				<!-- Share and Add to basket in the bar while there's room for
+				     every control's short name in one row, else in Actions,
+				     where Stop listening goes on a phone (ADR 0055). -->
+				{#if c}<span class="wide-only bar-wide"><ShareButton callId={c.callId} label={c.talkgroup.name} icon /><AddToBasket callId={c.callId} label={c.talkgroup.name} icon /></span>{/if}
+				<span class="phone-only dock-more bar-narrow" class:stop-only={!c}>
+					<MoreActions label={c ? `More actions: ${c.talkgroup.name}` : 'More actions'} text="Actions">
+						{#if c}
+							<button type="button" onclick={() => shareCall('player', c.callId)}><Icon svg={dockIcons.share} />Share link</button>
+							<button type="button" aria-pressed={basket.has(c.callId)} onclick={() => basketCall('player', c.callId)}
+								><Icon svg={dockIcons.basket} />{basket.has(c.callId) ? 'Take out of basket' : 'Add to basket'}</button
+							>
+						{/if}
+						<button type="button" class="menu-stop" onclick={() => player.stop()}><Icon svg={dockIcons.stop} />Stop listening</button>
+					</MoreActions>
+				</span>
 			</div>
 		</div>
 	</div>
@@ -165,7 +185,7 @@
 		display: contents;
 	}
 	/* A replay, on a desktop as on a phone: above live listening, so the
-	   bar's eight controls keep their room (ADR 0051). */
+	   bar's nine controls keep their room (ADR 0051). */
 	.stack.replaying {
 		display: flex;
 		flex: 1 1 auto;
@@ -323,13 +343,44 @@
 	.phone-only {
 		display: none;
 	}
+	/* Stop listening is in the bar but on a phone (below). */
+	.menu-stop {
+		display: none;
+	}
+	/* The dock is at the foot of the screen: Actions opens upwards. */
+	.dock-more :global(.more-actions .panel.end) {
+		top: auto;
+		bottom: 100%;
+		margin-top: 0;
+		margin-bottom: var(--space-2xs);
+	}
+	/* Not room for nine short names in one row (a narrow desktop window, a
+	   phone): Share and Add to basket go in Actions (ADR 0055). Add to
+	   basket's short name needs about 5rem to stay on one line. */
+	@container dock-controls (width < 48rem) {
+		.bar-wide {
+			display: none;
+		}
+		.bar-narrow,
+		.bar-narrow :global(.more-actions),
+		.bar-narrow :global(.has-tip) {
+			display: flex;
+			flex: 1 1 0;
+			min-width: 0;
+		}
+		/* With no call, Actions would hold nothing but on a phone. */
+		.bar-narrow.stop-only {
+			display: none;
+		}
+	}
 	/* Not room for every control's name beside its icon in one row: each
 	   shows a short name under its icon, and they share the row. Stop's
 	   whole name is still read out. */
-	/* The row with names beside the icons is about 68rem wide (with Resume
-	   and Catch up), so a desktop of 1,280 px beside the side menu has the
-	   short names; the margin covers each browser's fonts. */
-	@container dock-controls (width < 72rem) {
+	/* The row with names beside the icons is about 76rem wide (with Resume,
+	   Catch up and Avoid), so a desktop of 1,280 px or 1,600 px beside the
+	   side menu has the short names; the margin covers each browser's
+	   fonts (ADR 0055; 72rem before Avoid). */
+	@container dock-controls (width < 80rem) {
 		.controls {
 			flex-wrap: nowrap;
 			gap: var(--space-2xs);
@@ -402,12 +453,17 @@
 			flex: 1 1 0;
 			min-width: 0;
 		}
-		/* The dock is at the foot of the screen: the menu opens upwards. */
-		.dock-more :global(.more-actions .panel.end) {
-			top: auto;
-			bottom: 100%;
-			margin-top: 0;
-			margin-bottom: var(--space-2xs);
+		/* Eight controls don't fit 375 px: Stop listening, pressed once a
+		   session, and never in a hurry since Pause silences at once, goes in
+		   Actions, which is always there now (ADR 0055). */
+		.controls > .bar-stop {
+			display: none;
+		}
+		.bar-narrow.stop-only {
+			display: flex;
+		}
+		.menu-stop {
+			display: flex;
 		}
 		/* The replay's Stop and Actions as live listening's controls are. */
 		.replay .controls > button,

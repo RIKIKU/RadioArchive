@@ -9,7 +9,7 @@
 // scripts/ci/e2e-web.sh runs these with the playback tests, one at a time.
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { display, dock, firstOf, heard, listen, playedFrom, seconds, sendCalls, tone, waiting } from './live.ts';
+import { display, dock, firstOf, heard, listen, playedFrom, seconds, sendCalls, stopListening, tone, waiting } from './live.ts';
 
 const height = async (page: Page, what = display(page)) => (await what.boundingBox())!.height;
 const box = async (page: Page, cls: string) => (await display(page).locator(cls).boundingBox())!;
@@ -126,7 +126,7 @@ for (const width of [1280, 375] as const)
 		expect(await height(page), 'waiting, the last call shown').toBeCloseTo(idle, 0);
 		expect(await places(page), 'waiting: every field where it was').toEqual(empty);
 		expect(Math.abs((await height(page, dock(page))) - docked), 'the dock, waiting').toBeLessThanOrEqual(1);
-		await dock(page).getByRole('button', { name: 'Stop listening' }).click();
+		await stopListening(page);
 		await expect(display(page)).toHaveAttribute('data-state', 'idle');
 		expect(await height(page), 'idle again').toBeCloseTo(idle, 0);
 	});
@@ -145,7 +145,7 @@ test('@live R113: the display stays in view under the top bar while the page scr
 	const d = (await display(page).boundingBox())!;
 	expect(padding).toBeGreaterThanOrEqual(d.y + d.height - 1);
 	// Stopped and gone to another page, then back: no padding left behind on the way.
-	await dock(page).getByRole('button', { name: 'Stop listening' }).click();
+	await stopListening(page);
 	await page.getByRole('navigation').getByRole('link', { name: /^Recent/ }).filter({ visible: true }).first().click();
 	await expect(page.getByRole('heading', { name: 'Recent calls' })).toBeVisible();
 	expect(await page.evaluate(() => document.documentElement.style.scrollPaddingTop)).toBe('');
@@ -182,7 +182,7 @@ test('@live R113: the other pages show a slim line while listening, at a fixed h
 		}
 	}
 	await sending;
-	await dock(page).getByRole('button', { name: 'Stop listening' }).click();
+	await stopListening(page);
 	await expect(slim).toHaveCount(0);
 });
 
@@ -220,6 +220,6 @@ test('@live R113: the last calls heard sit under the display; a tap plays one ag
 	await expect(rows.getByRole('listitem').nth(3)).toBeHidden();
 	await expect(rows.getByRole('listitem').nth(2)).toBeVisible();
 	await axe(page, 'the recent calls heard on a phone');
-	await dock(page).getByRole('button', { name: 'Stop listening' }).click();
+	await stopListening(page);
 	await expect(rows).toHaveCount(0);
 });

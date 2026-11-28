@@ -112,6 +112,10 @@ _Avoid_: Favourite, preempt, emergency talkgroup
 A listener's temporary narrowing to only the talkgroup of the call playing now, lasting until they release it; it leaves the listening set unchanged.
 _Avoid_: Lock, pin, solo
 
+**Avoid (a talkgroup)**:
+One press that turns the playing call's talkgroup off in the listening set, as switching it off would, and skips the call; its calls waiting to be heard go with it, and Undo turns it back on for a few seconds after. Unlike hold, it changes the listening set, and it lasts.
+_Avoid_: Mute, block, skip talkgroup, blacklist
+
 **Now-playing display**:
 The fixed panel at the top of the Listen page that shows the call playing, or the last one heard, in fields that never move; on other pages it shrinks to one line while listening. The player's controls are in the dock, apart from it.
 _Avoid_: Now playing bar, LCD, header (the frame's top bar)

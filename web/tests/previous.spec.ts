@@ -164,6 +164,7 @@ async function barChecks(page: Page, shots: string) {
 	await expect(display(page).locator('.queued')).toHaveText('1 queued', { timeout: 10_000 });
 	const controls = dock(page).getByRole('group', { name: 'Player controls' });
 	const rows = async () => new Set(await controls.getByRole('button').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)))).size;
+	const names = () => controls.getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') ?? e.textContent?.trim()));
 
 	const check = async (state: string, width: number) => {
 		for (const look of ['harbour', 'console'])
@@ -189,13 +190,14 @@ async function barChecks(page: Page, shots: string) {
 
 	// A desktop, with the side menu: every control in one row, names beside icons.
 	await page.setViewportSize({ width: 1280, height: 900 });
-	await expect(controls.getByRole('button')).toHaveText(['Pause', 'Previous', 'Skip', 'Catch up to live', 'Hold', 'Stop listening', 'Share', 'Add to basket']);
+	await expect(controls.getByRole('button')).toHaveText(['Pause', 'Previous', 'Skip', 'Catch up to live', 'Hold', 'Avoid Dispatch North', 'Stop listening', 'Share', 'Add to basket']);
 	expect(await controls.getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') ?? e.textContent?.trim()))).toEqual([
 		'Pause',
 		'Previous',
 		'Skip',
 		'Catch up to live',
 		'Hold',
+		'Avoid Dispatch North',
 		'Stop listening',
 		'Share: Dispatch North',
 		'Add to basket: Dispatch North'
@@ -208,27 +210,26 @@ async function barChecks(page: Page, shots: string) {
 	await controls.getByRole('button', { name: /^Add to basket/ }).click();
 	await check('desktop', 1280);
 
-	// A narrower desktop: short names under the icons, still one row.
+	// A narrower desktop: short names under the icons, still one row, with
+	// Share and Add to basket in Actions, as on a phone (ADR 0055).
 	await page.setViewportSize({ width: 1024, height: 768 });
 	expect(await rows(), 'one row at 1,024 px').toBe(1);
-	// A wide one: names beside the icons, in one row with Resume's longer name.
+	expect(await names()).toEqual(['Pause', 'Previous', 'Skip', 'Catch up to live', 'Hold', 'Avoid Dispatch North', 'Stop listening', 'More actions: Dispatch North']);
+	// Wide ones, in one row with Resume's longer name: short names at 1,600
+	// px, and names beside the icons at 1,700 px.
 	await page.setViewportSize({ width: 1600, height: 900 });
 	await controls.getByRole('button', { name: 'Pause' }).click();
 	await expect(controls.getByRole('button', { name: 'Resume' })).toBeVisible();
 	expect(await rows(), 'one row at 1,600 px').toBe(1);
+	await page.setViewportSize({ width: 1700, height: 900 });
+	expect(await rows(), 'one row at 1,700 px').toBe(1);
+	expect(await controls.getByRole('button', { name: 'Resume' }).evaluate((b) => getComputedStyle(b).flexDirection), 'names beside the icons').toBe('row');
 	await controls.getByRole('button', { name: 'Resume' }).click();
 
-	// A phone: short names under the icons; Share and Add to basket in Actions.
+	// A phone: short names under the icons; Share, Add to basket and Stop
+	// listening in Actions (ADR 0055).
 	await page.setViewportSize({ width: 375, height: 812 });
-	expect(await controls.getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') ?? e.textContent?.trim()))).toEqual([
-		'Pause',
-		'Previous',
-		'Skip',
-		'Catch up to live',
-		'Hold',
-		'Stop listening',
-		'More actions: Dispatch North'
-	]);
+	expect(await names()).toEqual(['Pause', 'Previous', 'Skip', 'Catch up to live', 'Hold', 'Avoid Dispatch North', 'More actions: Dispatch North']);
 	await expect(controls.getByText('Actions', { exact: true })).toBeVisible();
 	expect(await rows(), 'one row on a phone').toBe(1);
 	const target = await page.evaluate(() => {
@@ -245,8 +246,11 @@ async function barChecks(page: Page, shots: string) {
 	await controls.getByRole('button', { name: 'More actions: Dispatch North' }).click();
 	await expect(dock(page).getByRole('button', { name: 'Share link' })).toBeVisible();
 	await check('phone-actions', 375);
+	await expect(dock(page).getByRole('button', { name: 'Stop listening' })).toBeVisible();
 	await dock(page).getByRole('button', { name: 'Add to basket' }).click();
 	await expect(dock(page).locator('.said-place')).toContainText('Added to the basket');
 
+	await controls.getByRole('button', { name: 'More actions: Dispatch North' }).click();
 	await dock(page).getByRole('button', { name: 'Stop listening' }).click();
+	await expect(page.getByRole('button', { name: 'Start listening' })).toBeVisible();
 }

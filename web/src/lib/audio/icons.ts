@@ -32,6 +32,8 @@ export const dockIcons = {
 	catchUp: '<path d="M14 12l-10 0" /><path d="M14 12l-4 4" /><path d="M14 12l-4 -4" /><path d="M20 4l0 16" />',
 	/** Hold. */
 	hold: '<path d="M5 13a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2l0 -6" /><path d="M11 16a1 1 0 1 0 2 0a1 1 0 0 0 -2 0" /><path d="M8 11v-4a4 4 0 1 1 8 0v4" />',
+	/** Avoid: the talkgroup playing turned off (Tabler's ban; ADR 0055). */
+	avoid: '<path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M5.7 5.7l12.6 12.6" />',
 	/** Stop listening. */
 	stop: '<path d="M5 7a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2l0 -10" />',
 	/** The download basket: Add to basket, and its page (R64, R84). */

@@ -2,7 +2,7 @@
 // 0012): web/src/lib/audio/queue.ts. The player and its controls, with the
 // whole stack, are queue.spec.ts's.
 import { test, expect } from '@playwright/test';
-import { heldThrough, nextIndex, talkgroupsOf, type QueuedCall } from '../src/lib/audio/queue.ts';
+import { heardBy, heldThrough, keyIn, nextIndex, talkgroupsOf, type QueuedCall } from '../src/lib/audio/queue.ts';
 
 test.beforeEach(() => test.skip(test.info().project.name !== 'chromium', 'no browser: once is enough'));
 
@@ -42,4 +42,19 @@ test("hold lets through only the held talkgroup's calls, its patches included", 
 	const q = [call(1002, '01.000'), call(1001, '02.000')];
 	expect(nextIndex(q, prio([1002]), held)).toBe(1);
 	expect(nextIndex([call(1002, '01.000')], () => false, held)).toBe(-1);
+});
+
+test('the set hears a call on any talkgroup of its patch; an entry with no system names that ID in any system (ADR 0055)', () => {
+	expect(heardBy(call(1001, '01.000'), [{ id: 1001 }])).toBe(true);
+	expect(heardBy(call(1001, '01.000'), [{ id: 1002 }])).toBe(false);
+	expect(heardBy(call(1001, '01.000'), [])).toBe(false);
+	// Patched with a talkgroup still on: still heard.
+	expect(heardBy(call(1001, '01.000', { patched: [1002] }), [{ id: 1002 }])).toBe(true);
+	// Several systems: the entry's system has to be the call's.
+	const inTwo = call(1001, '01.000', { system: { id: 2 } });
+	expect(heardBy(inTwo, [{ system: 2, id: 1001 }])).toBe(true);
+	expect(heardBy(inTwo, [{ system: 1, id: 1001 }])).toBe(false);
+	expect(heardBy(inTwo, [{ id: 1001 }])).toBe(true);
+	expect(keyIn({ system: 1, id: 1001 }, [{ system: 2, id: 1001 }])).toBe(false);
+	expect(keyIn({ id: 1001 }, [{ system: 2, id: 1001 }])).toBe(true);
 });
