@@ -18,6 +18,7 @@ This guide assumes you know Docker, Docker Compose and your reverse proxy. Comma
 - [Upgrading](#upgrading)
 - [Automatic upgrades](#automatic-upgrades)
 - [Monitoring](#monitoring)
+- [Beside PagerArchive](#beside-pagerarchive)
 - [What's left to you](#whats-left-to-you)
 
 ## Before you start
@@ -325,6 +326,20 @@ RadioArchive exports metrics and ships alert rules and dashboards for **PagerArc
 Grafana then has a **RadioArchive** folder with three dashboards and the alert rules, which go to the stack's default notification policy. The rules: recorder disconnected or deaf for 2 minutes, quiet (where set), calls from an unattached recorder system, recordings missing, live delay over 2 s, the recordings disk and retention shortened or the volume full, a client's queue over an hour old, the API unreachable, backups failing, an upgrade failed, and the radio full for 10 minutes. Thresholds are each rule's `params:`. Copy the files again after an upgrade that changes them.
 
 Nothing exported names a talkgroup or a unit, or holds a listener's address.
+
+## Beside PagerArchive
+
+RadioArchive can run beside PagerArchive, each on its own subdomain of one parent domain, such as `radio.example.org` and `pager.example.org` (`SPEC.md` section 6.15, [ADR 0056](adr/0056-the-app-switcher-and-the-shared-look.md)). Two settings in `.env`, each unset standalone, then `docker compose up -d` to recreate `api`:
+
+- **`PAGERARCHIVE_URL`**: PagerArchive's public address, such as `https://pager.example.org`. The top bar then shows the app switcher, **Pager**, before the account menu, on desktops and phones, opening PagerArchive in the same tab; PagerArchive's own `RADIOARCHIVE_URL` gives it the switcher back. Everyone who can reach the radio sees it, so a sign-in gate in front of the radio ([Behind a sign-in gate](#behind-a-sign-in-gate)) decides who. `PAGERARCHIVE_NAME` renames it (`Pager` unless set). A value that isn't an absolute `http` or `https` URL stops the API at start, naming it.
+- **`LOOK_COOKIE_DOMAIN`**: the parent domain, such as `example.org`, set to the same value as PagerArchive's. The look (Harbour or Console) and the colour theme (light, dark or Auto) chosen in either app then show in both: both read one `look` and one `theme` cookie on that domain for every page's first paint. Sharing the theme needs a PagerArchive that shares it too. A look or theme chosen in the radio before this is carried into the shared cookies on the browser's next radio page. Signed in, a change is still saved to the radio account too, and one chosen in PagerArchive since wins over the radio account's. `APP_URL`'s host must be in the domain, or the API stops at start saying so.
+
+For example, for `radio.example.org` (its `APP_URL`) beside `pager.example.org`:
+
+```sh
+PAGERARCHIVE_URL=https://pager.example.org
+LOOK_COOKIE_DOMAIN=example.org
+```
 
 ## What's left to you
 

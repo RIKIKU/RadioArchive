@@ -49,12 +49,14 @@ cd "$(dirname "$0")/../.."
 
 port=${RA_E2E_PORT:-18090}
 lport=${RA_E2E_LIMITS_PORT:-18093}
+cport=${RA_E2E_COMBINED_PORT:-18094}
 akport=${RA_E2E_AUTHENTIK_PORT:-18091}
 udp=${RA_E2E_UDP_PORT:-19890}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/radioarchive-web.XXXXXX")
 db=""
 pid=""
 lpid=""
+cpid=""
 ak=""
 client=""
 pulse=""
@@ -67,10 +69,12 @@ cleanup() {
 	[ -z "$pulse" ] || pulseaudio --kill 2>/dev/null || true
 	[ -z "$pid" ] || kill "$pid" 2>/dev/null || true
 	[ -z "$lpid" ] || kill "$lpid" 2>/dev/null || true
+	[ -z "$cpid" ] || kill "$cpid" 2>/dev/null || true
 	[ -z "$ak" ] || kill "$ak" 2>/dev/null || true
 	[ -z "$db" ] || docker rm -f -v "$db" >/dev/null 2>&1 || true
 	if [ "$rc" -ne 0 ] && [ -f "$tmp/api.log" ]; then tail -n 50 "$tmp/api.log" >&2; fi
 	if [ "$rc" -ne 0 ] && [ -f "$tmp/api-limits.log" ]; then tail -n 20 "$tmp/api-limits.log" >&2; fi
+	if [ "$rc" -ne 0 ] && [ -f "$tmp/api-combined.log" ]; then tail -n 20 "$tmp/api-combined.log" >&2; fi
 	if [ "$rc" -ne 0 ] && [ -f "$tmp/client.log" ]; then tail -n 50 "$tmp/client.log" >&2; fi
 	rm -rf "$tmp"
 }
@@ -209,7 +213,7 @@ cd web
 # The admin pages' tests (issue #111) sign in through the made-up
 # Authentik, as the fixture's admin or, with its person cookie, a listener.
 export RA_AUTHENTIK_URL="http://127.0.0.1:$akport"
-RA_URL="http://127.0.0.1:$port" npx playwright test --grep-invert '@live|@limits' --pass-with-no-tests "$@"
+RA_URL="http://127.0.0.1:$port" npx playwright test --grep-invert '@live|@limits|@combined' --pass-with-no-tests "$@"
 RA_URL="http://127.0.0.1:$port" RA_FAKERECORDER="$tmp/fakerecorder" RA_FIXTURES="$fixtures" RA_CLIENT_HELD="$clientheld" \
 	RA_UDP_ADDR="127.0.0.1:$udp" RA_MEDIA="$tmp/media" RA_HEARTBEATS_HELD="$held" \
 	RA_WEBFIXTURE="$tmp/webfixture" RA_DATABASE_URL="$DATABASE_URL" RA_RECORDINGS="$tmp/recordings" \
@@ -227,3 +231,17 @@ wait_for 120 "the limits' API" node -e "fetch(process.argv[1]).then((r) => proce
 	"http://127.0.0.1:$lport/healthz"
 cd web
 RA_URL="http://127.0.0.1:$lport" npx playwright test --grep @limits --workers=1 --pass-with-no-tests "$@"
+# Beside PagerArchive (R102, R104; ADR 0056): a binary of its own on the
+# same database with PAGERARCHIVE_URL and LOOK_COOKIE_DOMAIN set. A cookie
+# needs a domain name, so the browsers reach it as radio.example.test with
+# it as their HTTP proxy (RA_COMBINED_PROXY): Go's server reads the host
+# from a proxy's absolute request.
+cd ..
+TZ=Australia/Melbourne DATABASE_URL=$DATABASE_URL LISTEN_ADDR="127.0.0.1:$cport" RECORDINGS_DIR="$tmp/recordings" \
+	LIMIT_REQUESTS=100000 APP_URL="http://radio.example.test" PAGERARCHIVE_URL="http://pager.example.test/" LOOK_COOKIE_DOMAIN=example.test \
+	"$tmp/radioarchive" serve >"$tmp/api-combined.log" 2>&1 &
+cpid=$!
+wait_for 120 "the combined API" node -e "fetch(process.argv[1]).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))" \
+	"http://127.0.0.1:$cport/healthz"
+cd web
+RA_COMBINED_PROXY="http://127.0.0.1:$cport" npx playwright test --grep @combined --pass-with-no-tests "$@"

@@ -6,10 +6,17 @@
 //
 // ArchiveUx draws them from the root element: data-look="console" for
 // Console (none for Harbour), data-theme="light" or "dark" (none follows the
-// system). Its look.js is the first-paint rule; standalone, RadioArchive
-// names no shared cookie, so the look is the browser's own choice (R104's
-// parent-domain cookie is M7's).
-import { lookCookie, pickLook } from 'archiveux/look.js';
+// system). Its look.js is the first-paint rule. Standalone, RadioArchive
+// names no shared cookie, so the look is the browser's own choice, in a
+// cookie of this host's own.
+//
+// Beside PagerArchive (R104; ADR 0056), with LOOK_COOKIE_DOMAIN set, the
+// server marks the page data-look-shared="<domain>", and the look is the one
+// `look` cookie both apps share on that domain, written as ArchiveUx's
+// lookCookie writes it: the cookie's look wins over the account's, as in
+// PagerArchive. The light or dark theme is shared the same way, in a
+// `theme` cookie of its own (ArchiveUx 0.7.0, its rule 8).
+import { applyTheme, lookCookie, pickLook, pickTheme } from 'archiveux/look.js';
 
 export type Look = 'harbour' | 'console';
 export type Theme = 'system' | 'light' | 'dark';
@@ -23,21 +30,46 @@ export function current(): { look: Look; theme: Theme } {
 	};
 }
 
-// About 400 days, the most a browser keeps a cookie.
-const keep = 400 * 24 * 60 * 60;
+/** The parent domain the look is shared on, or undefined standalone. */
+export function sharedDomain(): string | undefined {
+	return document.documentElement.dataset.lookShared || undefined;
+}
+
+/**
+ * The look a signed-in account's profile comes in as (R104): shared, the
+ * shared cookie's when it holds one, so a look chosen in PagerArchive isn't
+ * undone by the radio account's older one; else the account's.
+ */
+export function accountLook(own: Look | undefined, shared: boolean, cookies: string): Look {
+	return pickLook({ cookies, cookie: shared ? 'look' : undefined, own }) as Look;
+}
+
 const secure = () => location.protocol === 'https:';
 
 /** Shows the look at once, and saves it for the next page sent. */
 export function setLook(look: Look) {
 	if (look === 'console') document.documentElement.dataset.look = look;
 	else delete document.documentElement.dataset.look;
-	document.cookie = lookCookie(look, { name: 'look', secure: secure() });
+	const domain = sharedDomain();
+	// Shared, this host's own look cookie is ended first, so the shared one
+	// is the only `look` the browser sends (web/combined.go).
+	if (domain) document.cookie = 'look=; Path=/; Max-Age=0';
+	document.cookie = lookCookie(look, { name: 'look', domain, secure: secure() });
 }
 
-/** Shows the theme at once, and saves it; System forgets the choice. */
+/**
+ * The theme a signed-in account's profile comes in as: shared, the shared
+ * cookie's when it holds light or dark, else the account's, as accountLook.
+ */
+export function accountTheme(own: Theme | undefined, shared: boolean, cookies: string): Theme {
+	return pickTheme({ cookies, cookie: shared ? 'theme' : undefined, own }) as Theme;
+}
+
+/**
+ * Shows the theme at once, and saves it; System forgets the choice. Shared,
+ * in the shared `theme` cookie, this host's own ended first (ArchiveUx's
+ * applyTheme, 0.7.0).
+ */
 export function setTheme(theme: Theme) {
-	if (theme === 'system') delete document.documentElement.dataset.theme;
-	else document.documentElement.dataset.theme = theme;
-	const flags = `Path=/; SameSite=Lax${secure() ? '; Secure' : ''}`;
-	document.cookie = theme === 'system' ? `theme=; Max-Age=0; ${flags}` : `theme=${theme}; Max-Age=${keep}; ${flags}`;
+	applyTheme(theme, { name: 'theme', domain: sharedDomain(), secure: secure() });
 }
